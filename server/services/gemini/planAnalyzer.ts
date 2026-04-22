@@ -793,11 +793,13 @@ async function verifyFloorExtraction(
   ).join("\n");
   const slabsList = geometry.slabs.map(s => `${s.id}: ${s.classe}, ${s.area_m2}m²`).join("\n");
 
+  const muroCount = geometry.walls.filter(w => w.classe === "muro").length;
+
   const prompt = `Voce e um revisor tecnico de plantas arquitetonicas. Verifique a extracao abaixo comparando com a imagem.
 
 ${btConfig.verificationHints}
 
-Pavimento: ${pavimento} | ${geometry.walls.length} paredes (${extCount} ext, ${intCount} int) | ${totalEsq} esquadrias
+Pavimento: ${pavimento} | ${geometry.walls.length} paredes (${extCount} ext, ${intCount} int, ${muroCount} muros) | ${totalEsq} esquadrias
 
 PAREDES:
 ${wallsList}
@@ -805,11 +807,19 @@ ${wallsList}
 LAJES:
 ${slabsList || "Nenhuma"}
 
-VERIFICACAO RAPIDA:
-1. PAREDES FALTANTES? Ha paredes visiveis na imagem que nao foram extraidas? Se sim, adicione-as.
-2. CLASSIFICACAO: As externas formam o contorno? Internas dividem comodos internos? ${intCount === 0 ? "*** 0 INTERNAS = PROVAVELMENTE ERRADO ***" : ""}
-3. ESQUADRIAS: ${totalEsq === 0 ? "*** 0 ESQUADRIAS! Procure portas (arcos) e janelas (tracos paralelos). ***" : `${totalEsq} encontradas — todas foram identificadas?`}
-4. COMPRIMENTOS: As cotas batem com os valores extraidos?
+=== REGRAS DE CLASSIFICACAO (use para verificar) ===
+- MURO: limite do TERRENO/LOTE, linhas mais externas, FORA da area construida, sem janelas.
+- EXTERNA: envoltoria da CASA, uma face toca exterior (jardim/rua), outra toca ambiente interno.
+- INTERNA: divisoria DENTRO da casa, ambas as faces tocam comodos internos.
+
+VERIFICACAO:
+1. CLASSIFICACAO: ${intCount === 0 ? "*** CRITICO: 0 INTERNAS! Paredes que dividem comodos DENTRO da casa devem ser 'interna', nao 'externa'. ***" : ""} ${extCount === 0 ? "*** CRITICO: 0 EXTERNAS! O contorno da casa deve ser 'externa'. ***" : ""}
+   - Externas formam o poligono fechado da casa? Se uma "externa" tem ambientes dos dois lados → reclassifique como "interna".
+   - Alguma "interna" tem um lado voltado para jardim/exterior? → reclassifique como "externa".
+   - Muros estao FORA da projecao da casa? Se um "muro" faz parte do contorno da edificacao coberta → "externa".
+2. PAREDES FALTANTES? Ha paredes visiveis na imagem nao extraidas?
+3. ESQUADRIAS: ${totalEsq === 0 ? "*** 0 ESQUADRIAS! Procure arcos (portas) e tracos paralelos (janelas). ***" : `${totalEsq} encontradas — faltam?`}
+4. COMPRIMENTOS: As cotas batem?
 
 Se TUDO correto: responda "APROVADO"
 Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs": [...], "corners": [...] }`;
@@ -872,39 +882,76 @@ function buildGeometryPrompt(pavimentos: string[], buildingType?: string): strin
 
 ${btConfig.fewShotContext}
 
-SIGA ESTAS ETAPAS NA ORDEM — nao pule nenhuma:
+=== DEFINICOES DE CLASSIFICACAO (OBRIGATORIO SEGUIR) ===
+
+MURO (classe "muro"):
+- Vedacao perimetral que delimita o TERRENO/LOTE, NAO a casa.
+- Sao as linhas MAIS EXTERNAS de todo o desenho, fora da projecao da edificacao.
+- Nao possui janelas nem portas complexas (pode ter portao).
+- Fica FORA da area de piso/hachura interna.
+- IDs: M1, M2, M3...
+
+PAREDE EXTERNA (classe "externa"):
+- Envoltoria da edificacao: separa o INTERIOR da casa do EXTERIOR (jardim/rua).
+- Forma o contorno fechado (poligono) da area construida coberta.
+- Criterio: uma face toca area EXTERNA (jardim, fundo) e a outra face toca um AMBIENTE INTERNO (sala, quarto, etc).
+- Concentra a maioria das janelas e portas de entrada/saida.
+- IDs: P1, P2, P3...
+
+PAREDE INTERNA (classe "interna"):
+- Divisoria entre ambientes INTERNOS da casa.
+- Criterio: AMBAS as faces tocam comodos internos (sala/quarto, quarto/banheiro, etc).
+- Esta CONTIDA dentro do poligono formado pelas paredes externas.
+- Possui portas internas entre comodos.
+- IDs: P seguindo a sequencia apos externas.
+
+LAJE DE PISO (classe "piso" ou "radier"):
+- Area horizontal na base dos comodos = soma das areas internas fechadas por paredes.
+- Terreo = "radier" (fundacao), pavimentos superiores = "piso".
+
+LAJE DE COBERTA (classe "coberta"):
+- Projecao TOTAL da edificacao vista de cima (area de todas as paredes externas + internas + beirais se visiveis).
+- Apenas no ULTIMO pavimento ou pavimento unico. Telhado de telha NAO e laje.
+
+=== ETAPAS DE EXTRACAO (siga na ordem) ===
 
 ETAPA 1 — IDENTIFICAR COMODOS:
-Liste todos os comodos visiveis na planta (nome e area aproximada). Inclua: salas, quartos, banheiros, cozinha, lavanderia, corredor, hall, garagem, area de servico, varanda, etc.
+Liste todos os comodos visiveis (nome e area aprox.): salas, quartos, banheiros, cozinha, lavanderia, corredor, hall, garagem, area de servico, varanda, etc.
 
-ETAPA 2 — TRACAR O CONTORNO EXTERNO:
-Identifique o poligono que forma o perimetro da edificacao coberta vista de cima. Anote quantos segmentos retos formam esse contorno e suas direcoes.
+ETAPA 2 — IDENTIFICAR MUROS (limite do lote):
+Procure linhas nas BORDAS EXTREMAS do desenho, fora da casa. Se existirem, sao muros.
+Se nao houver linhas de muro visiveis, pule — nao invente muros.
 
-ETAPA 3 — LISTAR PAREDES COMODO POR COMODO:
-Para CADA comodo da Etapa 1, liste TODAS as paredes que o delimitam:
-- Leia a cota (dimensao) mais proxima de cada parede.
+ETAPA 3 — TRACAR O POLIGONO DA ENVOLTORIA (paredes externas):
+Identifique o contorno fechado da area construida coberta. Cada segmento desse poligono e uma PAREDE EXTERNA.
+- Uma face toca o exterior (jardim, rua, garagem aberta).
+- A outra face toca um ambiente interno.
+
+ETAPA 4 — LISTAR PAREDES INTERNAS (divisorias):
+Todas as paredes DENTRO do poligono da Etapa 3 que separam comodos internos.
+- Ambos os lados tocam ambientes.
+- Se uma parede separa dois comodos, liste-a apenas UMA vez.
+
+ETAPA 5 — COTAS E DIMENSOES:
+Para CADA parede (muro, externa, interna), leia a cota (dimensao) mais proxima:
 - Numeros > 10 (ex: 464, 350) estao em cm → divida por 100.
 - Numeros < 20 (ex: 4.64) ja estao em metros.
-- Se uma parede separa dois comodos, liste-a apenas UMA vez.
-- Classifique: "externa" se esta no contorno (Etapa 2), "interna" se divide comodos internos, "muro" se fora da edificacao.
 
-ETAPA 4 — ESQUADRIAS:
-Para CADA parede, verifique se tem portas (arcos no desenho) ou janelas (tracos paralelos):
-- Leia os codigos (P1, J1...) e dimensoes visiveis.
-- Se nao encontrar dimensoes: porta=0.80x2.10m, janela=1.20x1.00m.
-- Calcule opening_area_m2 = largura × altura de cada esquadria na parede.
+ETAPA 6 — ESQUADRIAS:
+Para CADA parede, verifique portas (arcos no desenho) e janelas (tracos paralelos):
+- Leia codigos (P1, J1...) e dimensoes.
+- Padroes se nao encontrar: porta=0.80x2.10m, janela=1.20x1.00m.
+- opening_area_m2 = soma(largura × altura) de cada esquadria na parede.
 
-ETAPA 5 — LAJES:
-Some as areas de todos os comodos para obter a area total do pavimento.
-- Terreo: fundacao="radier", entre andares="piso"
-- Ultimo pavimento: laje concreto no topo="coberta" (telhado de telha NAO e laje)
-- Intermediario: "piso"
+ETAPA 7 — LAJES:
+- Piso: some as areas de todos os comodos internos. Terreo="radier", demais="piso".
+- Coberta: projecao total da edificacao (somente no ultimo pavimento).
 
-ETAPA 6 — CANTOS E PE-DIREITO:
-- Conte os cantos de 90° no contorno externo (Etapa 2).
-- Pe-direito: Terreo ~3.0m, Superior ~2.80m, Garagem ~2.60m. Use alturas do corte/fachada se disponiveis.
+ETAPA 8 — CANTOS E PE-DIREITO:
+- Conte cantos de 90° no contorno externo (Etapa 3).
+- Pe-direito: Terreo ~3.0m, Superior ~2.80m, Garagem ~2.60m. Use corte/fachada se disponiveis.
 
-Escreva todo seu raciocinio (Etapas 1-6) entre <RACIOCINIO>...</RACIOCINIO>, depois retorne APENAS o JSON:
+Escreva seu raciocinio (Etapas 1-8) entre <RACIOCINIO>...</RACIOCINIO>, depois retorne APENAS o JSON:
 
 {
   "walls": [
@@ -919,8 +966,8 @@ Escreva todo seu raciocinio (Etapas 1-6) entre <RACIOCINIO>...</RACIOCINIO>, dep
 }
 
 box_2d: coordenadas normalizadas 0-1000 [ymin, xmin, ymax, xmax].
-IDs sequenciais: P1,P2... para paredes ext/int, M1,M2... para muros.
-NAO omita nenhuma parede — cada segmento de parede e importante para o orcamento.`;
+IDs: M1,M2... para muros, P1,P2... para externas e internas (sequencial).
+NAO omita nenhuma parede — cada segmento e importante para o orcamento.`;
 }
 
 function parseGeometryResponse(text: string, defaultNivel: string): GeometryResult {
@@ -1039,6 +1086,7 @@ Esquadrias de tabela: ${tableData.esquadrias_de_tabela.map(e => `${e.codigo}: ${
 
     const extCount = geometry.walls.filter(w => w.classe === "externa").length;
     const intCount = geometry.walls.filter(w => w.classe === "interna").length;
+    const muroCount = geometry.walls.filter(w => w.classe === "muro").length;
     const totalEsquadrias = geometry.walls.reduce((sum, w) => sum + (w.esquadrias?.length || 0), 0);
 
     const btConfig = getBuildingTypeConfig(buildingType);
@@ -1049,11 +1097,16 @@ ${btConfig.fewShotContext}
 
 ${btConfig.verificationHints}
 
-TAREFA: Verifique se a extracao de elementos construtivos abaixo esta CORRETA comparando com a imagem do projeto.
+=== REGRAS DE CLASSIFICACAO (use para verificar) ===
+- MURO: limite do TERRENO/LOTE, linhas mais externas do desenho, FORA da projecao da edificacao coberta, sem janelas.
+- EXTERNA: envoltoria da CASA, forma o poligono fechado da area construida. Uma face toca exterior (jardim/rua), outra toca ambiente interno.
+- INTERNA: divisoria DENTRO da casa, ambas as faces tocam comodos internos. Contida dentro do poligono de externas.
+- LAJE PISO/RADIER: soma das areas internas dos comodos. Terreo = radier, superiores = piso.
+- LAJE COBERTA: projecao total da edificacao (somente ultimo pavimento). Telhado de telha NAO e laje.
 
-DADOS EXTRAIDOS ANTERIORMENTE:
+TAREFA: Verifique se a extracao abaixo esta CORRETA comparando com a imagem.
 
-PAREDES (${geometry.walls.length} total: ${extCount} externas, ${intCount} internas):
+PAREDES (${geometry.walls.length} total: ${extCount} ext, ${intCount} int, ${muroCount} muros):
 ${wallsSummary || "Nenhuma parede extraida"}
 
 LAJES (${geometry.slabs.length}):
@@ -1064,42 +1117,21 @@ ESQUADRIAS TOTAIS: ${totalEsquadrias}
 DADOS DE TABELA:
 ${tableSummary}
 
-VERIFICACAO OBRIGATORIA — analise a imagem e responda CADA item:
+VERIFICACAO:
+1. CLASSIFICACAO:
+   ${intCount === 0 ? "*** CRITICO: 0 INTERNAS! Paredes que dividem comodos DENTRO da casa devem ser 'interna'. ***" : ""}
+   ${extCount === 0 ? "*** CRITICO: 0 EXTERNAS! O contorno da casa deve ser 'externa'. ***" : ""}
+   ${extCount > intCount && geometry.walls.length > 6 ? `*** ALERTA: Mais externas (${extCount}) que internas (${intCount}) — em residencias tipicas, internas sao maioria. ***` : ""}
+   - Externas formam o poligono fechado da casa? Se uma "externa" tem ambientes dos dois lados → "interna".
+   - Alguma "interna" tem um lado voltado para jardim/exterior? → "externa".
+   - Muros estao FORA da projecao da casa? Se um "muro" faz parte do contorno coberto → "externa".
+2. PAREDES FALTANTES? Ha paredes visiveis na imagem nao extraidas?
+3. ESQUADRIAS: ${totalEsquadrias === 0 ? "*** 0 ESQUADRIAS! Procure arcos (portas) e tracos paralelos (janelas). ***" : `${totalEsquadrias} encontradas — faltam?`}
+4. COMPRIMENTOS: As cotas batem?
+5. AREAS DE LAJE: Conferem com soma dos comodos? Classe correta para o pavimento?
 
-<VERIFICACAO>
-1. TESTE DO ENVELOPE FECHADO (*** MAIS IMPORTANTE ***):
-   - Trace mentalmente o CONTORNO EXTERNO da edificacao na imagem (o poligono que separa interior do exterior).
-   - Liste as paredes que formam este contorno. SOMENTE essas devem ser "externa".
-   - Se alguma parede marcada "externa" NAO esta no contorno → reclassifique como "interna".
-   - Se alguma parede marcada "interna" ESTA no contorno → reclassifique como "externa".
-   - Das ${geometry.walls.length} paredes, ${extCount} sao externas e ${intCount} sao internas.
-   - ${intCount === 0 ? "*** ALERTA CRITICO: 0 PAREDES INTERNAS! Isso e quase certamente ERRADO. Revise CADA parede: as que dividem comodos DENTRO do envelope devem ser 'interna'. ***" : ""}
-   - ${extCount > intCount && geometry.walls.length > 6 ? "*** ALERTA: Mais externas (${extCount}) que internas (${intCount}) — em residencias tipicas, internas sao maioria. Verifique. ***" : ""}
-
-2. MUROS vs EXTERNAS:
-   - Muros ficam FORA do envelope (divisa de terreno, jardim).
-   - Se um "muro" esta no contorno da edificacao coberta → reclassifique como "externa".
-   - Se uma "externa" nao sustenta cobertura (ex: muro de jardim) → reclassifique como "muro".
-
-3. ESQUADRIAS (*** CRITICO ***):
-   - Total encontrado: ${totalEsquadrias}.
-   - ${totalEsquadrias === 0 ? "*** ALERTA CRITICO: 0 ESQUADRIAS! Procure arcos (portas) e tracos paralelos (janelas). Use padroes: porta 0.80x2.10m, janela 1.20x1.00m. ***" : ""}
-   - Procure TODOS os simbolos de porta e janela na imagem.
-
-4. COMPRIMENTOS: Os comprimentos batem com as cotas visiveis?
-
-5. AREAS DE LAJE: A area confere com a soma dos comodos? A classe (radier/piso/coberta) esta correta para o pavimento?
-
-6. PAREDES FALTANTES: Ha alguma parede visivel que NAO foi extraida?
-
-7. CONVERSAO: Algum comprimento parece cm interpretado como m?
-</VERIFICACAO>
-
-IMPORTANTE: Se encontrar QUALQUER dos problemas acima (especialmente classificacao interna/externa e esquadrias faltantes), voce DEVE retornar o JSON corrigido. NAO retorne "APROVADO" se houver 0 paredes internas ou 0 esquadrias.
-
-Formato de resposta:
-- Se tudo correto (incluindo mix interna/externa e esquadrias): escreva apenas "APROVADO"
-- Se houver correcoes: retorne o JSON corrigido COMPLETO no formato { "walls": [...], "slabs": [...], "corners": [...] }`;
+Se TUDO correto: responda "APROVADO"
+Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs": [...], "corners": [...] }`;
 
     const { createOpenAIProvider, hasOpenAIKey } = await import("../ai/provider");
     const { getCurrentMetrics: getMetrics } = await import("./client");
