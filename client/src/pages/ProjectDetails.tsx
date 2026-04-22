@@ -71,17 +71,32 @@ interface PipelineStep {
   label: string;
   status: "pending" | "running" | "done" | "error";
   detail?: string;
+  parentStep?: number;
+  displayNum?: number;
+  startedAt?: number;
+  completedAt?: number;
 }
 
-const STEP_LABELS = [
-  { step: 1, label: "Classificacao + Tabelas" },
-  { step: 3, label: "Extracao Geometrica" },
-  { step: 4, label: "Fusao Multivista + Imagem Anotada" },
-  { step: 5, label: "Calculo de Quantitativos" },
-  { step: 6, label: "Integracao com Catalogo" },
-  { step: 7, label: "Validacao" },
-  { step: 8, label: "Descricao do Projeto" },
+const STEP_CONFIG: Array<{ step: number; label: string; parentStep?: number; displayNum?: number }> = [
+  { step: 1, label: "Classificacao + Tabelas", displayNum: 1 },
+  { step: 3, label: "Extracao Geometrica", displayNum: 2 },
+  { step: 3.5, label: "Verificacao IA", parentStep: 3 },
+  { step: 4, label: "Fusao Multivista", displayNum: 3 },
+  { step: 5, label: "Calculo de Quantitativos", displayNum: 4 },
+  { step: 6, label: "Integracao com Catalogo", displayNum: 5 },
+  { step: 7, label: "Validacao", displayNum: 6 },
+  { step: 7.5, label: "Imagem Anotada", displayNum: 7 },
+  { step: 8, label: "Descricao do Projeto", displayNum: 8 },
 ];
+
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return "<1s";
+  const totalSecs = Math.floor(ms / 1000);
+  const mins = Math.floor(totalSecs / 60);
+  const secs = totalSecs % 60;
+  if (mins > 0) return `${mins}m ${String(secs).padStart(2, "0")}s`;
+  return `${secs}s`;
+}
 
 export default function ProjectDetails() {
   const [, params] = useRoute("/project/:id");
@@ -128,6 +143,8 @@ export default function ProjectDetails() {
   const [highlightedWallId, setHighlightedWallId] = useState<string | null>(null);
   const [liveWalls, setLiveWalls] = useState<any[] | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const [pipelineStartTime, setPipelineStartTime] = useState<number | null>(null);
+  const [tickNow, setTickNow] = useState(Date.now());
 
   const toggleExpanded = (id: number) => {
     setExpandedSteps(prev => {
@@ -184,15 +201,26 @@ export default function ProjectDetails() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isProcessing) return;
+    const interval = setInterval(() => setTickNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [isProcessing]);
+
   const startSSE = () => {
     if (eventSourceRef.current) eventSourceRef.current.close();
 
-    const initSteps = STEP_LABELS.map(s => ({
+    const now = Date.now();
+    const initSteps: PipelineStep[] = STEP_CONFIG.map(s => ({
       step: s.step,
       label: s.label,
       status: "pending" as const,
+      parentStep: s.parentStep,
+      displayNum: s.displayNum,
     }));
     setPipelineSteps(initSteps);
+    setPipelineStartTime(now);
+    setTickNow(now);
 
     const es = new EventSource(`/api/projects/${projectId}/progress`);
     eventSourceRef.current = es;
@@ -201,6 +229,7 @@ export default function ProjectDetails() {
       try {
         const data = JSON.parse(event.data);
         if (data.step === 0) {
+          setTickNow(Date.now());
           if (data.status === "done") {
             setIsProcessing(false);
             es.close();
@@ -211,13 +240,34 @@ export default function ProjectDetails() {
           }
           return;
         }
-        setPipelineSteps(prev => prev.map(s =>
-          s.step === data.step
-            ? { ...s, status: data.status, label: data.label, detail: data.detail }
-            : s.step < data.step && s.status === "pending"
-              ? { ...s, status: "done" }
-              : s
-        ));
+        const ts = Date.now();
+        const isSubStepEvent = STEP_CONFIG.find(c => c.step === data.step)?.parentStep != null;
+
+        setPipelineSteps(prev => prev.map(s => {
+          // Direct match — update this step
+          if (s.step === data.step) {
+            return {
+              ...s,
+              status: data.status,
+              label: data.label || s.label,
+              detail: data.detail,
+              startedAt: s.startedAt || ts,
+              completedAt: data.status === "done" || data.status === "error" ? ts : s.completedAt,
+            };
+          }
+          // Auto-mark: only when a MAIN step event arrives
+          if (!isSubStepEvent && s.status === "pending") {
+            // Earlier main steps → mark done
+            if (!s.parentStep && s.step < data.step) {
+              return { ...s, status: "done" as const, completedAt: ts, startedAt: s.startedAt || ts };
+            }
+            // Sub-steps of earlier main steps → mark done (skipped)
+            if (s.parentStep && s.parentStep < data.step) {
+              return { ...s, status: "done" as const, completedAt: ts, startedAt: s.startedAt || ts };
+            }
+          }
+          return s;
+        }));
       } catch {}
     };
 
@@ -314,16 +364,31 @@ export default function ProjectDetails() {
   }
 
   const { project, files, extractedData, budget } = data;
-  const pipelineFinished = pipelineSteps.length > 0 && pipelineSteps.every(s => s.status === "done" || s.status === "error");
+  const mainSteps = pipelineSteps.filter(s => !s.parentStep);
+  const pipelineFinished = mainSteps.length > 0 && mainSteps.every(s => s.status === "done" || s.status === "error");
   const showPipeline = pipelineVisible && (isProcessing || processMutation.isPending || project.status === "processing" || pipelineSteps.length > 0);
 
-  function getStepIcon(status: string) {
+  const pipelineElapsed = pipelineStartTime
+    ? (pipelineFinished
+        ? Math.max(...pipelineSteps.filter(s => s.completedAt).map(s => s.completedAt!), pipelineStartTime) - pipelineStartTime
+        : tickNow - pipelineStartTime)
+    : 0;
+
+  function getStepIcon(status: string, isSubStep?: boolean) {
+    const size = isSubStep ? "h-4 w-4" : "h-5 w-5";
     switch (status) {
-      case "done": return <CheckCircle className="h-5 w-5 text-green-500" />;
-      case "running": return <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />;
-      case "error": return <XCircle className="h-5 w-5 text-red-500" />;
-      default: return <Clock className="h-5 w-5 text-slate-300" />;
+      case "done": return <CheckCircle className={`${size} text-green-500`} />;
+      case "running": return <Loader2 className={`${size} text-blue-500 animate-spin`} />;
+      case "error": return <XCircle className={`${size} text-red-500`} />;
+      default: return <Clock className={`${size} text-slate-300`} />;
     }
+  }
+
+  function getStepElapsed(step: PipelineStep): string | null {
+    if (!step.startedAt) return null;
+    if (step.completedAt) return formatElapsed(step.completedAt - step.startedAt);
+    if (step.status === "running") return formatElapsed(tickNow - step.startedAt);
+    return null;
   }
 
   return (
@@ -577,55 +642,88 @@ export default function ProjectDetails() {
         {showPipeline && (
           <Card className={`mb-6 ${pipelineFinished ? "border-green-200 dark:border-green-800" : "border-blue-200 dark:border-blue-800"}`}>
             <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2">
-                {pipelineFinished
-                  ? <CheckCircle className="h-5 w-5 text-green-500" />
-                  : <Loader2 className="h-5 w-5 animate-spin text-blue-500" />}
-                Pipeline de Processamento
-                <span className="text-xs font-normal text-muted-foreground ml-1">({STEP_LABELS.length} etapas)</span>
-                <button
-                  className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
-                  onClick={() => setPipelineVisible(false)}
-                  title="Fechar pipeline"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  {pipelineFinished
+                    ? <CheckCircle className="h-5 w-5 text-green-500" />
+                    : <Loader2 className="h-5 w-5 animate-spin text-blue-500" />}
+                  Pipeline de Processamento
+                  <span className="text-xs font-normal text-muted-foreground ml-1">
+                    ({STEP_CONFIG.filter(s => !s.parentStep).length} etapas)
+                  </span>
+                </CardTitle>
+                <div className="flex items-center gap-3">
+                  {pipelineStartTime && (
+                    <span className={`text-sm font-mono flex items-center gap-1.5 px-2 py-1 rounded-md ${
+                      pipelineFinished
+                        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                        : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                    }`}>
+                      <Clock className="h-3.5 w-3.5" />
+                      {formatElapsed(pipelineElapsed)}
+                    </span>
+                  )}
+                  <button
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => setPipelineVisible(false)}
+                    title="Fechar pipeline"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
               <CardDescription>
                 {pipelineFinished ? "Processamento concluido com sucesso" : "Acompanhe cada etapa em tempo real"}
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-3">
-                {pipelineSteps.map((step) => (
-                  <div
-                    key={step.step}
-                    data-testid={`pipeline-step-${step.step}`}
-                    className={`flex items-start gap-3 p-3 rounded-lg border transition-all ${
-                      step.status === "running" ? "bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800" :
-                      step.status === "done" ? "bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800" :
-                      step.status === "error" ? "bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800" :
-                      "bg-slate-50 border-slate-200 dark:bg-slate-800/50 dark:border-slate-700"
-                    }`}
-                  >
-                    <div className="mt-0.5">{getStepIcon(step.status)}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-mono text-slate-500">ETAPA {step.step}</span>
-                        <span className="font-medium text-sm">{step.label}</span>
+              <div className="space-y-2">
+                {pipelineSteps.map((step) => {
+                  const isSubStep = !!step.parentStep;
+                  const elapsed = getStepElapsed(step);
+                  return (
+                    <div
+                      key={step.step}
+                      data-testid={`pipeline-step-${step.step}`}
+                      className={`flex items-start gap-3 rounded-lg border transition-all ${
+                        isSubStep ? "ml-8 p-2 border-l-2" : "p-3"
+                      } ${
+                        step.status === "running" ? "bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800" :
+                        step.status === "done" ? "bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800" :
+                        step.status === "error" ? "bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800" :
+                        "bg-slate-50 border-slate-200 dark:bg-slate-800/50 dark:border-slate-700"
+                      }`}
+                    >
+                      <div className={isSubStep ? "mt-0" : "mt-0.5"}>{getStepIcon(step.status, isSubStep)}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`font-mono text-slate-500 ${isSubStep ? "text-[10px]" : "text-xs"}`}>
+                            {isSubStep ? `└` : `ETAPA ${step.displayNum || step.step}`}
+                          </span>
+                          <span className={`font-medium ${isSubStep ? "text-xs" : "text-sm"}`}>{step.label}</span>
+                          {elapsed && (
+                            <span className={`ml-auto font-mono whitespace-nowrap ${
+                              step.status === "running" ? "text-blue-600 dark:text-blue-400" :
+                              step.status === "done" ? "text-green-600 dark:text-green-400" :
+                              "text-muted-foreground"
+                            } ${isSubStep ? "text-[10px]" : "text-xs"}`}>
+                              {elapsed}
+                            </span>
+                          )}
+                        </div>
+                        {step.detail && (
+                          <p className={`mt-1 break-words ${isSubStep ? "text-[10px]" : "text-xs"} ${
+                            step.status === "error" ? "text-red-600" :
+                            step.status === "done" ? "text-green-700 dark:text-green-400" :
+                            "text-blue-600 dark:text-blue-400"
+                          }`} data-testid={`pipeline-detail-${step.step}`}>
+                            {step.detail}
+                          </p>
+                        )}
                       </div>
-                      {step.detail && (
-                        <p className={`text-xs mt-1 break-words ${
-                          step.status === "error" ? "text-red-600" :
-                          step.status === "done" ? "text-green-700 dark:text-green-400" :
-                          "text-blue-600 dark:text-blue-400"
-                        }`} data-testid={`pipeline-detail-${step.step}`}>
-                          {step.detail}
-                        </p>
-                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </CardContent>
           </Card>

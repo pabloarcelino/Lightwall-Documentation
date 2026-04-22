@@ -150,9 +150,14 @@ ${slabCoberta.map(slabLine).join("\n") || "(nenhuma)"}
 Resultado: planta original visivel com paredes contornadas em ciano/laranja/roxo e areas de laje em verde/vermelho semi-transparente.`;
 }
 
+const pipelineStartTimes = new Map<number, number>();
+
 function sendProgress(projectId: number, step: number, label: string, status: "running" | "done" | "error", detail?: string) {
   const clients = progressClients.get(projectId) || [];
-  const data = JSON.stringify({ step, label, status, detail, timestamp: Date.now() });
+  const now = Date.now();
+  const startTime = pipelineStartTimes.get(projectId) || now;
+  const elapsed = now - startTime;
+  const data = JSON.stringify({ step, label, status, detail, timestamp: now, elapsed });
   for (const client of clients) {
     try { client.write(`data: ${data}\n\n`); } catch {}
   }
@@ -610,6 +615,7 @@ export async function registerRoutes(
       await storage.clearExtractedData(projectId);
       await storage.deleteBudget(projectId);
       resetApiMetrics(projectId);
+      pipelineStartTimes.set(projectId, Date.now());
 
       const allClassifications: PageClassification[] = [];
       const allGeometries: GeometryResult[] = [];
@@ -713,11 +719,11 @@ export async function registerRoutes(
                 const verified = await verifyExtraction(file.filePath, file.fileType, geometry, hasAnyTableData ? mergedTableData : null, effectiveBuildingType());
                 const wallDiff = verified.walls.length - geometry.walls.length;
                 const correctionMsg = wallDiff !== 0 ? ` (${wallDiff > 0 ? "+" : ""}${wallDiff} paredes corrigidas)` : " (sem correcoes)";
-                sendProgress(projectId, 3.5 as any, "Verificacao IA", "done", `${verified.walls.length} paredes, ${verified.slabs.length} lajes${correctionMsg}`);
+                sendProgress(projectId, 3.5, "Verificacao IA", "done", `${verified.walls.length} paredes, ${verified.slabs.length} lajes${correctionMsg}`);
                 geometry = verified;
               } catch (verifyError: any) {
                 console.warn(`[ETAPA 3.5] Verificacao falhou: ${verifyError.message}. Usando dados sem verificacao.`);
-                sendProgress(projectId, 3.5 as any, "Verificacao IA", "done", `Verificacao falhou (${verifyError.message?.substring(0, 80)}).`);
+                sendProgress(projectId, 3.5, "Verificacao IA", "done", `Verificacao falhou (${verifyError.message?.substring(0, 80)}).`);
               }
               return geometry;
             };
@@ -739,7 +745,7 @@ export async function registerRoutes(
             if (analysisMode === "combinada" && cvServiceUp && plantaPages.length > 0) {
               // COMBINADA: run both in parallel, merge via fusionMultiView
               sendProgress(projectId, 3, "Extracao Geometrica (Combinada)", "running", `Executando CV + Gemini em paralelo para ${file.originalName}...`);
-              sendProgress(projectId, 3.5 as any, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+              sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
               const [cvResult, geminiResult] = await Promise.all([
                 runCvPipeline().catch((e: any) => { console.warn(`[ETAPA 3] CV falhou no modo combinada: ${e.message}`); return null; }),
                 runGeminiPipeline(),
@@ -778,7 +784,7 @@ export async function registerRoutes(
               }
               if (!usedCv) {
                 sendProgress(projectId, 3, "Extracao Geometrica", "running", `Fallback Gemini-only para ${file.originalName}...`);
-                sendProgress(projectId, 3.5 as any, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+                sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
                 const geometry = await runGeminiPipeline();
                 allGeometries.push(geometry);
                 await storeGeometry(geometry);
@@ -788,7 +794,7 @@ export async function registerRoutes(
             } else {
               // GEMINI-ONLY (or CV unavailable)
               sendProgress(projectId, 3, "Extracao Geometrica", "running", `Analisando geometria de ${file.originalName} (Gemini-only)...`);
-              sendProgress(projectId, 3.5 as any, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+              sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
               const geometry = await runGeminiPipeline();
               allGeometries.push(geometry);
               await storeGeometry(geometry);
@@ -1010,7 +1016,7 @@ export async function registerRoutes(
 
         if (cvAnnotatedImages.length > 0) {
           // ---- CV path: use pre-computed deterministic images from Python renderer ----
-          sendProgress(projectId, 4, "Imagem Anotada", "running", "Usando imagens anotadas do pipeline CV (deterministico)...");
+          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Usando imagens anotadas do pipeline CV (deterministico)...");
 
           // Build annotatedImages with summary per floor
           const annotatedImages = cvAnnotatedImages.map(cv => {
@@ -1046,11 +1052,11 @@ export async function registerRoutes(
           });
 
           const totalKB = annotatedImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
-          sendProgress(projectId, 4, "Imagem Anotada", "done", `${annotatedImages.length} imagem(ns) via CV pipeline (${totalKB}KB) | ${totalWalls.length} paredes`);
+          sendProgress(projectId, 7.5, "Imagem Anotada", "done", `${annotatedImages.length} imagem(ns) via CV pipeline (${totalKB}KB) | ${totalWalls.length} paredes`);
 
         } else {
           // ---- Fallback: Gemini image editing (original path) ----
-          sendProgress(projectId, 4, "Imagem Anotada", "running", "Extraindo paginas da planta e gerando imagens anotadas com IA...");
+          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Extraindo paginas da planta e gerando imagens anotadas com IA...");
           const imgSources = await getAnnotationImageSources(files, allClassifications);
           if (imgSources.length > 0) {
             const annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
@@ -1104,19 +1110,19 @@ export async function registerRoutes(
                 hasAssumption: 0,
               });
               const totalKB = annotatedImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
-              sendProgress(projectId, 4, "Imagem Anotada", "done", `${annotatedImages.length} imagem(ns) gerada(s) (${totalKB}KB) | ${totalWalls.length} paredes`);
+              sendProgress(projectId, 7.5, "Imagem Anotada", "done", `${annotatedImages.length} imagem(ns) gerada(s) (${totalKB}KB) | ${totalWalls.length} paredes`);
             } else {
-              sendProgress(projectId, 4, "Imagem Anotada", "done", "Nenhuma imagem gerada (sem paredes/lajes habilitadas)");
+              sendProgress(projectId, 7.5, "Imagem Anotada", "done", "Nenhuma imagem gerada (sem paredes/lajes habilitadas)");
             }
           } else {
-            sendProgress(projectId, 4, "Imagem Anotada", "done", "Nenhum arquivo de planta encontrado para anotacao");
+            sendProgress(projectId, 7.5, "Imagem Anotada", "done", "Nenhum arquivo de planta encontrado para anotacao");
           }
         }
       } catch (annotatedError: any) {
         console.error(`[ETAPA 4.5] Falha ao gerar imagem anotada:`, annotatedError);
         console.error(`[ETAPA 4.5] Stack:`, annotatedError?.stack);
         const errMsg = annotatedError?.message || String(annotatedError);
-        sendProgress(projectId, 4, "Imagem Anotada", "done", `Falha: ${errMsg.substring(0, 150)}`);
+        sendProgress(projectId, 7.5, "Imagem Anotada", "done", `Falha: ${errMsg.substring(0, 150)}`);
       }
 
       await storage.addExtractedData({
@@ -1240,6 +1246,7 @@ export async function registerRoutes(
       cleanupApiMetrics(projectId);
       const failedInfo = pipelineFailedPages.length > 0 ? ` (${pipelineFailedPages.length} pagina(s) com erro parcial)` : "";
       sendProgress(projectId, 0, "Concluido", "done", `Pipeline finalizado com sucesso!${failedInfo}`);
+      pipelineStartTimes.delete(projectId);
 
       res.json({
         message: "Projeto processado com sucesso",
@@ -1256,6 +1263,7 @@ export async function registerRoutes(
         : `Erro ao processar projeto: ${errMsg.substring(0, 150)}`;
       console.error("Erro ao processar projeto:", error);
       sendProgress(projectId, 0, "Erro", "error", userMsg);
+      pipelineStartTimes.delete(projectId);
       await storage.updateProjectStatus(projectId, "error");
       cleanupApiMetrics(projectId);
       res.status(500).json({ message: userMsg });
