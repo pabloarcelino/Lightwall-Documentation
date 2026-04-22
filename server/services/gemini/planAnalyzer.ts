@@ -677,11 +677,11 @@ export async function extractGeometryParallel(
     const allCorners: ExtractedCorner[] = [];
     const failedPages: number[] = [];
 
-    console.log(`[ETAPA3] Extraindo ${floorGroups.size} pavimento(s) separadamente (${plantaPages.length} paginas + ${cortePages.slice(0, 2).length} cortes)`);
+    console.log(`[ETAPA3] Extraindo ${floorGroups.size} pavimento(s) em PARALELO com Flash (${plantaPages.length} paginas + ${cortePages.slice(0, 2).length} cortes)`);
 
-    // Extract each floor independently with full thinking budget
+    // Extract all floors in parallel using Flash for speed
     const floorEntries = Array.from(floorGroups.entries());
-    for (const [pav, floorPages] of floorEntries) {
+    const floorResults = await Promise.all(floorEntries.map(async ([pav, floorPages]) => {
       try {
         const parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = [];
 
@@ -696,8 +696,8 @@ export async function extractGeometryParallel(
         const prompt = buildGeometryPrompt([pav], buildingType);
         parts.push({ text: prompt });
 
-        console.log(`[ETAPA3] Pavimento "${pav}": ${floorPages.length} pagina(s), thinking=32768`);
-        const text = await callGeminiMultiPart(parts, 65536, 0.1, 32768);
+        console.log(`[ETAPA3] Pavimento "${pav}": ${floorPages.length} pagina(s), Flash thinking=4096`);
+        const text = await callGeminiFlashMultiPart(parts, 16384, 0.1, 4096);
         console.log(`[ETAPA3] "${pav}" resposta: ${text.substring(0, 400)}`);
 
         const result = parseGeometryResponse(text, pav);
@@ -705,7 +705,7 @@ export async function extractGeometryParallel(
           if (w.page_index === undefined) w.page_index = floorPages[0]?.pageIndex ?? 0;
         }
 
-        // Per-floor verification (Task 16)
+        // Quick per-floor verification with Flash
         let verified = result;
         try {
           const verifiedResult = await verifyFloorExtraction(floorPages, corteParts, result, pav, buildingType);
@@ -714,15 +714,29 @@ export async function extractGeometryParallel(
           console.warn(`[ETAPA3] Verificacao pav "${pav}" falhou: ${vErr.message}`);
         }
 
-        allWalls.push(...verified.walls);
-        allSlabs.push(...verified.slabs);
-        allCorners.push(...verified.corners);
         console.log(`[ETAPA3] "${pav}": ${verified.walls.length} paredes, ${verified.slabs.length} lajes, ${verified.corners.length} cantos`);
-
+        return {
+          walls: verified.walls,
+          slabs: verified.slabs,
+          corners: verified.corners,
+          failedPages: [] as number[],
+        };
       } catch (floorErr: any) {
         console.error(`[ETAPA3] Erro no pav "${pav}": ${floorErr.message}`);
-        for (const p of floorPages) failedPages.push(p.pageIndex);
+        return {
+          walls: [] as ExtractedWall[],
+          slabs: [] as ExtractedSlab[],
+          corners: [] as ExtractedCorner[],
+          failedPages: floorPages.map(p => p.pageIndex),
+        };
       }
+    }));
+
+    for (const fr of floorResults) {
+      allWalls.push(...fr.walls);
+      allSlabs.push(...fr.slabs);
+      allCorners.push(...fr.corners);
+      failedPages.push(...fr.failedPages);
     }
 
     // Fallback: if 0 walls after per-floor, try raw full file
@@ -733,7 +747,7 @@ export async function extractGeometryParallel(
       const mimeType = getMimeType(filePath, fileType);
       const allPavs = Array.from(floorGroups.keys());
       const fallbackPrompt = buildGeometryPrompt(allPavs.length > 0 ? allPavs : ["Terreo"], buildingType);
-      const fallbackText = await callGemini(base64, mimeType, fallbackPrompt, 65536, 32768);
+      const fallbackText = await callGeminiFlash(base64, mimeType, fallbackPrompt, 16384, 4096);
       const fallbackResult = parseGeometryResponse(fallbackText, "Terreo");
       for (const w of fallbackResult.walls) {
         if (w.page_index === undefined) w.page_index = 0;
@@ -810,7 +824,7 @@ Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs"
   // Try verification, retry once on JSON parse failure
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const text = await callGeminiMultiPart(parts, 32768, 0.1, 16384);
+      const text = await callGeminiFlashMultiPart(parts, 16384, 0.1, 4096);
 
       if (text.includes("APROVADO")) {
         console.log(`[VERIFY] Pav "${pavimento}": APROVADO (tentativa ${attempt + 1})`);

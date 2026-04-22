@@ -705,26 +705,16 @@ export async function registerRoutes(
               return cvGeo;
             };
 
-            // Helper: run Gemini-only pipeline
+            // Helper: run Gemini-only pipeline (Flash extraction + Flash per-floor verification, all parallel)
             const runGeminiPipeline = async (): Promise<GeometryResult> => {
               const geoResult = await extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType());
               for (const p of geoResult.failedPages) {
                 pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: p });
                 recordFailedPage({ fileId: file.id, fileName: file.originalName, pageIndex: p, reason: "Falha na extracao geometrica" });
               }
-              let geometry: GeometryResult = { walls: geoResult.walls, slabs: geoResult.slabs, corners: geoResult.corners };
-              // Verificacao IA
-              const hasAnyTableData = mergedTableData.paredes_de_tabela.length > 0 || mergedTableData.esquadrias_de_tabela.length > 0;
-              try {
-                const verified = await verifyExtraction(file.filePath, file.fileType, geometry, hasAnyTableData ? mergedTableData : null, effectiveBuildingType());
-                const wallDiff = verified.walls.length - geometry.walls.length;
-                const correctionMsg = wallDiff !== 0 ? ` (${wallDiff > 0 ? "+" : ""}${wallDiff} paredes corrigidas)` : " (sem correcoes)";
-                sendProgress(projectId, 3.5, "Verificacao IA", "done", `${verified.walls.length} paredes, ${verified.slabs.length} lajes${correctionMsg}`);
-                geometry = verified;
-              } catch (verifyError: any) {
-                console.warn(`[ETAPA 3.5] Verificacao falhou: ${verifyError.message}. Usando dados sem verificacao.`);
-                sendProgress(projectId, 3.5, "Verificacao IA", "done", `Verificacao falhou (${verifyError.message?.substring(0, 80)}).`);
-              }
+              const geometry: GeometryResult = { walls: geoResult.walls, slabs: geoResult.slabs, corners: geoResult.corners };
+              // Per-floor verification already done inside extractGeometryParallel
+              sendProgress(projectId, 3.5, "Verificacao IA", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes (verificacao per-floor integrada)`);
               return geometry;
             };
 
