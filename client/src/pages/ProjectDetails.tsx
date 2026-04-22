@@ -79,14 +79,15 @@ interface PipelineStep {
 
 const STEP_CONFIG: Array<{ step: number; label: string; parentStep?: number; displayNum?: number }> = [
   { step: 1, label: "Classificacao + Tabelas", displayNum: 1 },
-  { step: 3, label: "Extracao Geometrica", displayNum: 2 },
+  { step: 2, label: "Pre-analise", displayNum: 2 },
+  { step: 3, label: "Extracao Geometrica", displayNum: 3 },
   { step: 3.5, label: "Verificacao IA", parentStep: 3 },
-  { step: 4, label: "Fusao Multivista", displayNum: 3 },
-  { step: 5, label: "Calculo de Quantitativos", displayNum: 4 },
-  { step: 6, label: "Integracao com Catalogo", displayNum: 5 },
-  { step: 7, label: "Validacao", displayNum: 6 },
-  { step: 7.5, label: "Imagem Anotada", displayNum: 7 },
-  { step: 8, label: "Descricao do Projeto", displayNum: 8 },
+  { step: 4, label: "Fusao Multivista", displayNum: 4 },
+  { step: 5, label: "Calculo de Quantitativos", displayNum: 5 },
+  { step: 6, label: "Integracao com Catalogo", displayNum: 6 },
+  { step: 7, label: "Validacao", displayNum: 7 },
+  { step: 7.5, label: "Imagem Anotada", displayNum: 8 },
+  { step: 8, label: "Descricao do Projeto", displayNum: 9 },
 ];
 
 function formatElapsed(ms: number): string {

@@ -98,6 +98,15 @@ export interface GeometryResult {
   corners: ExtractedCorner[];
 }
 
+export interface PreAnalysis {
+  tipo_edificacao: string;
+  pavimentos: string[];
+  ambientes: Array<{ nome: string; pavimento: string }>;
+  pe_direito_estimado: number;
+  dimensoes_gerais: string;
+  observacoes: string[];
+}
+
 function getMimeType(filePath: string, fileType?: string): string {
   const ext = filePath.toLowerCase().split(".").pop() || "";
   if (fileType === "pdf" || ext === "pdf") return "application/pdf";
@@ -619,6 +628,94 @@ export async function classifyAndExtractTables(
   return { classifications: allClassifications, tableData: mergedTableData, failedPages, detectedBuildingType };
 }
 
+const DEFAULT_PRE_ANALYSIS: PreAnalysis = {
+  tipo_edificacao: "residencial",
+  pavimentos: ["Terreo"],
+  ambientes: [],
+  pe_direito_estimado: 3.0,
+  dimensoes_gerais: "",
+  observacoes: [],
+};
+
+export async function preAnalyzeProject(
+  filePath: string,
+  fileType?: string,
+  classifications?: PageClassification[],
+): Promise<PreAnalysis> {
+  try {
+    const pages = await getFilePages(filePath, fileType);
+    const classMap = new Map<number, PageClassification>();
+    if (classifications) {
+      for (const c of classifications) classMap.set(c.page_index, c);
+    }
+
+    // Select planta_baixa + corte/fachada pages (max 4 total)
+    const relevantPages = pages.filter(p => {
+      const cls = classMap.get(p.pageIndex);
+      if (!cls) return true;
+      return cls.classificacao === "planta_baixa" || cls.classificacao === "planta_cobertura"
+        || cls.classificacao === "corte" || cls.classificacao === "fachada";
+    }).slice(0, 4);
+
+    if (relevantPages.length === 0) {
+      console.warn("[PRE-ANALISE] Nenhuma pagina relevante, usando defaults");
+      return DEFAULT_PRE_ANALYSIS;
+    }
+
+    const parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = [];
+    for (const page of relevantPages) {
+      const cls = classMap.get(page.pageIndex);
+      const label = cls ? `${cls.classificacao} (${cls.pavimento})` : "planta";
+      parts.push({ text: `--- Pagina ${page.pageIndex + 1}: ${label} ---` });
+      parts.push({ inlineData: { mimeType: page.mimeType, data: page.base64 } });
+    }
+
+    parts.push({ text: `Analise rapidamente estas plantas arquitetonicas. Retorne APENAS um JSON (sem markdown, sem explicacao):
+
+{
+  "tipo_edificacao": "residencial|comercial|industrial|institucional",
+  "pavimentos": ["Terreo", "Superior"],
+  "ambientes": [{"nome": "Sala", "pavimento": "Terreo"}, {"nome": "Quarto 1", "pavimento": "Terreo"}],
+  "pe_direito_estimado": 3.0,
+  "dimensoes_gerais": "12m x 8m aprox.",
+  "observacoes": ["observacoes relevantes para orcamento"]
+}
+
+INSTRUCOES:
+- pavimentos: liste todos os pavimentos VISIVEIS nas plantas (Terreo, Superior, Cobertura, etc.)
+- ambientes: liste TODOS os comodos/ambientes de CADA pavimento (sala, quartos, banheiros, cozinha, lavanderia, garagem, varanda, etc.)
+- pe_direito_estimado: se houver corte/fachada, leia o pe-direito real. Senao, use 3.0m.
+- dimensoes_gerais: comprimento x largura aproximados da edificacao
+- observacoes: anote detalhes uteis (formato irregular, niveis diferentes, construcao em etapas, etc.)` });
+
+    console.log(`[PRE-ANALISE] Enviando ${relevantPages.length} pagina(s) para Flash...`);
+    const text = await callGeminiFlashMultiPart(parts, 4096, 0.1, 2048);
+    console.log(`[PRE-ANALISE] Resposta: ${text.substring(0, 300)}`);
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn("[PRE-ANALISE] Sem JSON valido na resposta");
+      return DEFAULT_PRE_ANALYSIS;
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    const result: PreAnalysis = {
+      tipo_edificacao: parsed.tipo_edificacao || "residencial",
+      pavimentos: Array.isArray(parsed.pavimentos) ? parsed.pavimentos : ["Terreo"],
+      ambientes: Array.isArray(parsed.ambientes) ? parsed.ambientes : [],
+      pe_direito_estimado: typeof parsed.pe_direito_estimado === "number" ? parsed.pe_direito_estimado : 3.0,
+      dimensoes_gerais: parsed.dimensoes_gerais || "",
+      observacoes: Array.isArray(parsed.observacoes) ? parsed.observacoes : [],
+    };
+
+    console.log(`[PRE-ANALISE] ${result.tipo_edificacao} | ${result.pavimentos.length} pav | ${result.ambientes.length} ambientes | PD=${result.pe_direito_estimado}m`);
+    return result;
+  } catch (error: any) {
+    console.error("[PRE-ANALISE] Erro:", error.message);
+    return DEFAULT_PRE_ANALYSIS;
+  }
+}
+
 export async function extractGeometryParallel(
   filePath: string,
   fileType?: string,
@@ -626,6 +723,7 @@ export async function extractGeometryParallel(
   concurrency: number = 2,
   buildingType?: string,
   peDireito: number = 3.0,
+  preAnalysis?: PreAnalysis | null,
 ): Promise<GeometryResult & { failedPages: number[] }> {
   try {
     const pages = await getFilePages(filePath, fileType);
@@ -694,7 +792,7 @@ export async function extractGeometryParallel(
         // Include corte/fachada for height context
         parts.push(...corteParts);
 
-        const prompt = buildGeometryPrompt([pav], buildingType, peDireito);
+        const prompt = buildGeometryPrompt([pav], buildingType, peDireito, preAnalysis);
         parts.push({ text: prompt });
 
         console.log(`[ETAPA3] Pavimento "${pav}": ${floorPages.length} pagina(s), Flash thinking=4096`);
@@ -747,7 +845,7 @@ export async function extractGeometryParallel(
       const base64 = buffer.toString("base64");
       const mimeType = getMimeType(filePath, fileType);
       const allPavs = Array.from(floorGroups.keys());
-      const fallbackPrompt = buildGeometryPrompt(allPavs.length > 0 ? allPavs : ["Terreo"], buildingType, peDireito);
+      const fallbackPrompt = buildGeometryPrompt(allPavs.length > 0 ? allPavs : ["Terreo"], buildingType, peDireito, preAnalysis);
       const fallbackText = await callGeminiFlash(base64, mimeType, fallbackPrompt, 16384, 4096);
       const fallbackResult = parseGeometryResponse(fallbackText, "Terreo");
       for (const w of fallbackResult.walls) {
@@ -873,16 +971,28 @@ Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs"
   return null;
 }
 
-function buildGeometryPrompt(pavimentos: string[], buildingType?: string, peDireito: number = 3.0): string {
+function buildGeometryPrompt(pavimentos: string[], buildingType?: string, peDireito: number = 3.0, preAnalysis?: PreAnalysis | null): string {
   const btConfig = getBuildingTypeConfig(buildingType);
   const pavStr = pavimentos.join(", ");
   const isSingle = pavimentos.length === 1;
   const nivelRef = isSingle ? pavimentos[0] : pavStr;
 
+  const preContext = preAnalysis ? `
+=== CONTEXTO DO PROJETO (pre-analise) ===
+Tipo de edificacao: ${preAnalysis.tipo_edificacao}
+Pavimentos identificados: ${preAnalysis.pavimentos.join(", ")}
+Ambientes: ${preAnalysis.ambientes.map(a => `${a.nome} (${a.pavimento})`).join(", ")}
+Pe-direito estimado: ${preAnalysis.pe_direito_estimado}m
+Dimensoes gerais: ${preAnalysis.dimensoes_gerais}
+${preAnalysis.observacoes.length > 0 ? `Observacoes: ${preAnalysis.observacoes.join("; ")}` : ""}
+
+Use estas informacoes como GUIA para saber quantos ambientes e paredes esperar. Confirme ou corrija com base no que voce ve na planta.
+` : "";
+
   return `Voce e um engenheiro orcamentista experiente. Analise ${isSingle ? "esta planta baixa" : "estas plantas baixas"} (${nivelRef}) e extraia TODOS os elementos construtivos para orcamento de paineis Lightwall.
 
 ${btConfig.fewShotContext}
-
+${preContext}
 === DEFINICOES DE CLASSIFICACAO (OBRIGATORIO SEGUIR) ===
 
 MURO (classe "muro"):

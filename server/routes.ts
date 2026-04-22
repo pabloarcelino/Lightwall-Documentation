@@ -7,6 +7,7 @@ import { storage } from "./storage";
 import {
   classifyAndExtractTables,
   extractGeometryParallel,
+  preAnalyzeProject,
   verifyExtraction,
   describeProject,
   setUserApiKey,
@@ -15,6 +16,7 @@ import {
   type PageClassification,
   type GeometryResult,
   type TableData,
+  type PreAnalysis,
 } from "./services/gemini/planAnalyzer";
 import {
   resetApiMetrics,
@@ -631,6 +633,8 @@ export async function registerRoutes(
       const userBuildingType = project.buildingType || undefined;
       let detectedBuildingType: string | undefined;
       const effectiveBuildingType = (): string | undefined => userBuildingType || detectedBuildingType;
+      let preAnalysis: PreAnalysis | null = null;
+      let effectivePeDireito = peDireito;
 
       for (const file of files) {
         try {
@@ -666,6 +670,26 @@ export async function registerRoutes(
           }
           for (const te of tableData.esquadrias_de_tabela) {
             await storage.addExtractedData({ projectId, fileId: file.id, elementType: "esquadria_tabela", data: te, hasAssumption: 0 });
+          }
+
+          // ETAPA 2 — Pre-analise (run once, on first file with geometry pages)
+          if (!preAnalysis) {
+            sendProgress(projectId, 2, "Pre-analise", "running", `Analisando estrutura de ${file.originalName}...`);
+            try {
+              preAnalysis = await preAnalyzeProject(file.filePath, file.fileType, allClassifications);
+              const ambCount = preAnalysis.ambientes.length;
+              const pavList = preAnalysis.pavimentos.join(", ");
+              sendProgress(projectId, 2, "Pre-analise", "done",
+                `${preAnalysis.tipo_edificacao} | Pav: ${pavList} | ${ambCount} ambientes | PD=${preAnalysis.pe_direito_estimado}m`);
+              // Use pre-analysis pe-direito if user didn't override
+              if (peDireito === 3.0 && preAnalysis.pe_direito_estimado !== 3.0) {
+                effectivePeDireito = preAnalysis.pe_direito_estimado;
+                console.log(`[PIPELINE] Pe-direito da pre-analise: ${effectivePeDireito}m`);
+              }
+            } catch (preErr: any) {
+              console.warn("[ETAPA 2] Pre-analise falhou:", preErr.message);
+              sendProgress(projectId, 2, "Pre-analise", "done", "Fallback: sem pre-analise");
+            }
           }
 
           const hasGeometryPages = classifications.some(c =>
@@ -709,7 +733,7 @@ export async function registerRoutes(
 
             // Helper: run Gemini-only pipeline (Flash extraction + Flash per-floor verification, all parallel)
             const runGeminiPipeline = async (): Promise<GeometryResult> => {
-              const geoResult = await extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType(), peDireito);
+              const geoResult = await extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType(), effectivePeDireito, preAnalysis);
               for (const p of geoResult.failedPages) {
                 pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: p });
                 recordFailedPage({ fileId: file.id, fileName: file.originalName, pageIndex: p, reason: "Falha na extracao geometrica" });
@@ -837,10 +861,10 @@ export async function registerRoutes(
         sendProgress(projectId, 4, "Fusao Multivista", "done", `${fused.walls.length} paredes, ${fused.slabs.length} lajes → escopo: ${scopedWalls.length} paredes, ${scopedSlabs.length} lajes, ${scopedCorners.length} cantos`);
       }
 
-      // Apply user pe-direito to walls without explicit height
-      if (peDireito !== 3.0) {
+      // Apply effective pe-direito to walls without explicit height
+      if (effectivePeDireito !== 3.0) {
         for (const w of scopedWalls) {
-          if (!w.altura_m || w.altura_m <= 0) w.altura_m = peDireito;
+          if (!w.altura_m || w.altura_m <= 0) w.altura_m = effectivePeDireito;
         }
       }
 
@@ -963,6 +987,13 @@ export async function registerRoutes(
         data: { etapa: 2, label: "Extracao de Tabelas", resultado: mergedTableData },
         hasAssumption: 0,
       });
+      if (preAnalysis) {
+        await storage.addExtractedData({
+          projectId, fileId: null, elementType: "etapa2_preanalise",
+          data: { etapa: 2, label: "Pre-analise do Projeto", resultado: preAnalysis },
+          hasAssumption: 0,
+        });
+      }
       await storage.addExtractedData({
         projectId, fileId: null, elementType: "etapa3_geometria_bruta",
         data: {
