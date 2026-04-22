@@ -1,0 +1,173 @@
+# Lightwall Budget System
+
+## Overview
+Web app for parametric budgeting of Lightwall concrete panels with AI-powered interpretation of architectural plans (PDF/images). Uses Google Gemini AI (gemini-2.5-pro) with an 8-step pipeline: classify pages, extract tables, extract geometry, multi-view fusion, deterministic calculation, catalog integration, validation, and AI project description. Exports budgets as PDF/Excel/JSON.
+
+Output format matches the real Lightwall commercial proposal format (4 categories: Paredes Externas, Paredes Internas, Laje de Piso, Laje Coberta + Projeto de Paginacao).
+
+## Architecture
+- **Frontend**: React 18 + TypeScript, Tailwind CSS + Shadcn UI, TanStack Query, wouter routing, react-dropzone
+- **Backend**: Express + TypeScript, Drizzle ORM, PostgreSQL
+- **AI**: Google Gemini 2.5 Pro via Replit AI Integrations or user's own API key (`@google/genai` with `GoogleGenAI` class). Optional OpenAI GPT-4o for cross-model verification (Etapa 3.5)
+- **Export**: PDFKit (PDF), ExcelJS (Excel), JSON
+
+## 8-Step Processing Pipeline (with AI enhancements)
+1. **ETAPA 1 - Classificacao** (gemini-2.0-flash): Page-by-page classification (PDF split via pdf-lib). Chain-of-thought reasoning. Uses Flash model for speed. Categories: planta_baixa, planta_cobertura, corte, fachada, tabela_quantitativo, quadro_esquadrias, detalhe_construtivo, irrelevante
+2. **ETAPA 2 - Extracao de Tabelas** (gemini-2.0-flash): Page-by-page extraction with chain-of-thought + few-shot examples. Uses Flash model for speed. paredes_de_tabela, esquadrias_de_tabela, areas_de_tabela. Includes cm→m conversion examples
+3. **ETAPA 3 - Extracao Geometrica** (gemini-2.5-pro): Page-by-page with mandatory 5-step chain-of-thought (read cotas → identify rooms → map walls → find esquadrias → calc slabs/corners). 3 few-shot examples. Fallback to full-doc if page-by-page fails
+4. **ETAPA 3.5 - Verificacao IA (Cross-Model)**: Second-pass verification comparing extracted data vs original image. When OpenAI key is configured, uses GPT-4o (supports PDFs natively via file content type). Falls back to Gemini if OpenAI fails. Non-fatal: pipeline continues with unverified data if verification fails. Checks 7 criteria (count, lengths, classification, esquadrias, areas, missing walls, unit conversion). Records verification metrics
+5. **ETAPA 4 - Fusao Multivista**: Merge + deduplicate + table precedence + cross-validation (area correction >15% discrepancy) + auto cm→m conversion (length>50, height>10) + auto-generate missing slabs
+6. **ETAPA 5 - Calculo Deterministico**: Panel calculation (ALL panels are 2P), per-floor grouping, radier excluded
+7. **ETAPA 6 - Catalogo**: Cost calculation in real Lightwall proposal format (R$ 275/m2 for panels + R$ 11/m2 for paginacao)
+8. **ETAPA 7 - Validacao**: 3-level inconsistencies (Critica, Media, Baixa)
+9. **ETAPA 8 - Descricao do Projeto**: Deep AI analysis of all images generating descriptive technical text
+
+## Lightwall Product Model (from real proposal)
+- **Product**: PAINEL DE CONCRETO LEVE 3000X610X90MM 2P
+- **Panel area**: 1.83 m2 per unit (3.00m x 0.61m)
+- **ALL applications use the same 2P panel**: walls (ext/int) AND slabs (piso/coberta)
+- **Price**: R$ 275,00/m2 (uniform for all applications)
+- **Projeto de Paginacao**: R$ 11,00/m2 (BIM paging project, separate line item)
+- **Output categories**: Paredes Externas, Paredes Internas, Laje de Piso, Laje Coberta
+- **Materials/labor**: Tracked as supplementary estimates, NOT part of main proposal cost
+
+## Intermediate Results Storage
+All intermediate pipeline results are saved to `extracted_data` table for later consultation:
+- `etapa1_classificacoes` - Page classifications
+- `etapa2_tabelas` - Extracted table data (walls, esquadrias, areas)
+- `etapa3_geometria_bruta` - Raw geometry before fusion (per-file)
+- `etapa4_fusao` - Fused/deduplicated geometry
+- `etapa5_calculo` - Budget calculation results
+- `etapa6_catalogo` - Catalog integration with proposal format (proposta.itens, paginacao, complementar)
+- `etapa7_validacao` - Inconsistencies and alerts
+- `descricao_projeto` - AI-generated project description text
+
+## Building Type System
+- **Types**: residencial, comercial, institucional, industrial, outro
+- **Auto-detection**: In Etapa 1, each page votes on building type; majority wins
+- **Manual override**: User can change via dropdown in ProjectDetails header bar
+- **Specialized prompts**: `server/services/gemini/buildingTypePrompts.ts` contains per-type few-shot context, verification hints, and fusion heuristics
+- **Pipeline integration**: buildingType flows through Etapa 3 (geometry extraction), Etapa 3.5 (verification), and Etapa 4 (fusion) for type-aware behavior
+- **Fusion heuristics by type**: Industrial allows all-external walls (no forced reclassification), residential forces more internal walls, etc.
+
+## Key Files
+- `shared/schema.ts` - Drizzle schema: products, projects (with projectType + realCost + buildingType), project_files, extracted_data, budgets, settings
+- `server/routes.ts` - API routes with 8-step pipeline orchestration, SSE progress, delete project
+- `server/storage.ts` - Database storage layer using Drizzle
+- `server/services/gemini/client.ts` - Gemini AI client (gemini-2.5-pro, supports user key or Replit AI Integrations), API health metrics tracking (with VerificationMetrics), reliability scoring
+- `server/services/gemini/planAnalyzer.ts` - ETAPA 1-3 (page-by-page with CoT + few-shot), ETAPA 3.5 (verifyExtraction with cross-model support), ETAPA 8 (describeProject). Uses pdf-lib for page splitting
+- `server/services/gemini/buildingTypePrompts.ts` - Building type prompt library (per-type fewShotContext, verificationHints, fusionHeuristics)
+- `server/services/ai/provider.ts` - AIProvider interface abstraction, GeminiProvider, OpenAIProvider (GPT-4o), OpenAI key management
+- `server/services/calculation/engine.ts` - ETAPA 4 (fusionMultiView), ETAPA 5 (calculateBudget), ETAPA 7 (validation), plus legacy format adapter
+- `server/services/calculation/assumptions.ts` - Default assumptions (wall height 3m, door 0.8x2.1m, etc.)
+- `server/services/export/exportService.ts` - PDF/Excel/JSON export
+- `server/seed.ts` - Product catalog seed (LW-2P-090 at R$275/m2, PROJ-PAG at R$11/m2)
+- `client/src/App.tsx` - Frontend routes (Dashboard, NewProject, ProjectDetails, Settings, Metodologia)
+- `client/src/components/Metodologia.tsx` - Reusable methodology section (process, calculations, assumptions, methods)
+- `client/src/pages/MetodologiaPage.tsx` - Standalone methodology page (/metodologia)
+- `client/src/pages/Catalogo.tsx` - Product catalog management page (/catalogo) with CRUD
+- `client/src/components/QuantitativosEditor.tsx` - Editable quantitative parameters (walls, slabs, corners) with enable/disable toggles and recalculate
+- `client/src/pages/ProjectDetails.tsx` - Project details with 7 tabs (Analise IA, Arquivos, Etapas, Quantitativos, Orcamento, Metodologia, Exportar), inline project info editing, product selector for processing
+- `client/src/pages/Settings.tsx` - API key configuration for Gemini and OpenAI (with reusable ApiKeyCard component), multi-model info card
+- `client/src/pages/Calibracao.tsx` - Calibration details page (/calibracao) with comparative table per test project
+
+## Scope Pre-selection
+- **Pre-process scope checkboxes**: Before clicking "Processar Projeto", user can select which categories to include: paredes externas, paredes internas, laje de piso, laje coberta, cantos/conexões
+- All categories enabled by default, but can be unchecked before processing
+- AI still extracts all data, but unchecked categories are filtered from budget calculation and marked as `enabled: false` in the quantitativos editor
+- Scope is sent as `scope` object in POST /api/projects/:id/process body
+- Stored in `etapa4_fusao.data.scope` for reference
+
+## Slab Detection Refinement
+- Geometry extraction prompts (Etapa 3) include explicit instructions to distinguish concrete slabs from tile roofs
+- Only concrete slabs (piso, coberta, radier) are included; tile roofs (ceramic, fiber cement, metal) are excluded
+- Water tank slabs (laje de caixa d'água) are identified separately with `measurement_source: "laje_caixa_dagua"`
+- Prompt includes examples for telhado exclusion and caixa d'água inclusion
+
+## Frontend Tabs (ProjectDetails)
+- **Tipo Projeto**: Toggle between "Teste" (with real cost input and accuracy calculation) and "Real" 
+- **Analise IA**: AI-generated bullet-point analysis focused on budget/quantitative perspective (sections: Identificacao, Quantitativos, Distribuicao, Observacoes, Resumo, Alertas)
+- **Arquivos**: Uploaded files with page classifications, delete per file, add new files, reprocess button
+- **Etapas**: Expandable cards for each pipeline step; Etapa 5 shows formatted stat cards + per-floor tables (not raw JSON)
+- **Quantitativos**: Editable walls/slabs/corners with enable/disable toggles and recalculate
+- **Orcamento**: Proposta comercial table (matching real Lightwall format), per-floor breakdown, complementary costs, API health/reliability card
+- **Metodologia**: Detailed explanation of process, calculations, assumptions, methods, product specs, proposal format, validation, and limitations
+- **Exportar**: PDF/Excel/JSON export options
+
+## Calibration System
+- **Dashboard card**: "Calibracao do Sistema" card appears when test projects with real cost exist, showing avg accuracy, avg deviation, category distribution bars, and identified patterns
+- **Calibration page** (`/calibracao`): Detailed analysis with stat cards, category cost distribution, and comparative table per test project (calculated vs real cost, deviation, accuracy, over/under status)
+- **Accuracy metrics**: Primary metric is m²-based (weighted average per category comparing calculated vs real area); R$-based accuracy as secondary. Projects without real area data fall back to R$ accuracy
+- **Per-category m² accuracy**: 4 categories tracked: paredes_externas, paredes_internas, laje_piso, laje_coberta. DB columns: `real_area_ext`, `real_area_int`, `real_area_piso`, `real_area_coberta` (decimal 10,2)
+- **Data preservation**: When user manually edits quantitativos, original AI data is preserved as `etapa4_fusao_original` in extracted_data table (snapshot before first edit)
+- **API endpoint**: `GET /api/calibration` returns aggregated metrics including per-category area accuracy from all test projects with real cost
+
+## Budget Data Structure
+```
+budgetData = {
+  proposta: {
+    itens: [{ item, local, discriminacao, qtd_un, qtd_m2, preco_m2, preco_total }],
+    paginacao: { discriminacao, qtd_un, qtd_m2, preco_m2, preco_total },
+    total_paineis_un, total_area_m2, total_paineis_cost, grandTotal, preco_m2
+  },
+  costs: {
+    panels: { total },
+    paginacao: { total },
+    complementar: { materials: { items, total }, labor: { hours, rate, total } },
+    grandTotal
+  },
+  budget7etapas, quantitatives, materials, alerts, totals, projectDescription,
+  apiHealth: {
+    metrics: { totalCalls, successfulCalls, failedCalls, totalRetries, rateLimitHits, serverErrors, jsonParseRetries, failedPages,
+      verification?: { verificationModel, isCrossModel, hadCorrections, fallbackUsed, fallbackReason? }
+    },
+    reliability: { score (0-100), level ("high"|"medium"|"low"), factors: string[] },
+    processedAt
+  }
+}
+```
+
+## Calculation Rules
+- Panel area: 1.83 m2 (3.00m x 0.61m)
+- ALL panels are type 2P (no SP distinction)
+- Loss coefficient: 5% if openings <= 20% of wall area, else 8%
+- Slab loss: 10% fixed
+- Radier (piso terreo): excluded from calculation (0 panels)
+- Per-floor grouping: paredes_externas, paredes_internas, laje_piso, laje_coberta
+
+## Gemini API Key
+- Users can enter their own Google Gemini API key in Settings (/settings)
+- All calls use gemini-2.5-pro model
+- When user's key is set: direct Google API
+- When no user key: falls back to Replit AI Integrations
+- Key stored in settings table, loaded on server startup
+
+## Product Catalog
+- 22 pre-loaded Lightwall panels + 1 service (Projeto de Paginacao)
+- Panel types: 2P and SP, various thicknesses (75mm, 90mm, 95mm, 120mm), standard and electric variants, L-type corners, 2500mm and 3000mm lengths
+- Products table has `panel_type` column for type filtering
+- CRUD API: GET/POST /api/products, PUT/DELETE /api/products/:id
+- Users select which panel to use when processing a project (price from catalog drives the budget)
+- Default product: LW-2P-090 (R$ 275/m2) if none selected
+
+## Authentication
+- Login system with express-session + passport-local + connect-pg-simple
+- Session stored in PostgreSQL (`user_sessions` table, auto-created)
+- Users table: id, username, password (bcrypt hash), display_name, role (admin/viewer), active
+- Default admin user seeded on first startup (password configurable via DEFAULT_ADMIN_PASSWORD env var)
+- Auth endpoints: POST /api/auth/login, POST /api/auth/logout, GET /api/auth/me
+- All /api routes protected by requireAuth middleware (except /api/auth/*)
+- Frontend AuthGate in App.tsx checks /api/auth/me; shows Login page if unauthenticated
+- Login page uses Lightwall glass design with brand identity
+- Logout button in Dashboard header clears session and redirects to login
+- Session fixation protection: session regenerated on login
+- Key files: server/auth.ts, client/src/pages/Login.tsx
+
+## Database
+- PostgreSQL with 7 tables: users, products (with panel_type), projects, project_files, extracted_data, budgets, settings + user_sessions (auto-managed)
+
+## Scripts
+- `npm run dev` - Development server (port 5000)
+- `npm run db:seed` - Populate product catalog
+- `npm run db:push` - Apply Drizzle schema
+- `npm run validate` - Validate system configuration

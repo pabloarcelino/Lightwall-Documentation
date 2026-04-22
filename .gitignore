@@ -1,0 +1,33 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Local data & uploads
+.local/
+server/uploads/
+attached_assets/
+01 - PROPOSTAS REAIS COM ORÇAMENTO/
+
+# IDE & tooling
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database
+*.sqlite
+*.db
+
+# OS
+Thumbs.db
+Desktop.ini
