@@ -24,6 +24,13 @@ attached_assets/
 *.swp
 *.swo
 
+# Python CV service
+cv-service/__pycache__/
+cv-service/**/__pycache__/
+cv-service/.venv/
+cv-service/.env
+cv-service/models/
+
 # Database
 *.sqlite
 *.db
