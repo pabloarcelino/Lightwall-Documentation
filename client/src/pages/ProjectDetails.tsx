@@ -127,6 +127,10 @@ export default function ProjectDetails() {
   const [analysisMode, setAnalysisMode] = useState<string>(() => {
     return localStorage.getItem(`analysis-mode-${params?.id}`) || "gemini-only";
   });
+  const [peDireito, setPeDireito] = useState<number>(() => {
+    const saved = localStorage.getItem(`pe-direito-${params?.id}`);
+    return saved ? parseFloat(saved) : 3.0;
+  });
   const [scope, setScope] = useState({
     paredesExternas: true,
     paredesInternas: true,
@@ -191,7 +195,8 @@ export default function ProjectDetails() {
     if (selectedProductIdPiso) localStorage.setItem(`panel-piso-${params.id}`, selectedProductIdPiso);
     if (selectedProductIdCoberta) localStorage.setItem(`panel-coberta-${params.id}`, selectedProductIdCoberta);
     if (analysisMode) localStorage.setItem(`analysis-mode-${params.id}`, analysisMode);
-  }, [params?.id, selectedProductIdExt, selectedProductIdInt, selectedProductIdMuros, selectedProductIdPiso, selectedProductIdCoberta, analysisMode]);
+    localStorage.setItem(`pe-direito-${params.id}`, String(peDireito));
+  }, [params?.id, selectedProductIdExt, selectedProductIdInt, selectedProductIdMuros, selectedProductIdPiso, selectedProductIdCoberta, analysisMode, peDireito]);
 
   useEffect(() => {
     return () => {
@@ -281,7 +286,7 @@ export default function ProjectDetails() {
       setIsProcessing(true);
       setPipelineVisible(true);
       startSSE();
-      const body: Record<string, unknown> = { scope, analysisMode };
+      const body: Record<string, unknown> = { scope, analysisMode, peDireito };
       if (selectedProductIdExt) body.productIdExt = parseInt(selectedProductIdExt);
       if (selectedProductIdInt) body.productIdInt = parseInt(selectedProductIdInt);
       if (selectedProductIdMuros) body.productIdMuros = parseInt(selectedProductIdMuros);
@@ -1220,6 +1225,19 @@ export default function ProjectDetails() {
                       {analysisMode === "cv-gemini" && "Computer Vision (OpenCV + OCR) extrai dados estruturados, Gemini classifica. Mais preciso."}
                       {analysisMode === "combinada" && "Executa ambos os pipelines em paralelo e combina os resultados. Maximo de cobertura."}
                     </p>
+                  </div>
+                  <div className="mb-3">
+                    <Label className="text-xs font-medium text-muted-foreground">Pe-direito (m):</Label>
+                    <Input
+                      type="number"
+                      min={2.0}
+                      max={6.0}
+                      step={0.1}
+                      value={peDireito}
+                      onChange={(e) => setPeDireito(parseFloat(e.target.value) || 3.0)}
+                      className="h-8 text-sm w-32 mt-1"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Altura padrao das paredes. Usado quando a planta nao indica a cota.</p>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
                     {([

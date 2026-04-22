@@ -124,6 +124,7 @@ REGRAS:
 - A planta original deve continuar visivel.
 ${hasBbox ? `- Cada parede inclui coordenadas [bbox: ymin-ymax, xmin-xmax] normalizadas 0-1000. Use estas coordenadas para localizar EXATAMENTE cada parede na imagem.` : ""}
 - REGRA ANTI-SOBREPOSICAO: Se uma parede EXTERNA e uma INTERNA compartilham uma borda, pinte SOMENTE a cor EXTERNA. Externas tem precedencia visual.
+- TAGS OBRIGATORIAS: Em CADA parede e laje pintada, escreva o ID (P1, P2, M1, L1...) como TAG visivel. Use texto BRANCO GRANDE em negrito com fundo retangular da cor do elemento. Posicione a tag NO CENTRO do elemento. A tag deve ser legivel mesmo em zoom reduzido.
 
 CORES:
 - Paredes EXTERNAS → CIANO (#06b6d4) contorno + fill 35%
@@ -596,8 +597,9 @@ export async function registerRoutes(
       cantos: scopeRaw.cantos === true || scopeRaw.cantos === undefined,
     };
     const analysisMode: string = req.body?.analysisMode || "gemini-only";
+    const peDireito: number = parseFloat(req.body?.peDireito) || 3.0;
     console.log(`[PIPELINE] Escopo selecionado: ext=${scope.paredesExternas} int=${scope.paredesInternas} piso=${scope.lajePiso} coberta=${scope.lajeCoberta} cantos=${scope.cantos}`);
-    console.log(`[PIPELINE] Modo de analise: ${analysisMode}`);
+    console.log(`[PIPELINE] Modo de analise: ${analysisMode} | Pe-direito: ${peDireito}m`);
     try {
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -707,7 +709,7 @@ export async function registerRoutes(
 
             // Helper: run Gemini-only pipeline (Flash extraction + Flash per-floor verification, all parallel)
             const runGeminiPipeline = async (): Promise<GeometryResult> => {
-              const geoResult = await extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType());
+              const geoResult = await extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType(), peDireito);
               for (const p of geoResult.failedPages) {
                 pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: p });
                 recordFailedPage({ fileId: file.id, fileName: file.originalName, pageIndex: p, reason: "Falha na extracao geometrica" });
@@ -833,6 +835,13 @@ export async function registerRoutes(
       if (scopeFiltered.length > 0) {
         console.log(`[PIPELINE] Escopo: filtradas categorias: ${scopeFiltered.join(", ")}`);
         sendProgress(projectId, 4, "Fusao Multivista", "done", `${fused.walls.length} paredes, ${fused.slabs.length} lajes → escopo: ${scopedWalls.length} paredes, ${scopedSlabs.length} lajes, ${scopedCorners.length} cantos`);
+      }
+
+      // Apply user pe-direito to walls without explicit height
+      if (peDireito !== 3.0) {
+        for (const w of scopedWalls) {
+          if (!w.altura_m || w.altura_m <= 0) w.altura_m = peDireito;
+        }
       }
 
       sendProgress(projectId, 5, "Calculo de Quantitativos", "running", "Calculando paineis por pavimento...");

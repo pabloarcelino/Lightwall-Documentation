@@ -625,6 +625,7 @@ export async function extractGeometryParallel(
   classifications?: PageClassification[],
   concurrency: number = 2,
   buildingType?: string,
+  peDireito: number = 3.0,
 ): Promise<GeometryResult & { failedPages: number[] }> {
   try {
     const pages = await getFilePages(filePath, fileType);
@@ -693,7 +694,7 @@ export async function extractGeometryParallel(
         // Include corte/fachada for height context
         parts.push(...corteParts);
 
-        const prompt = buildGeometryPrompt([pav], buildingType);
+        const prompt = buildGeometryPrompt([pav], buildingType, peDireito);
         parts.push({ text: prompt });
 
         console.log(`[ETAPA3] Pavimento "${pav}": ${floorPages.length} pagina(s), Flash thinking=4096`);
@@ -746,7 +747,7 @@ export async function extractGeometryParallel(
       const base64 = buffer.toString("base64");
       const mimeType = getMimeType(filePath, fileType);
       const allPavs = Array.from(floorGroups.keys());
-      const fallbackPrompt = buildGeometryPrompt(allPavs.length > 0 ? allPavs : ["Terreo"], buildingType);
+      const fallbackPrompt = buildGeometryPrompt(allPavs.length > 0 ? allPavs : ["Terreo"], buildingType, peDireito);
       const fallbackText = await callGeminiFlash(base64, mimeType, fallbackPrompt, 16384, 4096);
       const fallbackResult = parseGeometryResponse(fallbackText, "Terreo");
       for (const w of fallbackResult.walls) {
@@ -872,7 +873,7 @@ Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs"
   return null;
 }
 
-function buildGeometryPrompt(pavimentos: string[], buildingType?: string): string {
+function buildGeometryPrompt(pavimentos: string[], buildingType?: string, peDireito: number = 3.0): string {
   const btConfig = getBuildingTypeConfig(buildingType);
   const pavStr = pavimentos.join(", ");
   const isSingle = pavimentos.length === 1;
@@ -949,13 +950,13 @@ ETAPA 7 — LAJES:
 
 ETAPA 8 — CANTOS E PE-DIREITO:
 - Conte cantos de 90° no contorno externo (Etapa 3).
-- Pe-direito: Terreo ~3.0m, Superior ~2.80m, Garagem ~2.60m. Use corte/fachada se disponiveis.
+- Pe-direito PADRAO definido pelo usuario: ${peDireito}m. Use este valor para TODAS as paredes, a menos que o corte/fachada mostre valor diferente.
 
 Escreva seu raciocinio (Etapas 1-8) entre <RACIOCINIO>...</RACIOCINIO>, depois retorne APENAS o JSON:
 
 {
   "walls": [
-    {"id": "P1", "nivel": "${pavimentos[0]}", "classe": "externa|interna|muro", "comprimento_m": 8.50, "altura_m": 3.0, "espessura_m": 0.10, "measurement_source": "dimension_text|inferred_from_symbol", "confidence": 0.9, "has_door": true, "has_window": false, "opening_area_m2": 1.68, "esquadrias": [{"tipo": "porta", "codigo": "P1", "largura_m": 0.80, "altura_m": 2.10, "measurement_source": "dimension_text"}], "box_2d": [ymin, xmin, ymax, xmax]}
+    {"id": "P1", "nivel": "${pavimentos[0]}", "classe": "externa|interna|muro", "comprimento_m": 8.50, "altura_m": ${peDireito}, "espessura_m": 0.10, "measurement_source": "dimension_text|inferred_from_symbol", "confidence": 0.9, "has_door": true, "has_window": false, "opening_area_m2": 1.68, "esquadrias": [{"tipo": "porta", "codigo": "P1", "largura_m": 0.80, "altura_m": 2.10, "measurement_source": "dimension_text"}], "box_2d": [ymin, xmin, ymax, xmax]}
   ],
   "slabs": [
     {"id": "L1", "nivel": "${pavimentos[0]}", "classe": "radier|piso|coberta", "area_m2": 85.0, "measurement_source": "dimension_text", "confidence": 0.9}
