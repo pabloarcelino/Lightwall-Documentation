@@ -595,7 +595,7 @@ export async function registerRoutes(
       lajeCoberta: scopeRaw.lajeCoberta === true || scopeRaw.lajeCoberta === undefined,
       cantos: scopeRaw.cantos === true || scopeRaw.cantos === undefined,
     };
-    const analysisMode: string = req.body?.analysisMode || "cv-gemini";
+    const analysisMode: string = req.body?.analysisMode || "gemini-only";
     console.log(`[PIPELINE] Escopo selecionado: ext=${scope.paredesExternas} int=${scope.paredesInternas} piso=${scope.lajePiso} coberta=${scope.lajeCoberta} cantos=${scope.cantos}`);
     console.log(`[PIPELINE] Modo de analise: ${analysisMode}`);
     try {

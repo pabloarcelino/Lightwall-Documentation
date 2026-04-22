@@ -20,6 +20,7 @@ type ProjectWithBudget = Project & { budgetTotalCost: number | null };
 interface CalibrationData {
   hasData: boolean;
   avgAccuracy: number | null;
+  avgAreaAccuracy: number | null;
   avgDeviation: number | null;
   projectCount: number;
   categories: Array<{ category: string; label: string; avgCost: number; avgProportion: number; avgErrorContribution: number; projectsWithZero: number }>;
@@ -157,10 +158,10 @@ export default function Dashboard() {
               <Target className="h-4 w-4 lw-text-accent opacity-60" />
             </div>
             {(() => {
-              if (!calibration?.hasData || calibration.avgAccuracy == null) {
+              if (!calibration?.hasData || calibration.avgAreaAccuracy == null) {
                 return <div className="text-xl font-bold text-muted-foreground" data-testid="text-global-accuracy">N/A</div>;
               }
-              const avg = calibration.avgAccuracy;
+              const avg = calibration.avgAreaAccuracy;
               return (
                 <div>
                   <div className={`text-3xl font-bold ${avg >= 90 ? "text-emerald-600" : avg >= 70 ? "text-amber-600" : "text-red-600"}`} data-testid="text-global-accuracy">
@@ -194,10 +195,10 @@ export default function Dashboard() {
             <div className="p-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <div className="text-center">
-                  <p className="text-xs text-muted-foreground mb-1">Acuracia Media</p>
-                  {calibration.avgAccuracy != null ? (
-                    <p className={`text-2xl font-bold ${calibration.avgAccuracy >= 90 ? "text-emerald-600" : calibration.avgAccuracy >= 70 ? "text-amber-600" : "text-red-600"}`} data-testid="text-cal-avg-accuracy">
-                      {calibration.avgAccuracy.toFixed(1)}%
+                  <p className="text-xs text-muted-foreground mb-1">Acuracia Media (m²)</p>
+                  {calibration.avgAreaAccuracy != null ? (
+                    <p className={`text-2xl font-bold ${calibration.avgAreaAccuracy >= 90 ? "text-emerald-600" : calibration.avgAreaAccuracy >= 70 ? "text-amber-600" : "text-red-600"}`} data-testid="text-cal-avg-accuracy">
+                      {calibration.avgAreaAccuracy.toFixed(1)}%
                     </p>
                   ) : (
                     <p className="text-2xl font-bold text-muted-foreground" data-testid="text-cal-avg-accuracy">N/A</p>
@@ -314,15 +315,15 @@ export default function Dashboard() {
                         {project.projectType === "teste" && calibration?.projects && (() => {
                           const calProj = calibration.projects.find(p => p.projectId === project.id);
                           if (!calProj) return null;
-                          const accuracy = calProj.accuracy;
-                          const metricType = calProj.areaAccuracy !== null ? "m²" : "R$";
+                          if (calProj.areaAccuracy === null) return null;
+                          const accuracy = calProj.areaAccuracy;
                           return (
                             <span
                               className={`px-2 py-1 rounded-full text-xs font-bold ${accuracy >= 90 ? "bg-emerald-500/15 text-emerald-600" : accuracy >= 70 ? "bg-amber-500/15 text-amber-600" : "bg-red-500/15 text-red-600"}`}
                               data-testid={`accuracy-project-${project.id}`}
                             >
                               <Target className="h-3 w-3 inline mr-1" />
-                              {accuracy.toFixed(1)}% ({metricType})
+                              {accuracy.toFixed(1)}% (m²)
                             </span>
                           );
                         })()}

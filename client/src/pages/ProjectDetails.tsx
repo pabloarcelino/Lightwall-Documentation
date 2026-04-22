@@ -125,7 +125,7 @@ export default function ProjectDetails() {
     return localStorage.getItem(`panel-coberta-${params?.id}`) || "";
   });
   const [analysisMode, setAnalysisMode] = useState<string>(() => {
-    return localStorage.getItem(`analysis-mode-${params?.id}`) || "cv-gemini";
+    return localStorage.getItem(`analysis-mode-${params?.id}`) || "gemini-only";
   });
   const [scope, setScope] = useState({
     paredesExternas: true,
@@ -1627,28 +1627,18 @@ export default function ProjectDetails() {
                       </Card>
                     );
                   })()}
-                  {/* If no AI image, show bbox-based annotated plan or floor plan diagram */}
-                  {!annotatedPlan?.data?.image && !annotatedPlan?.data?.images && planWalls.length > 0 && (
-                    <>
-                      {hasBboxWalls && files && files.length > 0 && (
-                        <AnnotatedFloorPlan
-                          projectId={Number(projectId)}
-                          walls={planWalls}
-                          files={files}
-                          highlightedWallId={highlightedWallId}
-                          onHoverWall={setHighlightedWallId}
-                          onClickWall={handleClickWall}
-                          preGeneratedImage={undefined}
-                          preGeneratedSummary={undefined}
-                        />
-                      )}
-                      <FloorPlanDiagram
-                        walls={planWalls}
-                        highlightedWallId={highlightedWallId}
-                        onHoverWall={setHighlightedWallId}
-                        onClickWall={handleClickWall}
-                      />
-                    </>
+                  {/* If no AI image, show bbox-based annotated plan only (no schematic fallback) */}
+                  {!annotatedPlan?.data?.image && !annotatedPlan?.data?.images && planWalls.length > 0 && hasBboxWalls && files && files.length > 0 && (
+                    <AnnotatedFloorPlan
+                      projectId={Number(projectId)}
+                      walls={planWalls}
+                      files={files}
+                      highlightedWallId={highlightedWallId}
+                      onHoverWall={setHighlightedWallId}
+                      onClickWall={handleClickWall}
+                      preGeneratedImage={undefined}
+                      preGeneratedSummary={undefined}
+                    />
                   )}
                 </div>
               );
