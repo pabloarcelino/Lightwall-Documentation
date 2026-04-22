@@ -343,9 +343,10 @@ Responda com seu raciocinio entre <RACIOCINIO> e </RACIOCINIO>, e depois APENAS 
           continue;
         }
       }
+      console.warn(`[ETAPA1] Pag ${page.pageIndex}: fallback para 'irrelevante' (JSON invalido)`);
       allClassifications.push({
         page_index: page.pageIndex,
-        classificacao: "planta_baixa",
+        classificacao: "irrelevante",
         pavimento: "Terreo",
         has_table: false,
         has_scale: false,
@@ -700,7 +701,7 @@ INSTRUCOES:
       return DEFAULT_PRE_ANALYSIS;
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = repairJSON(jsonMatch[0]);
     const result: PreAnalysis = {
       tipo_edificacao: parsed.tipo_edificacao || "residencial",
       pavimentos: Array.isArray(parsed.pavimentos) ? parsed.pavimentos : ["Terreo"],
@@ -964,6 +965,12 @@ Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs"
         return null;
       }
 
+      // Guard: reject corrections that remove more than 50% of walls
+      if (geometry.walls.length > 0 && result.walls.length < geometry.walls.length * 0.5) {
+        console.warn(`[VERIFY] Pav "${pavimento}": correcao removeu mais de 50% das paredes (${geometry.walls.length} → ${result.walls.length}), mantendo original`);
+        return null;
+      }
+
       const diff = result.walls.length - geometry.walls.length;
       console.log(`[VERIFY] Pav "${pavimento}": corrigido ${geometry.walls.length} → ${result.walls.length} paredes (${diff > 0 ? "+" : ""}${diff})`);
       return result;
@@ -1124,9 +1131,9 @@ function parseGeometryResponse(text: string, defaultNivel: string): GeometryResu
 
 function parseGeometryJSON(parsed: any, rawText: string, defaultNivel: string): GeometryResult {
   if (!parsed) {
-    const wallMatches = [...rawText.matchAll(/"comprimento_m"\s*:\s*([\d.]+)[\s\S]*?"altura_m"\s*:\s*([\d.]+)[\s\S]*?"classe"\s*:\s*"(externa|interna)"/g)];
+    const wallMatches = [...rawText.matchAll(/"comprimento_m"\s*:\s*([\d.]+)[\s\S]*?"altura_m"\s*:\s*([\d.]+)[\s\S]*?"classe"\s*:\s*"(externa|interna|muro)"/g)];
     const walls: ExtractedWall[] = wallMatches.map((m, i) => ({
-      id: `P${i + 1}`, nivel: defaultNivel, classe: m[3] as "externa" | "interna",
+      id: `P${i + 1}`, nivel: defaultNivel, classe: m[3] as "externa" | "interna" | "muro",
       comprimento_m: parseFloat(m[1]), altura_m: parseFloat(m[2]), espessura_m: 0.10,
       measurement_source: "regex_recovery", confidence: 0.5,
       has_door: false, has_window: false, opening_area_m2: 0, esquadrias: [],
@@ -1348,6 +1355,12 @@ Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs"
 
     if (result.walls.length === 0 && geometry.walls.length > 0) {
       console.log("[VERIFICACAO] Correcao retornou 0 paredes, mantendo original");
+      return geometry;
+    }
+
+    // Guard: reject corrections that remove more than 50% of walls
+    if (geometry.walls.length > 0 && result.walls.length < geometry.walls.length * 0.5) {
+      console.warn(`[VERIFICACAO] Correcao removeu mais de 50% das paredes (${geometry.walls.length} → ${result.walls.length}), mantendo original`);
       return geometry;
     }
 

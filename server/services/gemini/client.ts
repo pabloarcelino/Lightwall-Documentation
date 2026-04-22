@@ -71,11 +71,14 @@ export function resetApiMetrics(projectId: number): void {
   activeProjectId = projectId;
 }
 
-export function getCurrentMetrics(): ApiHealthMetrics {
-  if (activeProjectId !== null) {
-    const m = metricsStore.get(activeProjectId);
+export function getCurrentMetrics(projectId?: number): ApiHealthMetrics {
+  const id = projectId ?? activeProjectId;
+  if (id !== null && id !== undefined) {
+    const m = metricsStore.get(id);
     if (m) return m;
   }
+  // If no projectId given and no active, return a detached metrics object
+  console.warn("[Metrics] getCurrentMetrics called without projectId and no activeProjectId set");
   const fallback = createFreshMetrics();
   return fallback;
 }
@@ -94,12 +97,12 @@ export function cleanupApiMetrics(projectId: number): void {
   if (activeProjectId === projectId) activeProjectId = null;
 }
 
-export function recordJsonParseRetry(): void {
-  getCurrentMetrics().jsonParseRetries++;
+export function recordJsonParseRetry(projectId?: number): void {
+  getCurrentMetrics(projectId).jsonParseRetries++;
 }
 
-export function recordFailedPage(info: { fileId?: number; fileName?: string; pageIndex: number; reason: string }): void {
-  getCurrentMetrics().failedPages.push(info);
+export function recordFailedPage(info: { fileId?: number; fileName?: string; pageIndex: number; reason: string }, projectId?: number): void {
+  getCurrentMetrics(projectId).failedPages.push(info);
 }
 
 export function computeReliabilityScore(metrics: ApiHealthMetrics): {
@@ -158,9 +161,9 @@ const BASE_DELAY_MS = 1500;
 const MAX_DELAY_MS = 12000;
 const RATE_LIMIT_DELAY_MS = 15000;
 
-export async function withRetry<T>(fn: () => Promise<T>, label = "Gemini"): Promise<T> {
+export async function withRetry<T>(fn: () => Promise<T>, label = "Gemini", projectId?: number): Promise<T> {
   let lastError: any;
-  const currentMetrics = getCurrentMetrics();
+  const currentMetrics = getCurrentMetrics(projectId);
   currentMetrics.totalCalls++;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {

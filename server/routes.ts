@@ -1228,8 +1228,14 @@ export async function registerRoutes(
           grandTotal: totalCost,
           preco_m2_ext: PRECO_M2_EXT,
           preco_m2_int: PRECO_M2_INT,
+          preco_m2_muros: PRECO_M2_MUROS,
+          preco_m2_piso: PRECO_M2_PISO,
+          preco_m2_coberta: PRECO_M2_COBERTA,
           painel_ext: PRODUCT_NAME_EXT,
           painel_int: PRODUCT_NAME_INT,
+          painel_muros: PRODUCT_NAME_MUROS,
+          painel_piso: PRODUCT_NAME_PISO,
+          painel_coberta: PRODUCT_NAME_COBERTA,
         },
         costs: {
           panels: { total: totalPanelCost },
@@ -1392,33 +1398,47 @@ export async function registerRoutes(
       const productIntDefault = allProducts.find((p) => p.sku === "LW-SP-090") || productExtDefault;
       const PRECO_M2_EXT = prevProposta?.preco_m2_ext ?? parseFloat(productExtDefault?.unitPrice ?? "275");
       const PRECO_M2_INT = prevProposta?.preco_m2_int ?? parseFloat(productIntDefault?.unitPrice ?? "180");
+      const PRECO_M2_MUROS = prevProposta?.preco_m2_muros ?? PRECO_M2_INT;
+      const PRECO_M2_PISO = prevProposta?.preco_m2_piso ?? PRECO_M2_EXT;
+      const PRECO_M2_COBERTA = prevProposta?.preco_m2_coberta ?? PRECO_M2_EXT;
       const PRODUCT_NAME_EXT = prevProposta?.painel_ext ?? productExtDefault?.name ?? "PAINEL DE CONCRETO LEVE 3000X610X90MM 2P";
       const PRODUCT_NAME_INT = prevProposta?.painel_int ?? productIntDefault?.name ?? "PAINEL DE CONCRETO LEVE 3000X610X90MM SP";
-      const PRECO_PAGINACAO_M2 = 11;
+      const PRODUCT_NAME_MUROS = prevProposta?.painel_muros ?? PRODUCT_NAME_INT;
+      const PRODUCT_NAME_PISO = prevProposta?.painel_piso ?? PRODUCT_NAME_EXT;
+      const PRODUCT_NAME_COBERTA = prevProposta?.painel_coberta ?? PRODUCT_NAME_EXT;
+      const pagProduct = allProducts.find((p) => p.sku === "PROJ-PAG");
+      const PRECO_PAGINACAO_M2 = pagProduct ? parseFloat(pagProduct.unitPrice) : 11;
 
+      const AREA_PAINEL = 1.83;
       const extPanels = budget.resumo.paredes_externas.quantidade_paineis;
       const intPanels = budget.resumo.paredes_internas.quantidade_paineis;
+      const murosPanels = budget.resumo.muros?.quantidade_paineis ?? 0;
       const pisoPanels = budget.resumo.laje_piso.quantidade_paineis;
       const cobertaPanels = budget.resumo.laje_coberta.quantidade_paineis;
-      const extArea = Math.round(extPanels * 1.83 * 1000) / 1000;
-      const intArea = Math.round(intPanels * 1.83 * 1000) / 1000;
-      const pisoArea = Math.round(pisoPanels * 1.83 * 1000) / 1000;
-      const cobertaArea = Math.round(cobertaPanels * 1.83 * 1000) / 1000;
-      const totalAreaM2 = Math.round((extArea + intArea + pisoArea + cobertaArea) * 1000) / 1000;
+      const extArea = Math.round(extPanels * AREA_PAINEL * 1000) / 1000;
+      const intArea = Math.round(intPanels * AREA_PAINEL * 1000) / 1000;
+      const murosArea = Math.round(murosPanels * AREA_PAINEL * 1000) / 1000;
+      const pisoArea = Math.round(pisoPanels * AREA_PAINEL * 1000) / 1000;
+      const cobertaArea = Math.round(cobertaPanels * AREA_PAINEL * 1000) / 1000;
+      const totalAreaM2 = extArea + intArea + murosArea + pisoArea + cobertaArea;
       const extCost = Math.round(extArea * PRECO_M2_EXT * 100) / 100;
       const intCost = Math.round(intArea * PRECO_M2_INT * 100) / 100;
-      const pisoCost = Math.round(pisoArea * PRECO_M2_EXT * 100) / 100;
-      const cobertaCost = Math.round(cobertaArea * PRECO_M2_EXT * 100) / 100;
-      const totalPanelCost = extCost + intCost + pisoCost + cobertaCost;
+      const murosCost = Math.round(murosArea * PRECO_M2_MUROS * 100) / 100;
+      const pisoCost = Math.round(pisoArea * PRECO_M2_PISO * 100) / 100;
+      const cobertaCost = Math.round(cobertaArea * PRECO_M2_COBERTA * 100) / 100;
+      const totalPanelCost = extCost + intCost + murosCost + pisoCost + cobertaCost;
       const paginacaoCost = Math.round(totalAreaM2 * PRECO_PAGINACAO_M2 * 100) / 100;
       const totalCost = totalPanelCost + paginacaoCost;
 
-      const propostaItens = [
-        { item: 1, local: "PAREDES EXTERNAS", discriminacao: PRODUCT_NAME_EXT, qtd_un: extPanels, qtd_m2: extArea, preco_m2: PRECO_M2_EXT, preco_total: extCost },
-        { item: 2, local: "PAREDES INTERNAS", discriminacao: PRODUCT_NAME_INT, qtd_un: intPanels, qtd_m2: intArea, preco_m2: PRECO_M2_INT, preco_total: intCost },
-        { item: 3, local: "LAJE DE PISO", discriminacao: PRODUCT_NAME_EXT, qtd_un: pisoPanels, qtd_m2: pisoArea, preco_m2: PRECO_M2_EXT, preco_total: pisoCost },
-        { item: 4, local: "LAJE COBERTA", discriminacao: PRODUCT_NAME_EXT, qtd_un: cobertaPanels, qtd_m2: cobertaArea, preco_m2: PRECO_M2_EXT, preco_total: cobertaCost },
-      ];
+      const propostaItens: Array<{ item: number; local: string; discriminacao: string; qtd_un: number; qtd_m2: number; preco_m2: number; preco_total: number }> = [];
+      let lineNo = 1;
+      propostaItens.push({ item: lineNo++, local: "PAREDES EXTERNAS", discriminacao: PRODUCT_NAME_EXT, qtd_un: extPanels, qtd_m2: extArea, preco_m2: PRECO_M2_EXT, preco_total: extCost });
+      propostaItens.push({ item: lineNo++, local: "PAREDES INTERNAS", discriminacao: PRODUCT_NAME_INT, qtd_un: intPanels, qtd_m2: intArea, preco_m2: PRECO_M2_INT, preco_total: intCost });
+      if (murosPanels > 0) {
+        propostaItens.push({ item: lineNo++, local: "MUROS (DIVISA)", discriminacao: PRODUCT_NAME_MUROS, qtd_un: murosPanels, qtd_m2: murosArea, preco_m2: PRECO_M2_MUROS, preco_total: murosCost });
+      }
+      propostaItens.push({ item: lineNo++, local: "LAJE DE PISO", discriminacao: PRODUCT_NAME_PISO, qtd_un: pisoPanels, qtd_m2: pisoArea, preco_m2: PRECO_M2_PISO, preco_total: pisoCost });
+      propostaItens.push({ item: lineNo++, local: "LAJE COBERTA", discriminacao: PRODUCT_NAME_COBERTA, qtd_un: cobertaPanels, qtd_m2: cobertaArea, preco_m2: PRECO_M2_COBERTA, preco_total: cobertaCost });
       const propostaPaginacao = { item: 1, discriminacao: "Projeto de Paginação", qtd_un: budget.resumo.total_geral_paineis, qtd_m2: totalAreaM2, preco_m2: PRECO_PAGINACAO_M2, preco_total: paginacaoCost };
 
       const connQty = Math.ceil(legacy.totals.totalPanels * 4);
@@ -1461,8 +1481,14 @@ export async function registerRoutes(
           grandTotal: totalCost,
           preco_m2_ext: PRECO_M2_EXT,
           preco_m2_int: PRECO_M2_INT,
+          preco_m2_muros: PRECO_M2_MUROS,
+          preco_m2_piso: PRECO_M2_PISO,
+          preco_m2_coberta: PRECO_M2_COBERTA,
           painel_ext: PRODUCT_NAME_EXT,
           painel_int: PRODUCT_NAME_INT,
+          painel_muros: PRODUCT_NAME_MUROS,
+          painel_piso: PRODUCT_NAME_PISO,
+          painel_coberta: PRODUCT_NAME_COBERTA,
         },
         costs: {
           panels: { total: totalPanelCost },

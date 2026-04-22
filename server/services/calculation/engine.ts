@@ -190,14 +190,19 @@ export function fusionMultiView(
     }
   }
 
+  // Building-type-aware cm→m conversion thresholds
+  const isIndustrial = buildingType === "industrial" || buildingType === "galpao";
+  const maxWallLength = isIndustrial ? 200 : 50; // industrial can have walls up to 200m
+  const maxWallHeight = isIndustrial ? 20 : 10;  // industrial can have tall walls
+
   for (const wall of allWalls) {
-    if (wall.comprimento_m > 50) {
-      console.log(`[FUSAO] Parede ${wall.id} com ${wall.comprimento_m}m parece em cm, convertendo...`);
+    if (wall.comprimento_m > maxWallLength) {
+      console.log(`[FUSAO] Parede ${wall.id} com ${wall.comprimento_m}m parece em cm (limite=${maxWallLength}m, tipo=${buildingType || "generico"}), convertendo...`);
       wall.comprimento_m = wall.comprimento_m / 100;
       wall.measurement_source = wall.measurement_source + "_cm_corrected";
     }
-    if (wall.altura_m > 10) {
-      console.log(`[FUSAO] Parede ${wall.id} com altura ${wall.altura_m}m parece em cm, convertendo...`);
+    if (wall.altura_m > maxWallHeight) {
+      console.log(`[FUSAO] Parede ${wall.id} com altura ${wall.altura_m}m parece em cm (limite=${maxWallHeight}m), convertendo...`);
       wall.altura_m = wall.altura_m / 100;
     }
   }
@@ -246,12 +251,25 @@ export function fusionMultiView(
     console.log(`[FUSAO] AVISO (${buildingType || "generico"}): ${extWallCount} externas vs ${intWallCount} internas — proporcao incomum, pode haver classificacao errada`);
   }
 
-  const seenWalls = new Set<string>();
   const deduplicatedWalls: ExtractedWall[] = [];
   for (const w of allWalls) {
     const sig = wallSignature(w);
-    if (!seenWalls.has(sig)) {
-      seenWalls.add(sig);
+    // Check if a wall with same signature already exists AND overlaps spatially
+    const isDuplicate = deduplicatedWalls.some(existing => {
+      if (wallSignature(existing) !== sig) return false;
+      // If both have bbox, check spatial proximity (within 50 normalized units = ~5% of image)
+      if (w.bbox && existing.bbox) {
+        const [y1min, x1min, y1max, x1max] = existing.bbox;
+        const [y2min, x2min, y2max, x2max] = w.bbox;
+        const cx1 = (x1min + x1max) / 2, cy1 = (y1min + y1max) / 2;
+        const cx2 = (x2min + x2max) / 2, cy2 = (y2min + y2max) / 2;
+        const dist = Math.sqrt((cx1 - cx2) ** 2 + (cy1 - cy2) ** 2);
+        return dist < 50; // Only deduplicate if nearby (same wall from different views)
+      }
+      // No bbox? Fall back to signature-only dedup (legacy behavior)
+      return true;
+    });
+    if (!isDuplicate) {
       deduplicatedWalls.push(w);
     }
   }
@@ -297,16 +315,25 @@ export function fusionMultiView(
 
   function estimateFloorArea(floorName: string): number {
     const extWalls = deduplicatedWalls.filter(w => w.nivel === floorName && w.classe === "externa");
-    if (extWalls.length > 0) {
-      const totalPerimeter = extWalls.reduce((sum, w) => sum + w.comprimento_m, 0);
-      return Math.round(Math.pow(totalPerimeter / 4, 2) * 100) / 100;
+    const wallsToUse = extWalls.length > 0 ? extWalls : deduplicatedWalls.filter(w => w.nivel === floorName);
+    if (wallsToUse.length === 0) return 0;
+
+    const totalPerimeter = wallsToUse.reduce((sum, w) => sum + w.comprimento_m, 0);
+    // Sort walls by length to try to identify long/short sides
+    const sorted = [...wallsToUse].sort((a, b) => b.comprimento_m - a.comprimento_m);
+
+    if (sorted.length >= 4) {
+      // Try to pair up sides: two longest as length, two next as width
+      const sideA = (sorted[0].comprimento_m + sorted[1].comprimento_m) / 2;
+      const sideB = (sorted[2].comprimento_m + sorted[3].comprimento_m) / 2;
+      const area = sideA * sideB;
+      if (area > 0) return Math.round(area * 100) / 100;
     }
-    const allFloorWalls = deduplicatedWalls.filter(w => w.nivel === floorName);
-    if (allFloorWalls.length > 0) {
-      const totalPerimeter = allFloorWalls.reduce((sum, w) => sum + w.comprimento_m, 0);
-      return Math.round(Math.pow(totalPerimeter / 4, 2) * 100) / 100;
-    }
-    return 0;
+
+    // Fallback: assume 2:1 aspect ratio instead of square
+    // P = 2(L + W), if L = 2W then P = 6W, W = P/6, L = P/3, Area = P²/18
+    const area = Math.pow(totalPerimeter, 2) / 18;
+    return Math.round(area * 100) / 100;
   }
 
   function getBestArea(floorName: string): number {
@@ -608,6 +635,11 @@ function validateResults(
     if (!w.nivel) {
       issues.push({ severidade: "Media", mensagem: `Parede ${w.id}: nivel/pavimento nao especificado` });
     }
+    // Esquadria area vs wall area check
+    const wallArea = w.comprimento_m * w.altura_m;
+    if (w.opening_area_m2 > wallArea && wallArea > 0) {
+      issues.push({ severidade: "Critica", mensagem: `Parede ${w.id}: area de esquadrias (${w.opening_area_m2.toFixed(2)}m²) maior que area da parede (${wallArea.toFixed(2)}m²)` });
+    }
   }
 
   for (const s of slabs) {
@@ -616,6 +648,9 @@ function validateResults(
     }
     if (!s.nivel) {
       issues.push({ severidade: "Media", mensagem: `Laje ${s.id}: nivel/pavimento nao especificado` });
+    }
+    if (s.area_m2 > 5000) {
+      issues.push({ severidade: "Media", mensagem: `Laje ${s.id}: area ${s.area_m2}m² parece em cm² — possivel erro de unidade` });
     }
   }
 
