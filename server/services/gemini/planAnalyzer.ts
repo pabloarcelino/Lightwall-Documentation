@@ -672,6 +672,8 @@ export async function preAnalyzeProject(
 
     parts.push({ text: `Analise rapidamente estas plantas arquitetonicas. Retorne APENAS um JSON (sem markdown, sem explicacao):
 
+IMPORTANTE: Ignore mobilia, vegetacao, veiculos, decoracao e sujeira/manchas na imagem. Foque apenas em elementos estruturais: paredes, portas, janelas, cotas e rotulos de ambientes.
+
 {
   "tipo_edificacao": "residencial|comercial|industrial|institucional",
   "pavimentos": ["Terreo", "Superior"],
@@ -896,6 +898,8 @@ async function verifyFloorExtraction(
 
   const prompt = `Voce e um revisor tecnico de plantas arquitetonicas. Verifique a extracao abaixo comparando com a imagem.
 
+NOTA: Ignore mobilia, vegetacao, decoracao e sujeira ao verificar. Foque apenas em paredes, portas e janelas.
+
 ${btConfig.verificationHints}
 
 Pavimento: ${pavimento} | ${geometry.walls.length} paredes (${extCount} ext, ${intCount} int, ${muroCount} muros) | ${totalEsq} esquadrias
@@ -993,6 +997,19 @@ Use estas informacoes como GUIA para saber quantos ambientes e paredes esperar. 
 
 ${btConfig.fewShotContext}
 ${preContext}
+=== FILTRAGEM DE IMAGEM (aplicar mentalmente ANTES de analisar) ===
+
+IGNORE COMPLETAMENTE os seguintes elementos — eles NAO fazem parte da estrutura:
+- MOBILIA: sofas, camas, mesas, cadeiras, armarios, estantes, geladeira, fogao, pia, vaso sanitario, box, banheira
+- VEGETACAO: arvores, arbustos, jardins, gramado, vasos de plantas
+- VEICULOS: carros, motos na garagem
+- DECORACAO: tapetes, quadros, cortinas, luminarias
+- SUJEIRA/MANCHAS: borroes, marcas de dobra, sombras, manchas de scanner
+- TEXTOS DECORATIVOS: nomes de ambientes JA estao nos rotulos — nao confunda com cotas
+- HACHURAS DE PISO: padroes de piso ceramico/porcelanato NAO sao paredes
+
+FOQUE APENAS EM: paredes (linhas retas continuas), portas (arcos), janelas (tracos paralelos), cotas/dimensoes (numeros com linhas de cota), rotulos de ambientes, e simbolos de escala.
+
 === DEFINICOES DE CLASSIFICACAO (OBRIGATORIO SEGUIR) ===
 
 MURO (classe "muro"):
@@ -1203,6 +1220,8 @@ Esquadrias de tabela: ${tableData.esquadrias_de_tabela.map(e => `${e.codigo}: ${
     const btConfig = getBuildingTypeConfig(buildingType);
 
     const prompt = `Voce e um revisor tecnico especialista em plantas arquitetonicas e orcamento de paineis Lightwall.
+
+NOTA: Ignore mobilia, vegetacao, decoracao e sujeira ao verificar. Foque apenas em paredes, portas e janelas.
 
 ${btConfig.fewShotContext}
 
