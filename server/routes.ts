@@ -44,6 +44,7 @@ import {
 import type { Response } from "express";
 import { requireAuth } from "./auth";
 import { editImage } from "./replit_integrations/image/client";
+import { cvAnalyze, cvAnnotate, isCvServiceAvailable } from "./services/cv/client";
 
 const progressClients = new Map<number, Response[]>();
 
@@ -123,6 +124,7 @@ REGRAS:
 - A planta original deve continuar visivel.
 ${hasBbox ? `- Cada parede inclui coordenadas [bbox: ymin-ymax, xmin-xmax] normalizadas 0-1000. Use estas coordenadas para localizar EXATAMENTE cada parede na imagem.` : ""}
 - REGRA ANTI-SOBREPOSICAO: Se uma parede EXTERNA e uma INTERNA compartilham uma borda, pinte SOMENTE a cor EXTERNA. Externas tem precedencia visual.
+- TAGS OBRIGATORIAS: Em CADA parede e laje pintada, escreva o ID (P1, P2, M1, L1...) como TAG visivel. Use texto BRANCO GRANDE em negrito com fundo retangular da cor do elemento. Posicione a tag NO CENTRO do elemento. A tag deve ser legivel mesmo em zoom reduzido.
 
 CORES:
 - Paredes EXTERNAS → CIANO (#06b6d4) contorno + fill 35%
@@ -149,9 +151,14 @@ ${slabCoberta.map(slabLine).join("\n") || "(nenhuma)"}
 Resultado: planta original visivel com paredes contornadas em ciano/laranja/roxo e areas de laje em verde/vermelho semi-transparente.`;
 }
 
+const pipelineStartTimes = new Map<number, number>();
+
 function sendProgress(projectId: number, step: number, label: string, status: "running" | "done" | "error", detail?: string) {
   const clients = progressClients.get(projectId) || [];
-  const data = JSON.stringify({ step, label, status, detail, timestamp: Date.now() });
+  const now = Date.now();
+  const startTime = pipelineStartTimes.get(projectId) || now;
+  const elapsed = now - startTime;
+  const data = JSON.stringify({ step, label, status, detail, timestamp: now, elapsed });
   for (const client of clients) {
     try { client.write(`data: ${data}\n\n`); } catch {}
   }
@@ -589,7 +596,10 @@ export async function registerRoutes(
       lajeCoberta: scopeRaw.lajeCoberta === true || scopeRaw.lajeCoberta === undefined,
       cantos: scopeRaw.cantos === true || scopeRaw.cantos === undefined,
     };
+    const analysisMode: string = req.body?.analysisMode || "gemini-only";
+    const peDireito: number = parseFloat(req.body?.peDireito) || 3.0;
     console.log(`[PIPELINE] Escopo selecionado: ext=${scope.paredesExternas} int=${scope.paredesInternas} piso=${scope.lajePiso} coberta=${scope.lajeCoberta} cantos=${scope.cantos}`);
+    console.log(`[PIPELINE] Modo de analise: ${analysisMode} | Pe-direito: ${peDireito}m`);
     try {
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -607,11 +617,17 @@ export async function registerRoutes(
       await storage.clearExtractedData(projectId);
       await storage.deleteBudget(projectId);
       resetApiMetrics(projectId);
+      pipelineStartTimes.set(projectId, Date.now());
 
       const allClassifications: PageClassification[] = [];
       const allGeometries: GeometryResult[] = [];
       let mergedTableData: TableData = { paredes_de_tabela: [], esquadrias_de_tabela: [], areas_de_tabela: [] };
       const pipelineFailedPages: Array<{ fileId: number; fileName: string; pageIndex: number }> = [];
+      const cvAnnotatedImages: Array<{ pavimento: string; pageIndex: number; image: string }> = [];
+      const cvServiceUp = analysisMode !== "gemini-only" ? await isCvServiceAvailable() : false;
+      if (analysisMode === "gemini-only") console.log("[PIPELINE] Modo Gemini-only selecionado");
+      else if (cvServiceUp) console.log("[PIPELINE] CV service disponivel");
+      else console.log("[PIPELINE] CV service indisponivel — fallback para Gemini-only");
       const userBuildingType = project.buildingType || undefined;
       let detectedBuildingType: string | undefined;
       const effectiveBuildingType = (): string | undefined => userBuildingType || detectedBuildingType;
@@ -661,40 +677,121 @@ export async function registerRoutes(
           );
 
           if (hasGeometryPages || classifications.every(c => c.classificacao !== "irrelevante")) {
-            sendProgress(projectId, 3, "Extracao Geometrica", "running", `Analisando geometria de ${file.originalName} (paginas em paralelo)...`);
-            const geoResult = await extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType());
-            let geometry: GeometryResult = { walls: geoResult.walls, slabs: geoResult.slabs, corners: geoResult.corners };
-            for (const p of geoResult.failedPages) {
-              pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: p });
-              recordFailedPage({ fileId: file.id, fileName: file.originalName, pageIndex: p, reason: "Falha na extracao geometrica" });
-            }
+            const plantaPages = classifications.filter(c => c.classificacao === "planta_baixa");
 
-            const geoFailedMsg = geoResult.failedPages.length > 0 ? ` | ${geoResult.failedPages.length} pag(s) falharam` : "";
-            sendProgress(projectId, 3, "Extracao Geometrica", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes, ${geometry.corners.length} cantos${geoFailedMsg}`);
+            // Helper: run CV pipeline for planta pages
+            const runCvPipeline = async (): Promise<GeometryResult | null> => {
+              if (!cvServiceUp || plantaPages.length === 0) return null;
+              const pages = await splitPdfPages(path.resolve(file.filePath));
+              const cvGeo: GeometryResult = { walls: [], slabs: [], corners: [] };
+              for (const pc of plantaPages) {
+                const page = pages.find(p => p.pageIndex === pc.page_index);
+                if (!page) continue;
+                const raw64 = page.base64.includes(",") ? page.base64.split(",", 2)[1] : page.base64;
+                const cvResult = await cvAnalyze({
+                  image_base64: raw64,
+                  mime_type: "application/pdf",
+                  pavimento: pc.pavimento || "Terreo",
+                  building_type: effectiveBuildingType() || "residencial",
+                  gemini_api_key: undefined,
+                  page_index: pc.page_index,
+                });
+                cvGeo.walls.push(...cvResult.geometry.walls);
+                cvGeo.slabs.push(...cvResult.geometry.slabs);
+                cvGeo.corners.push(...cvResult.geometry.corners);
+                if (cvResult.annotated_image_base64) {
+                  cvAnnotatedImages.push({ pavimento: pc.pavimento || "Terreo", pageIndex: pc.page_index, image: cvResult.annotated_image_base64 });
+                }
+                console.log(`[ETAPA 3 CV] Pav ${pc.pavimento} pg ${pc.page_index}: ${cvResult.geometry.walls.length} paredes, ${cvResult.geometry.slabs.length} lajes (OCR=${cvResult.cv_metadata?.ocr_count}, lines=${cvResult.cv_metadata?.line_count})`);
+              }
+              return cvGeo;
+            };
 
-            sendProgress(projectId, 3.5 as any, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
-            const hasAnyTableData = mergedTableData.paredes_de_tabela.length > 0 || mergedTableData.esquadrias_de_tabela.length > 0;
-            try {
-              const verified = await verifyExtraction(file.filePath, file.fileType, geometry, hasAnyTableData ? mergedTableData : null, effectiveBuildingType());
-              const wallDiff = verified.walls.length - geometry.walls.length;
-              const correctionMsg = wallDiff !== 0 ? ` (${wallDiff > 0 ? "+" : ""}${wallDiff} paredes corrigidas)` : " (sem correcoes)";
-              sendProgress(projectId, 3.5 as any, "Verificacao IA", "done", `${verified.walls.length} paredes, ${verified.slabs.length} lajes${correctionMsg}`);
-              geometry = verified;
-            } catch (verifyError: any) {
-              console.warn(`[ETAPA 3.5] Verificacao falhou para ${file.originalName}: ${verifyError.message}. Usando dados sem verificacao.`);
-              sendProgress(projectId, 3.5 as any, "Verificacao IA", "done", `Verificacao falhou (${verifyError.message?.substring(0, 80)}). Usando dados da extracao sem verificacao.`);
-            }
+            // Helper: run Gemini-only pipeline (Flash extraction + Flash per-floor verification, all parallel)
+            const runGeminiPipeline = async (): Promise<GeometryResult> => {
+              const geoResult = await extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType(), peDireito);
+              for (const p of geoResult.failedPages) {
+                pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: p });
+                recordFailedPage({ fileId: file.id, fileName: file.originalName, pageIndex: p, reason: "Falha na extracao geometrica" });
+              }
+              const geometry: GeometryResult = { walls: geoResult.walls, slabs: geoResult.slabs, corners: geoResult.corners };
+              // Per-floor verification already done inside extractGeometryParallel
+              sendProgress(projectId, 3.5, "Verificacao IA", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes (verificacao per-floor integrada)`);
+              return geometry;
+            };
 
-            allGeometries.push(geometry);
+            // Helper: store geometry in DB
+            const storeGeometry = async (geometry: GeometryResult) => {
+              for (const wall of geometry.walls) {
+                await storage.addExtractedData({ projectId, fileId: file.id, elementType: "parede", data: wall, hasAssumption: 0 });
+              }
+              for (const slab of geometry.slabs) {
+                await storage.addExtractedData({ projectId, fileId: file.id, elementType: "laje", data: slab, hasAssumption: 0 });
+              }
+              for (const corner of geometry.corners) {
+                await storage.addExtractedData({ projectId, fileId: file.id, elementType: "canto", data: corner, hasAssumption: 0 });
+              }
+            };
 
-            for (const wall of geometry.walls) {
-              await storage.addExtractedData({ projectId, fileId: file.id, elementType: "parede", data: wall, hasAssumption: 0 });
-            }
-            for (const slab of geometry.slabs) {
-              await storage.addExtractedData({ projectId, fileId: file.id, elementType: "laje", data: slab, hasAssumption: 0 });
-            }
-            for (const corner of geometry.corners) {
-              await storage.addExtractedData({ projectId, fileId: file.id, elementType: "canto", data: corner, hasAssumption: 0 });
+            // ===== Execute based on analysisMode =====
+            if (analysisMode === "combinada" && cvServiceUp && plantaPages.length > 0) {
+              // COMBINADA: run both in parallel, merge via fusionMultiView
+              sendProgress(projectId, 3, "Extracao Geometrica (Combinada)", "running", `Executando CV + Gemini em paralelo para ${file.originalName}...`);
+              sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+              const [cvResult, geminiResult] = await Promise.all([
+                runCvPipeline().catch((e: any) => { console.warn(`[ETAPA 3] CV falhou no modo combinada: ${e.message}`); return null; }),
+                runGeminiPipeline(),
+              ]);
+              if (cvResult) {
+                allGeometries.push(cvResult);
+                console.log(`[ETAPA 3] Combinada CV: ${cvResult.walls.length} paredes, ${cvResult.slabs.length} lajes`);
+              }
+              allGeometries.push(geminiResult);
+              console.log(`[ETAPA 3] Combinada Gemini: ${geminiResult.walls.length} paredes, ${geminiResult.slabs.length} lajes`);
+              const totalWalls = (cvResult?.walls.length || 0) + geminiResult.walls.length;
+              const totalSlabs = (cvResult?.slabs.length || 0) + geminiResult.slabs.length;
+              sendProgress(projectId, 3, "Extracao Geometrica (Combinada)", "done", `${totalWalls} paredes, ${totalSlabs} lajes (CV + Gemini, antes da fusao)`);
+              // Store combined results
+              const combined: GeometryResult = {
+                walls: [...(cvResult?.walls || []), ...geminiResult.walls],
+                slabs: [...(cvResult?.slabs || []), ...geminiResult.slabs],
+                corners: [...(cvResult?.corners || []), ...geminiResult.corners],
+              };
+              await storeGeometry(combined);
+
+            } else if (analysisMode === "cv-gemini" && cvServiceUp && plantaPages.length > 0) {
+              // CV + GEMINI: try CV, fallback to Gemini
+              sendProgress(projectId, 3, "Extracao Geometrica (CV + IA)", "running", `Analisando ${file.originalName} via Computer Vision + Gemini...`);
+              let usedCv = false;
+              try {
+                const cvResult = await runCvPipeline();
+                if (cvResult) {
+                  allGeometries.push(cvResult);
+                  await storeGeometry(cvResult);
+                  sendProgress(projectId, 3, "Extracao Geometrica (CV + IA)", "done", `${cvResult.walls.length} paredes, ${cvResult.slabs.length} lajes, ${cvResult.corners.length} cantos (CV + IA)`);
+                  usedCv = true;
+                }
+              } catch (cvError: any) {
+                console.warn(`[ETAPA 3] CV falhou: ${cvError.message}. Caindo para Gemini-only.`);
+              }
+              if (!usedCv) {
+                sendProgress(projectId, 3, "Extracao Geometrica", "running", `Fallback Gemini-only para ${file.originalName}...`);
+                sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+                const geometry = await runGeminiPipeline();
+                allGeometries.push(geometry);
+                await storeGeometry(geometry);
+                sendProgress(projectId, 3, "Extracao Geometrica", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes, ${geometry.corners.length} cantos`);
+              }
+
+            } else {
+              // GEMINI-ONLY (or CV unavailable)
+              sendProgress(projectId, 3, "Extracao Geometrica", "running", `Analisando geometria de ${file.originalName} (Gemini-only)...`);
+              sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+              const geometry = await runGeminiPipeline();
+              allGeometries.push(geometry);
+              await storeGeometry(geometry);
+              const geoFailedMsg = pipelineFailedPages.length > 0 ? ` | paginas falharam` : "";
+              sendProgress(projectId, 3, "Extracao Geometrica", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes, ${geometry.corners.length} cantos${geoFailedMsg}`);
             }
           }
         } catch (fileError) {
@@ -738,6 +835,13 @@ export async function registerRoutes(
       if (scopeFiltered.length > 0) {
         console.log(`[PIPELINE] Escopo: filtradas categorias: ${scopeFiltered.join(", ")}`);
         sendProgress(projectId, 4, "Fusao Multivista", "done", `${fused.walls.length} paredes, ${fused.slabs.length} lajes → escopo: ${scopedWalls.length} paredes, ${scopedSlabs.length} lajes, ${scopedCorners.length} cantos`);
+      }
+
+      // Apply user pe-direito to walls without explicit height
+      if (peDireito !== 3.0) {
+        for (const w of scopedWalls) {
+          if (!w.altura_m || w.altura_m <= 0) w.altura_m = peDireito;
+        }
       }
 
       sendProgress(projectId, 5, "Calculo de Quantitativos", "running", "Calculando paineis por pavimento...");
@@ -899,82 +1003,125 @@ export async function registerRoutes(
 
       // ===== Step 4.5: Auto-generate annotated floor plan images (one per floor) =====
       try {
-        sendProgress(projectId, 4, "Imagem Anotada", "running", "Extraindo paginas da planta e gerando imagens anotadas com IA...");
-        const imgSources = await getAnnotationImageSources(files, allClassifications);
-        if (imgSources.length > 0) {
-          const annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
+        const totalWalls = fusaoWallsWithScope.filter((w: any) => w.enabled !== false);
+        const totalSlabs = fusaoSlabsWithScope.filter((s: any) => s.enabled !== false);
+        const summaryAll = {
+          externas: totalWalls.filter((w: any) => w.classe === "externa").length,
+          internas: totalWalls.filter((w: any) => w.classe === "interna").length,
+          muros: totalWalls.filter((w: any) => w.classe === "muro").length,
+          lajePiso: totalSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
+          lajeCoberta: totalSlabs.filter((s: any) => s.classe === "coberta").length,
+        };
 
-          for (const src of imgSources) {
-            // Filter walls/slabs for this floor (or use all if pavimento="all")
-            const floorWalls = fusaoWallsWithScope.filter((w: any) =>
-              src.pavimento === "all" || w.nivel === src.pavimento
-            );
-            const floorSlabs = fusaoSlabsWithScope.filter((s: any) =>
-              src.pavimento === "all" || s.nivel === src.pavimento
-            );
-            const enabledFloorWalls = floorWalls.filter((w: any) => w.enabled !== false);
-            const enabledFloorSlabs = floorSlabs.filter((s: any) => s.enabled !== false);
+        if (cvAnnotatedImages.length > 0) {
+          // ---- CV path: use pre-computed deterministic images from Python renderer ----
+          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Usando imagens anotadas do pipeline CV (deterministico)...");
 
-            if (enabledFloorWalls.length === 0 && enabledFloorSlabs.length === 0) continue;
-
-            try {
-              const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
-              const dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
-              annotatedImages.push({
-                pavimento: src.pavimento,
-                pageIndex: src.pageIndex,
-                image: dataUrl,
-                summary: {
-                  externas: enabledFloorWalls.filter((w: any) => w.classe === "externa").length,
-                  internas: enabledFloorWalls.filter((w: any) => w.classe === "interna").length,
-                  muros: enabledFloorWalls.filter((w: any) => w.classe === "muro").length,
-                  lajePiso: enabledFloorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
-                  lajeCoberta: enabledFloorSlabs.filter((s: any) => s.classe === "coberta").length,
-                },
-              });
-              console.log(`[ETAPA 4.5] Imagem anotada ${src.pavimento} (pg ${src.pageIndex}): ${Math.round(dataUrl.length / 1024)}KB`);
-            } catch (floorError: any) {
-              console.error(`[ETAPA 4.5] Falha na imagem do pav ${src.pavimento}:`, floorError?.message);
-            }
-          }
-
-          if (annotatedImages.length > 0) {
-            const sourceFileId = files.find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""))?.id
-              || files.find((f: any) => f.fileType === "pdf")?.id
-              || null;
-            // Also store backward-compatible single image (first floor)
-            const totalWalls = fusaoWallsWithScope.filter((w: any) => w.enabled !== false);
-            const totalSlabs = fusaoSlabsWithScope.filter((s: any) => s.enabled !== false);
-            await storage.addExtractedData({
-              projectId, fileId: sourceFileId, elementType: "etapa3_annotated_plan",
-              data: {
-                etapa: 4.5, label: "Imagem Anotada (auto-gerada)",
-                image: annotatedImages[0].image, // backward compat
-                images: annotatedImages, // new multi-floor format
-                summary: {
-                  externas: totalWalls.filter((w: any) => w.classe === "externa").length,
-                  internas: totalWalls.filter((w: any) => w.classe === "interna").length,
-                  muros: totalWalls.filter((w: any) => w.classe === "muro").length,
-                  lajePiso: totalSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
-                  lajeCoberta: totalSlabs.filter((s: any) => s.classe === "coberta").length,
-                },
-                generatedAt: new Date().toISOString(),
+          // Build annotatedImages with summary per floor
+          const annotatedImages = cvAnnotatedImages.map(cv => {
+            const floorWalls = totalWalls.filter((w: any) => cv.pavimento === "all" || w.nivel === cv.pavimento);
+            const floorSlabs = totalSlabs.filter((s: any) => cv.pavimento === "all" || s.nivel === cv.pavimento);
+            return {
+              ...cv,
+              summary: {
+                externas: floorWalls.filter((w: any) => w.classe === "externa").length,
+                internas: floorWalls.filter((w: any) => w.classe === "interna").length,
+                muros: floorWalls.filter((w: any) => w.classe === "muro").length,
+                lajePiso: floorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
+                lajeCoberta: floorSlabs.filter((s: any) => s.classe === "coberta").length,
               },
-              hasAssumption: 0,
-            });
-            const totalKB = annotatedImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
-            sendProgress(projectId, 4, "Imagem Anotada", "done", `${annotatedImages.length} imagem(ns) gerada(s) (${totalKB}KB) | ${totalWalls.length} paredes`);
-          } else {
-            sendProgress(projectId, 4, "Imagem Anotada", "done", "Nenhuma imagem gerada (sem paredes/lajes habilitadas)");
-          }
+            };
+          });
+
+          const sourceFileId = files.find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""))?.id
+            || files.find((f: any) => f.fileType === "pdf")?.id
+            || null;
+
+          await storage.addExtractedData({
+            projectId, fileId: sourceFileId, elementType: "etapa3_annotated_plan",
+            data: {
+              etapa: 4.5, label: "Imagem Anotada (CV pipeline)",
+              image: annotatedImages[0].image,
+              images: annotatedImages,
+              summary: summaryAll,
+              generatedAt: new Date().toISOString(),
+              source: "cv_pipeline",
+            },
+            hasAssumption: 0,
+          });
+
+          const totalKB = annotatedImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
+          sendProgress(projectId, 7.5, "Imagem Anotada", "done", `${annotatedImages.length} imagem(ns) via CV pipeline (${totalKB}KB) | ${totalWalls.length} paredes`);
+
         } else {
-          sendProgress(projectId, 4, "Imagem Anotada", "done", "Nenhum arquivo de planta encontrado para anotacao");
+          // ---- Fallback: Gemini image editing (original path) ----
+          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Extraindo paginas da planta e gerando imagens anotadas com IA...");
+          const imgSources = await getAnnotationImageSources(files, allClassifications);
+          if (imgSources.length > 0) {
+            const annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
+
+            for (const src of imgSources) {
+              const floorWalls = fusaoWallsWithScope.filter((w: any) =>
+                src.pavimento === "all" || w.nivel === src.pavimento
+              );
+              const floorSlabs = fusaoSlabsWithScope.filter((s: any) =>
+                src.pavimento === "all" || s.nivel === src.pavimento
+              );
+              const enabledFloorWalls = floorWalls.filter((w: any) => w.enabled !== false);
+              const enabledFloorSlabs = floorSlabs.filter((s: any) => s.enabled !== false);
+
+              if (enabledFloorWalls.length === 0 && enabledFloorSlabs.length === 0) continue;
+
+              try {
+                const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
+                const dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
+                annotatedImages.push({
+                  pavimento: src.pavimento,
+                  pageIndex: src.pageIndex,
+                  image: dataUrl,
+                  summary: {
+                    externas: enabledFloorWalls.filter((w: any) => w.classe === "externa").length,
+                    internas: enabledFloorWalls.filter((w: any) => w.classe === "interna").length,
+                    muros: enabledFloorWalls.filter((w: any) => w.classe === "muro").length,
+                    lajePiso: enabledFloorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
+                    lajeCoberta: enabledFloorSlabs.filter((s: any) => s.classe === "coberta").length,
+                  },
+                });
+                console.log(`[ETAPA 4.5] Imagem anotada ${src.pavimento} (pg ${src.pageIndex}): ${Math.round(dataUrl.length / 1024)}KB`);
+              } catch (floorError: any) {
+                console.error(`[ETAPA 4.5] Falha na imagem do pav ${src.pavimento}:`, floorError?.message);
+              }
+            }
+
+            if (annotatedImages.length > 0) {
+              const sourceFileId = files.find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""))?.id
+                || files.find((f: any) => f.fileType === "pdf")?.id
+                || null;
+              await storage.addExtractedData({
+                projectId, fileId: sourceFileId, elementType: "etapa3_annotated_plan",
+                data: {
+                  etapa: 4.5, label: "Imagem Anotada (auto-gerada)",
+                  image: annotatedImages[0].image,
+                  images: annotatedImages,
+                  summary: summaryAll,
+                  generatedAt: new Date().toISOString(),
+                },
+                hasAssumption: 0,
+              });
+              const totalKB = annotatedImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
+              sendProgress(projectId, 7.5, "Imagem Anotada", "done", `${annotatedImages.length} imagem(ns) gerada(s) (${totalKB}KB) | ${totalWalls.length} paredes`);
+            } else {
+              sendProgress(projectId, 7.5, "Imagem Anotada", "done", "Nenhuma imagem gerada (sem paredes/lajes habilitadas)");
+            }
+          } else {
+            sendProgress(projectId, 7.5, "Imagem Anotada", "done", "Nenhum arquivo de planta encontrado para anotacao");
+          }
         }
       } catch (annotatedError: any) {
         console.error(`[ETAPA 4.5] Falha ao gerar imagem anotada:`, annotatedError);
         console.error(`[ETAPA 4.5] Stack:`, annotatedError?.stack);
         const errMsg = annotatedError?.message || String(annotatedError);
-        sendProgress(projectId, 4, "Imagem Anotada", "done", `Falha: ${errMsg.substring(0, 150)}`);
+        sendProgress(projectId, 7.5, "Imagem Anotada", "done", `Falha: ${errMsg.substring(0, 150)}`);
       }
 
       await storage.addExtractedData({
@@ -1098,6 +1245,7 @@ export async function registerRoutes(
       cleanupApiMetrics(projectId);
       const failedInfo = pipelineFailedPages.length > 0 ? ` (${pipelineFailedPages.length} pagina(s) com erro parcial)` : "";
       sendProgress(projectId, 0, "Concluido", "done", `Pipeline finalizado com sucesso!${failedInfo}`);
+      pipelineStartTimes.delete(projectId);
 
       res.json({
         message: "Projeto processado com sucesso",
@@ -1114,6 +1262,7 @@ export async function registerRoutes(
         : `Erro ao processar projeto: ${errMsg.substring(0, 150)}`;
       console.error("Erro ao processar projeto:", error);
       sendProgress(projectId, 0, "Erro", "error", userMsg);
+      pipelineStartTimes.delete(projectId);
       await storage.updateProjectStatus(projectId, "error");
       cleanupApiMetrics(projectId);
       res.status(500).json({ message: userMsg });
@@ -1743,6 +1892,8 @@ export async function registerRoutes(
       }
 
       const annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
+      const cvUp = await isCvServiceAvailable();
+
       for (const src of imgSources) {
         const floorWalls = walls.filter((w: any) => src.pavimento === "all" || w.nivel === src.pavimento);
         const floorSlabs = slabs.filter((s: any) => src.pavimento === "all" || s.nivel === src.pavimento);
@@ -1751,8 +1902,23 @@ export async function registerRoutes(
         if (enabledFloorWalls.length === 0 && enabledFloorSlabs.length === 0) continue;
 
         console.log(`[ANNOTATED-IMG] Gerando imagem ${src.pavimento} (pg ${src.pageIndex}) | ${enabledFloorWalls.length} paredes, ${enabledFloorSlabs.length} lajes`);
-        const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
-        const dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
+
+        let dataUrl: string;
+        if (cvUp) {
+          // Use Python CV renderer (deterministic, fast, free)
+          const raw64 = src.base64.includes(",") ? src.base64.split(",", 2)[1] : src.base64;
+          dataUrl = await cvAnnotate({
+            image_base64: raw64,
+            mime_type: src.mimeType,
+            walls: enabledFloorWalls,
+            slabs: enabledFloorSlabs,
+          });
+        } else {
+          // Fallback: Gemini image editing
+          const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
+          dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
+        }
+
         annotatedImages.push({
           pavimento: src.pavimento,
           pageIndex: src.pageIndex,

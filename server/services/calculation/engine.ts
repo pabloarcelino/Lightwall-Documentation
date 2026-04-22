@@ -97,11 +97,17 @@ function applySlabDefaults(slab: ExtractedSlab): ExtractedSlab {
 }
 
 function wallSignature(w: ExtractedWall): string {
-  return `${w.nivel}|${w.classe}|${Math.round(w.comprimento_m * 10)}|${Math.round(w.altura_m * 10)}|${w.esquadrias?.length || 0}`;
+  // 0.05m granularity (round to nearest 0.05) — prevents merging walls that differ by <0.1m
+  const roundL = Math.round(w.comprimento_m * 20);
+  const roundH = Math.round(w.altura_m * 20);
+  // Include esquadria types+sizes for better differentiation
+  const esqSig = (w.esquadrias || []).map(e => `${e.tipo[0]}${Math.round((e.largura_m || 0) * 10)}`).sort().join(",");
+  return `${w.nivel}|${w.classe}|${roundL}|${roundH}|${esqSig || "0"}`;
 }
 
 function slabSignature(s: ExtractedSlab): string {
-  return `${s.nivel}|${s.classe}|${Math.round(s.area_m2 * 10)}`;
+  // 0.05m² granularity
+  return `${s.nivel}|${s.classe}|${Math.round(s.area_m2 * 20)}`;
 }
 
 export function fusionMultiView(

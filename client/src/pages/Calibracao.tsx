@@ -244,10 +244,9 @@ export default function Calibracao() {
               </Card>
               <Card className="glass-card">
                 <CardContent className="pt-5 text-center">
-                  <p className="text-xs text-muted-foreground mb-1">Acuracia R$ (ref.)</p>
-                  <p className={`text-2xl font-bold ${calibration.avgCostAccuracy >= 90 ? "text-emerald-600" : calibration.avgCostAccuracy >= 70 ? "text-amber-600" : "text-red-600"}`}>
-                    {calibration.avgCostAccuracy.toFixed(1)}%
-                  </p>
+                  <p className="text-xs text-muted-foreground mb-1">Com Areas Reais</p>
+                  <p className="text-2xl font-bold">{calibration.projectsWithAreas}</p>
+                  <p className="text-xs text-muted-foreground mt-1">de {calibration.projectCount}</p>
                 </CardContent>
               </Card>
               <Card className="glass-card">
@@ -448,13 +447,6 @@ export default function Calibracao() {
                                       );
                                     })}
                                   </div>
-                                  {proj.realCost > 0 && (
-                                    <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
-                                      <span>Custo calculado: R$ {proj.calcCost.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
-                                      <span>Custo real: R$ {proj.realCost.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
-                                      <span>Acuracia R$: {proj.costAccuracy.toFixed(1)}%</span>
-                                    </div>
-                                  )}
                                 </td>
                               </tr>
                             )}
