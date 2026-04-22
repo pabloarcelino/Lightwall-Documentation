@@ -109,6 +109,9 @@ export default function ProjectDetails() {
   const [selectedProductIdCoberta, setSelectedProductIdCoberta] = useState<string>(() => {
     return localStorage.getItem(`panel-coberta-${params?.id}`) || "";
   });
+  const [analysisMode, setAnalysisMode] = useState<string>(() => {
+    return localStorage.getItem(`analysis-mode-${params?.id}`) || "cv-gemini";
+  });
   const [scope, setScope] = useState({
     paredesExternas: true,
     paredesInternas: true,
@@ -170,7 +173,8 @@ export default function ProjectDetails() {
     if (selectedProductIdMuros) localStorage.setItem(`panel-muros-${params.id}`, selectedProductIdMuros);
     if (selectedProductIdPiso) localStorage.setItem(`panel-piso-${params.id}`, selectedProductIdPiso);
     if (selectedProductIdCoberta) localStorage.setItem(`panel-coberta-${params.id}`, selectedProductIdCoberta);
-  }, [params?.id, selectedProductIdExt, selectedProductIdInt, selectedProductIdMuros, selectedProductIdPiso, selectedProductIdCoberta]);
+    if (analysisMode) localStorage.setItem(`analysis-mode-${params.id}`, analysisMode);
+  }, [params?.id, selectedProductIdExt, selectedProductIdInt, selectedProductIdMuros, selectedProductIdPiso, selectedProductIdCoberta, analysisMode]);
 
   useEffect(() => {
     return () => {
@@ -227,7 +231,7 @@ export default function ProjectDetails() {
       setIsProcessing(true);
       setPipelineVisible(true);
       startSSE();
-      const body: Record<string, unknown> = { scope };
+      const body: Record<string, unknown> = { scope, analysisMode };
       if (selectedProductIdExt) body.productIdExt = parseInt(selectedProductIdExt);
       if (selectedProductIdInt) body.productIdInt = parseInt(selectedProductIdInt);
       if (selectedProductIdMuros) body.productIdMuros = parseInt(selectedProductIdMuros);
@@ -1100,6 +1104,24 @@ export default function ProjectDetails() {
                       <RefreshCw className={`h-4 w-4 mr-2 ${isProcessing ? "animate-spin" : ""}`} />
                       {isProcessing ? "Processando..." : project?.status === "draft" ? "Processar Projeto" : "Reprocessar"}
                     </Button>
+                  </div>
+                  <div className="mb-3">
+                    <Label className="text-xs font-medium text-muted-foreground">Modo de Analise:</Label>
+                    <Select value={analysisMode} onValueChange={setAnalysisMode}>
+                      <SelectTrigger className="h-8 text-sm w-72 mt-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="gemini-only">Gemini-only (IA pura)</SelectItem>
+                        <SelectItem value="cv-gemini">CV + Gemini (hibrido)</SelectItem>
+                        <SelectItem value="combinada">Combinada (ambos)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {analysisMode === "gemini-only" && "Usa apenas o Gemini para analisar a planta. Mais simples, sem dependencias externas."}
+                      {analysisMode === "cv-gemini" && "Computer Vision (OpenCV + OCR) extrai dados estruturados, Gemini classifica. Mais preciso."}
+                      {analysisMode === "combinada" && "Executa ambos os pipelines em paralelo e combina os resultados. Maximo de cobertura."}
+                    </p>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
                     {([

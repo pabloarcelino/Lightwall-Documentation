@@ -633,21 +633,18 @@ export async function extractGeometryParallel(
       for (const c of classifications) classMap.set(c.page_index, c);
     }
 
-    // Identify planta_baixa pages (the ones that matter for geometry)
     const plantaPages = pages.filter((page) => {
       const cls = classMap.get(page.pageIndex);
       if (!cls) return true;
       return cls.classificacao === "planta_baixa" || cls.classificacao === "planta_cobertura";
     });
 
-    // Also identify corte/fachada pages for pe-direito context
     const cortePages = pages.filter((page) => {
       const cls = classMap.get(page.pageIndex);
       return cls?.classificacao === "corte" || cls?.classificacao === "fachada";
     });
 
     if (plantaPages.length === 0 && pages.length > 0) {
-      // Fallback: use all non-irrelevant pages
       const nonIrrelevant = pages.filter((page) => {
         const cls = classMap.get(page.pageIndex);
         return !cls || cls.classificacao !== "irrelevante";
@@ -659,53 +656,83 @@ export async function extractGeometryParallel(
       return { walls: [], slabs: [], corners: [], failedPages: [] };
     }
 
-    // Build pavimento context for the prompt
-    const pavimentos = plantaPages.map(p => {
-      const cls = classMap.get(p.pageIndex);
-      return cls?.pavimento || "Terreo";
-    });
-    const uniquePavimentos = Array.from(new Set(pavimentos));
-
-    // Strategy: Send ALL relevant pages together in a single call.
-    // This mimics what happens in Gemini's chat — the model sees the full project
-    // and can cross-reference between pages (tables, dimensions, symbols).
-    const allParts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = [];
-
-    // Add all planta_baixa pages
+    // Group pages by pavimento for per-floor extraction
+    const floorGroups = new Map<string, typeof plantaPages>();
     for (const page of plantaPages) {
       const cls = classMap.get(page.pageIndex);
       const pav = cls?.pavimento || "Terreo";
-      allParts.push({ text: `--- PLANTA BAIXA: Pagina ${page.pageIndex + 1}, Pavimento ${pav} ---` });
-      allParts.push({ inlineData: { mimeType: page.mimeType, data: page.base64 } });
+      if (!floorGroups.has(pav)) floorGroups.set(pav, []);
+      floorGroups.get(pav)!.push(page);
     }
 
-    // Add corte/fachada pages for pe-direito context (if any, max 2)
+    // Corte/fachada context parts (shared across floors, max 2)
+    const corteParts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = [];
     for (const page of cortePages.slice(0, 2)) {
-      allParts.push({ text: `--- CORTE/FACHADA: Pagina ${page.pageIndex + 1} (use para conferir pe-direito) ---` });
-      allParts.push({ inlineData: { mimeType: page.mimeType, data: page.base64 } });
+      corteParts.push({ text: `--- CORTE/FACHADA: Pagina ${page.pageIndex + 1} (use para conferir pe-direito) ---` });
+      corteParts.push({ inlineData: { mimeType: page.mimeType, data: page.base64 } });
     }
 
-    // Add the prompt at the end
-    const prompt = buildGeometryPrompt(uniquePavimentos, buildingType);
-    allParts.push({ text: prompt });
+    const allWalls: ExtractedWall[] = [];
+    const allSlabs: ExtractedSlab[] = [];
+    const allCorners: ExtractedCorner[] = [];
+    const failedPages: number[] = [];
 
-    console.log(`[ETAPA3] Enviando ${plantaPages.length} planta(s) + ${cortePages.slice(0, 2).length} corte(s) em chamada unica (como chat Gemini)`);
+    console.log(`[ETAPA3] Extraindo ${floorGroups.size} pavimento(s) separadamente (${plantaPages.length} paginas + ${cortePages.slice(0, 2).length} cortes)`);
 
-    const text = await callGeminiMultiPart(allParts, 65536, 0.1, 32768);
-    console.log(`[ETAPA3] Resposta: ${text.substring(0, 800)}`);
+    // Extract each floor independently with full thinking budget
+    const floorEntries = Array.from(floorGroups.entries());
+    for (const [pav, floorPages] of floorEntries) {
+      try {
+        const parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = [];
 
-    const result = parseGeometryResponse(text, pavimentos[0] || "Terreo");
-    for (const w of result.walls) {
-      if (w.page_index === undefined) w.page_index = plantaPages[0]?.pageIndex ?? 0;
+        for (const page of floorPages) {
+          parts.push({ text: `--- PLANTA BAIXA: Pagina ${page.pageIndex + 1}, Pavimento ${pav} ---` });
+          parts.push({ inlineData: { mimeType: page.mimeType, data: page.base64 } });
+        }
+
+        // Include corte/fachada for height context
+        parts.push(...corteParts);
+
+        const prompt = buildGeometryPrompt([pav], buildingType);
+        parts.push({ text: prompt });
+
+        console.log(`[ETAPA3] Pavimento "${pav}": ${floorPages.length} pagina(s), thinking=32768`);
+        const text = await callGeminiMultiPart(parts, 65536, 0.1, 32768);
+        console.log(`[ETAPA3] "${pav}" resposta: ${text.substring(0, 400)}`);
+
+        const result = parseGeometryResponse(text, pav);
+        for (const w of result.walls) {
+          if (w.page_index === undefined) w.page_index = floorPages[0]?.pageIndex ?? 0;
+        }
+
+        // Per-floor verification (Task 16)
+        let verified = result;
+        try {
+          const verifiedResult = await verifyFloorExtraction(floorPages, corteParts, result, pav, buildingType);
+          if (verifiedResult) verified = verifiedResult;
+        } catch (vErr: any) {
+          console.warn(`[ETAPA3] Verificacao pav "${pav}" falhou: ${vErr.message}`);
+        }
+
+        allWalls.push(...verified.walls);
+        allSlabs.push(...verified.slabs);
+        allCorners.push(...verified.corners);
+        console.log(`[ETAPA3] "${pav}": ${verified.walls.length} paredes, ${verified.slabs.length} lajes, ${verified.corners.length} cantos`);
+
+      } catch (floorErr: any) {
+        console.error(`[ETAPA3] Erro no pav "${pav}": ${floorErr.message}`);
+        for (const p of floorPages) failedPages.push(p.pageIndex);
+      }
     }
 
-    // If still 0 walls, try sending the raw full file as last resort
-    if (result.walls.length === 0 && pages.length > 0) {
-      console.log("[ETAPA3] 0 paredes na chamada multi-page, tentando documento completo raw...");
+    // Fallback: if 0 walls after per-floor, try raw full file
+    if (allWalls.length === 0 && pages.length > 0) {
+      console.log("[ETAPA3] 0 paredes apos extracao por pavimento, tentando documento completo raw...");
       const buffer = await fs.readFile(filePath);
       const base64 = buffer.toString("base64");
       const mimeType = getMimeType(filePath, fileType);
-      const fallbackPrompt = buildGeometryPrompt(uniquePavimentos, buildingType);
+      const allPavs = Array.from(floorGroups.keys());
+      const fallbackPrompt = buildGeometryPrompt(allPavs.length > 0 ? allPavs : ["Terreo"], buildingType);
       const fallbackText = await callGemini(base64, mimeType, fallbackPrompt, 65536, 32768);
       const fallbackResult = parseGeometryResponse(fallbackText, "Terreo");
       for (const w of fallbackResult.walls) {
@@ -714,7 +741,7 @@ export async function extractGeometryParallel(
       return { walls: fallbackResult.walls, slabs: fallbackResult.slabs, corners: fallbackResult.corners, failedPages: [] };
     }
 
-    return { walls: result.walls, slabs: result.slabs, corners: result.corners, failedPages: [] };
+    return { walls: allWalls, slabs: allSlabs, corners: allCorners, failedPages };
   } catch (error) {
     console.error("[ETAPA3] Erro global na extracao geometrica:", error);
     return { walls: [], slabs: [], corners: [], failedPages: [-1] };
@@ -727,67 +754,159 @@ export async function extractGeometry(filePath: string, fileType?: string, class
   return { walls: result.walls, slabs: result.slabs, corners: result.corners };
 }
 
+/**
+ * Per-floor verification: checks extraction quality and attempts correction.
+ * Runs immediately after each floor is extracted (before fusion).
+ * Returns corrected result or null if no corrections needed/possible.
+ */
+async function verifyFloorExtraction(
+  floorPages: Array<{ pageIndex: number; base64: string; mimeType: string }>,
+  corteParts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }>,
+  geometry: GeometryResult,
+  pavimento: string,
+  buildingType?: string,
+): Promise<GeometryResult | null> {
+  if (geometry.walls.length === 0) return null;
+
+  const extCount = geometry.walls.filter(w => w.classe === "externa").length;
+  const intCount = geometry.walls.filter(w => w.classe === "interna").length;
+  const totalEsq = geometry.walls.reduce((sum, w) => sum + (w.esquadrias?.length || 0), 0);
+
+  const btConfig = getBuildingTypeConfig(buildingType);
+
+  const wallsList = geometry.walls.map(w =>
+    `${w.id}: ${w.classe}, ${w.comprimento_m}m x ${w.altura_m}m, esquadrias=[${w.esquadrias.map(e => `${e.codigo}(${e.tipo} ${e.largura_m}x${e.altura_m})`).join(", ")}]`
+  ).join("\n");
+  const slabsList = geometry.slabs.map(s => `${s.id}: ${s.classe}, ${s.area_m2}m²`).join("\n");
+
+  const prompt = `Voce e um revisor tecnico de plantas arquitetonicas. Verifique a extracao abaixo comparando com a imagem.
+
+${btConfig.verificationHints}
+
+Pavimento: ${pavimento} | ${geometry.walls.length} paredes (${extCount} ext, ${intCount} int) | ${totalEsq} esquadrias
+
+PAREDES:
+${wallsList}
+
+LAJES:
+${slabsList || "Nenhuma"}
+
+VERIFICACAO RAPIDA:
+1. PAREDES FALTANTES? Ha paredes visiveis na imagem que nao foram extraidas? Se sim, adicione-as.
+2. CLASSIFICACAO: As externas formam o contorno? Internas dividem comodos internos? ${intCount === 0 ? "*** 0 INTERNAS = PROVAVELMENTE ERRADO ***" : ""}
+3. ESQUADRIAS: ${totalEsq === 0 ? "*** 0 ESQUADRIAS! Procure portas (arcos) e janelas (tracos paralelos). ***" : `${totalEsq} encontradas — todas foram identificadas?`}
+4. COMPRIMENTOS: As cotas batem com os valores extraidos?
+
+Se TUDO correto: responda "APROVADO"
+Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs": [...], "corners": [...] }`;
+
+  const parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = [];
+  for (const page of floorPages) {
+    parts.push({ inlineData: { mimeType: page.mimeType, data: page.base64 } });
+  }
+  parts.push(...corteParts);
+  parts.push({ text: prompt });
+
+  // Try verification, retry once on JSON parse failure
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const text = await callGeminiMultiPart(parts, 32768, 0.1, 16384);
+
+      if (text.includes("APROVADO")) {
+        console.log(`[VERIFY] Pav "${pavimento}": APROVADO (tentativa ${attempt + 1})`);
+        return null;
+      }
+
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.warn(`[VERIFY] Pav "${pavimento}": sem JSON na correcao (tentativa ${attempt + 1})`);
+        if (attempt === 0) continue; // retry
+        return null;
+      }
+
+      const corrected = repairJSON(jsonMatch[0]);
+      if (!corrected) {
+        console.warn(`[VERIFY] Pav "${pavimento}": JSON invalido na correcao (tentativa ${attempt + 1})`);
+        if (attempt === 0) continue;
+        return null;
+      }
+
+      const result = parseGeometryJSON(corrected, text, pavimento);
+      if (result.walls.length === 0 && geometry.walls.length > 0) {
+        console.warn(`[VERIFY] Pav "${pavimento}": correcao retornou 0 paredes, mantendo original`);
+        return null;
+      }
+
+      const diff = result.walls.length - geometry.walls.length;
+      console.log(`[VERIFY] Pav "${pavimento}": corrigido ${geometry.walls.length} → ${result.walls.length} paredes (${diff > 0 ? "+" : ""}${diff})`);
+      return result;
+    } catch (err: any) {
+      console.warn(`[VERIFY] Pav "${pavimento}" tentativa ${attempt + 1} erro: ${err.message}`);
+      if (attempt === 0) continue;
+    }
+  }
+  return null;
+}
+
 function buildGeometryPrompt(pavimentos: string[], buildingType?: string): string {
   const btConfig = getBuildingTypeConfig(buildingType);
   const pavStr = pavimentos.join(", ");
+  const isSingle = pavimentos.length === 1;
+  const nivelRef = isSingle ? pavimentos[0] : pavStr;
 
-  return `Voce e um engenheiro orcamentista analisando plantas arquitetonicas para quantificar paineis Lightwall (paineis de concreto leve 3000x610mm).
+  return `Voce e um engenheiro orcamentista experiente. Analise ${isSingle ? "esta planta baixa" : "estas plantas baixas"} (${nivelRef}) e extraia TODOS os elementos construtivos para orcamento de paineis Lightwall.
 
 ${btConfig.fewShotContext}
 
-Analise TODAS as plantas baixas fornecidas (pavimentos: ${pavStr}) e extraia TODOS os elementos construtivos.
+SIGA ESTAS ETAPAS NA ORDEM — nao pule nenhuma:
 
-COMO CLASSIFICAR PAREDES — siga esta logica simples:
-1. Trace mentalmente o CONTORNO EXTERNO da edificacao (o perimetro da construcao coberta vista de cima).
-2. Paredes que formam esse contorno = "externa".
-3. Paredes DENTRO desse contorno que dividem comodos = "interna".
-4. Muros/paredes FORA da edificacao (divisa de terreno, jardim, garagem sem cobertura) = "muro".
+ETAPA 1 — IDENTIFICAR COMODOS:
+Liste todos os comodos visiveis na planta (nome e area aproximada). Inclua: salas, quartos, banheiros, cozinha, lavanderia, corredor, hall, garagem, area de servico, varanda, etc.
 
-COMO LER COTAS: Numeros > 10 (ex: 464, 350) estao em centimetros → dividir por 100. Numeros < 20 (ex: 4.64) ja estao em metros.
+ETAPA 2 — TRACAR O CONTORNO EXTERNO:
+Identifique o poligono que forma o perimetro da edificacao coberta vista de cima. Anote quantos segmentos retos formam esse contorno e suas direcoes.
 
-ESQUADRIAS: Identifique todas as portas (simbolo de arco) e janelas (tracos paralelos). Leia os codigos (P1, J1...) e dimensoes. Se nao encontrar dimensoes, use padroes: porta 0.80x2.10m, janela 1.20x1.00m.
+ETAPA 3 — LISTAR PAREDES COMODO POR COMODO:
+Para CADA comodo da Etapa 1, liste TODAS as paredes que o delimitam:
+- Leia a cota (dimensao) mais proxima de cada parede.
+- Numeros > 10 (ex: 464, 350) estao em cm → divida por 100.
+- Numeros < 20 (ex: 4.64) ja estao em metros.
+- Se uma parede separa dois comodos, liste-a apenas UMA vez.
+- Classifique: "externa" se esta no contorno (Etapa 2), "interna" se divide comodos internos, "muro" se fora da edificacao.
 
-LAJES: Some as areas de todos os comodos do pavimento.
-- Terreo: laje de fundacao = "radier"; laje entre andares = "piso"
-- Ultimo pavimento: laje de concreto no topo = "coberta" (telhado de telha NAO e laje)
-- Pavimento intermediario: laje entre andares = "piso"
+ETAPA 4 — ESQUADRIAS:
+Para CADA parede, verifique se tem portas (arcos no desenho) ou janelas (tracos paralelos):
+- Leia os codigos (P1, J1...) e dimensoes visiveis.
+- Se nao encontrar dimensoes: porta=0.80x2.10m, janela=1.20x1.00m.
+- Calcule opening_area_m2 = largura × altura de cada esquadria na parede.
 
-PE-DIREITO: Terreo ~3.0m, Superior ~2.80m, Garagem ~2.60m. Se houver corte/fachada nas imagens, use as alturas reais.
+ETAPA 5 — LAJES:
+Some as areas de todos os comodos para obter a area total do pavimento.
+- Terreo: fundacao="radier", entre andares="piso"
+- Ultimo pavimento: laje concreto no topo="coberta" (telhado de telha NAO e laje)
+- Intermediario: "piso"
 
-CANTOS: Conte cantos de 90 graus no perimetro externo.
+ETAPA 6 — CANTOS E PE-DIREITO:
+- Conte os cantos de 90° no contorno externo (Etapa 2).
+- Pe-direito: Terreo ~3.0m, Superior ~2.80m, Garagem ~2.60m. Use alturas do corte/fachada se disponiveis.
 
-Responda com seu raciocinio entre <RACIOCINIO>...</RACIOCINIO>, e depois APENAS o JSON.
+Escreva todo seu raciocinio (Etapas 1-6) entre <RACIOCINIO>...</RACIOCINIO>, depois retorne APENAS o JSON:
 
-Formato do JSON:
 {
   "walls": [
-    {
-      "id": "P1",
-      "nivel": "Terreo",
-      "classe": "externa|interna|muro",
-      "comprimento_m": 8.50,
-      "altura_m": 3.0,
-      "espessura_m": 0.10,
-      "measurement_source": "dimension_text|table|inferred_from_symbol|default_br_market",
-      "confidence": 0.9,
-      "has_door": true,
-      "has_window": false,
-      "opening_area_m2": 1.68,
-      "esquadrias": [{ "tipo": "porta", "codigo": "P1", "largura_m": 0.80, "altura_m": 2.10, "measurement_source": "dimension_text" }],
-      "box_2d": [ymin, xmin, ymax, xmax]
-    }
+    {"id": "P1", "nivel": "${pavimentos[0]}", "classe": "externa|interna|muro", "comprimento_m": 8.50, "altura_m": 3.0, "espessura_m": 0.10, "measurement_source": "dimension_text|inferred_from_symbol", "confidence": 0.9, "has_door": true, "has_window": false, "opening_area_m2": 1.68, "esquadrias": [{"tipo": "porta", "codigo": "P1", "largura_m": 0.80, "altura_m": 2.10, "measurement_source": "dimension_text"}], "box_2d": [ymin, xmin, ymax, xmax]}
   ],
   "slabs": [
-    { "id": "L1", "nivel": "Terreo", "classe": "radier|piso|coberta", "area_m2": 85.0, "measurement_source": "dimension_text", "confidence": 0.9 }
+    {"id": "L1", "nivel": "${pavimentos[0]}", "classe": "radier|piso|coberta", "area_m2": 85.0, "measurement_source": "dimension_text", "confidence": 0.9}
   ],
   "corners": [
-    { "id": "C1", "nivel": "Terreo", "qtd_cantos": 8 }
+    {"id": "C1", "nivel": "${pavimentos[0]}", "qtd_cantos": 8}
   ]
 }
 
-NOTAS sobre box_2d: coordenadas normalizadas 0-1000 [ymin, xmin, ymax, xmax]. Paredes finas: diferenca pequena em uma dimensao.
-
-IMPORTANTE: Use IDs sequenciais — P1,P2... para paredes, M1,M2... para muros. Use o nivel correto para cada pavimento.`;
+box_2d: coordenadas normalizadas 0-1000 [ymin, xmin, ymax, xmax].
+IDs sequenciais: P1,P2... para paredes ext/int, M1,M2... para muros.
+NAO omita nenhuma parede — cada segmento de parede e importante para o orcamento.`;
 }
 
 function parseGeometryResponse(text: string, defaultNivel: string): GeometryResult {

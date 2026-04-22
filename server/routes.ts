@@ -590,7 +590,9 @@ export async function registerRoutes(
       lajeCoberta: scopeRaw.lajeCoberta === true || scopeRaw.lajeCoberta === undefined,
       cantos: scopeRaw.cantos === true || scopeRaw.cantos === undefined,
     };
+    const analysisMode: string = req.body?.analysisMode || "cv-gemini";
     console.log(`[PIPELINE] Escopo selecionado: ext=${scope.paredesExternas} int=${scope.paredesInternas} piso=${scope.lajePiso} coberta=${scope.lajeCoberta} cantos=${scope.cantos}`);
+    console.log(`[PIPELINE] Modo de analise: ${analysisMode}`);
     try {
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -614,8 +616,9 @@ export async function registerRoutes(
       let mergedTableData: TableData = { paredes_de_tabela: [], esquadrias_de_tabela: [], areas_de_tabela: [] };
       const pipelineFailedPages: Array<{ fileId: number; fileName: string; pageIndex: number }> = [];
       const cvAnnotatedImages: Array<{ pavimento: string; pageIndex: number; image: string }> = [];
-      const cvServiceUp = await isCvServiceAvailable();
-      if (cvServiceUp) console.log("[PIPELINE] CV service disponivel — usando pipeline hibrido CV + IA");
+      const cvServiceUp = analysisMode !== "gemini-only" ? await isCvServiceAvailable() : false;
+      if (analysisMode === "gemini-only") console.log("[PIPELINE] Modo Gemini-only selecionado");
+      else if (cvServiceUp) console.log("[PIPELINE] CV service disponivel");
       else console.log("[PIPELINE] CV service indisponivel — fallback para Gemini-only");
       const userBuildingType = project.buildingType || undefined;
       let detectedBuildingType: string | undefined;
@@ -666,78 +669,45 @@ export async function registerRoutes(
           );
 
           if (hasGeometryPages || classifications.every(c => c.classificacao !== "irrelevante")) {
-            // Try CV service (hybrid CV + Gemini) first, fallback to Gemini-only
             const plantaPages = classifications.filter(c => c.classificacao === "planta_baixa");
-            let usedCv = false;
 
-            if (cvServiceUp && plantaPages.length > 0) {
-              try {
-                sendProgress(projectId, 3, "Extracao Geometrica (CV + IA)", "running", `Analisando geometria de ${file.originalName} via Computer Vision + Gemini...`);
-                const pages = await splitPdfPages(path.resolve(file.filePath));
-                let cvGeometry: GeometryResult = { walls: [], slabs: [], corners: [] };
-
-                for (const pc of plantaPages) {
-                  const page = pages.find(p => p.pageIndex === pc.page_index);
-                  if (!page) continue;
-
-                  const raw64 = page.base64.includes(",") ? page.base64.split(",", 2)[1] : page.base64;
-                  const cvResult = await cvAnalyze({
-                    image_base64: raw64,
-                    mime_type: "application/pdf",
-                    pavimento: pc.pavimento || "Terreo",
-                    building_type: effectiveBuildingType() || "residencial",
-                    gemini_api_key: undefined,
-                    page_index: pc.page_index,
-                  });
-
-                  cvGeometry.walls.push(...cvResult.geometry.walls);
-                  cvGeometry.slabs.push(...cvResult.geometry.slabs);
-                  cvGeometry.corners.push(...cvResult.geometry.corners);
-
-                  // Store pre-computed annotated image from CV renderer
-                  if (cvResult.annotated_image_base64) {
-                    cvAnnotatedImages.push({
-                      pavimento: pc.pavimento || "Terreo",
-                      pageIndex: pc.page_index,
-                      image: cvResult.annotated_image_base64,
-                    });
-                  }
-                  console.log(`[ETAPA 3 CV] Pav ${pc.pavimento} pg ${pc.page_index}: ${cvResult.geometry.walls.length} paredes, ${cvResult.geometry.slabs.length} lajes (CV metadata: OCR=${cvResult.cv_metadata?.ocr_count}, lines=${cvResult.cv_metadata?.line_count})`);
+            // Helper: run CV pipeline for planta pages
+            const runCvPipeline = async (): Promise<GeometryResult | null> => {
+              if (!cvServiceUp || plantaPages.length === 0) return null;
+              const pages = await splitPdfPages(path.resolve(file.filePath));
+              const cvGeo: GeometryResult = { walls: [], slabs: [], corners: [] };
+              for (const pc of plantaPages) {
+                const page = pages.find(p => p.pageIndex === pc.page_index);
+                if (!page) continue;
+                const raw64 = page.base64.includes(",") ? page.base64.split(",", 2)[1] : page.base64;
+                const cvResult = await cvAnalyze({
+                  image_base64: raw64,
+                  mime_type: "application/pdf",
+                  pavimento: pc.pavimento || "Terreo",
+                  building_type: effectiveBuildingType() || "residencial",
+                  gemini_api_key: undefined,
+                  page_index: pc.page_index,
+                });
+                cvGeo.walls.push(...cvResult.geometry.walls);
+                cvGeo.slabs.push(...cvResult.geometry.slabs);
+                cvGeo.corners.push(...cvResult.geometry.corners);
+                if (cvResult.annotated_image_base64) {
+                  cvAnnotatedImages.push({ pavimento: pc.pavimento || "Terreo", pageIndex: pc.page_index, image: cvResult.annotated_image_base64 });
                 }
-
-                sendProgress(projectId, 3, "Extracao Geometrica (CV + IA)", "done", `${cvGeometry.walls.length} paredes, ${cvGeometry.slabs.length} lajes, ${cvGeometry.corners.length} cantos (pipeline CV + IA)`);
-                allGeometries.push(cvGeometry);
-                usedCv = true;
-
-                for (const wall of cvGeometry.walls) {
-                  await storage.addExtractedData({ projectId, fileId: file.id, elementType: "parede", data: wall, hasAssumption: 0 });
-                }
-                for (const slab of cvGeometry.slabs) {
-                  await storage.addExtractedData({ projectId, fileId: file.id, elementType: "laje", data: slab, hasAssumption: 0 });
-                }
-                for (const corner of cvGeometry.corners) {
-                  await storage.addExtractedData({ projectId, fileId: file.id, elementType: "canto", data: corner, hasAssumption: 0 });
-                }
-              } catch (cvError: any) {
-                console.warn(`[ETAPA 3] CV service falhou: ${cvError.message}. Caindo para Gemini-only.`);
-                usedCv = false;
+                console.log(`[ETAPA 3 CV] Pav ${pc.pavimento} pg ${pc.page_index}: ${cvResult.geometry.walls.length} paredes, ${cvResult.geometry.slabs.length} lajes (OCR=${cvResult.cv_metadata?.ocr_count}, lines=${cvResult.cv_metadata?.line_count})`);
               }
-            }
+              return cvGeo;
+            };
 
-            // Fallback: Gemini-only pipeline (original)
-            if (!usedCv) {
-              sendProgress(projectId, 3, "Extracao Geometrica", "running", `Analisando geometria de ${file.originalName} (paginas em paralelo)...`);
+            // Helper: run Gemini-only pipeline
+            const runGeminiPipeline = async (): Promise<GeometryResult> => {
               const geoResult = await extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType());
-              let geometry: GeometryResult = { walls: geoResult.walls, slabs: geoResult.slabs, corners: geoResult.corners };
               for (const p of geoResult.failedPages) {
                 pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: p });
                 recordFailedPage({ fileId: file.id, fileName: file.originalName, pageIndex: p, reason: "Falha na extracao geometrica" });
               }
-
-              const geoFailedMsg = geoResult.failedPages.length > 0 ? ` | ${geoResult.failedPages.length} pag(s) falharam` : "";
-              sendProgress(projectId, 3, "Extracao Geometrica", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes, ${geometry.corners.length} cantos${geoFailedMsg}`);
-
-              sendProgress(projectId, 3.5 as any, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+              let geometry: GeometryResult = { walls: geoResult.walls, slabs: geoResult.slabs, corners: geoResult.corners };
+              // Verificacao IA
               const hasAnyTableData = mergedTableData.paredes_de_tabela.length > 0 || mergedTableData.esquadrias_de_tabela.length > 0;
               try {
                 const verified = await verifyExtraction(file.filePath, file.fileType, geometry, hasAnyTableData ? mergedTableData : null, effectiveBuildingType());
@@ -746,12 +716,14 @@ export async function registerRoutes(
                 sendProgress(projectId, 3.5 as any, "Verificacao IA", "done", `${verified.walls.length} paredes, ${verified.slabs.length} lajes${correctionMsg}`);
                 geometry = verified;
               } catch (verifyError: any) {
-                console.warn(`[ETAPA 3.5] Verificacao falhou para ${file.originalName}: ${verifyError.message}. Usando dados sem verificacao.`);
-                sendProgress(projectId, 3.5 as any, "Verificacao IA", "done", `Verificacao falhou (${verifyError.message?.substring(0, 80)}). Usando dados da extracao sem verificacao.`);
+                console.warn(`[ETAPA 3.5] Verificacao falhou: ${verifyError.message}. Usando dados sem verificacao.`);
+                sendProgress(projectId, 3.5 as any, "Verificacao IA", "done", `Verificacao falhou (${verifyError.message?.substring(0, 80)}).`);
               }
+              return geometry;
+            };
 
-              allGeometries.push(geometry);
-
+            // Helper: store geometry in DB
+            const storeGeometry = async (geometry: GeometryResult) => {
               for (const wall of geometry.walls) {
                 await storage.addExtractedData({ projectId, fileId: file.id, elementType: "parede", data: wall, hasAssumption: 0 });
               }
@@ -761,6 +733,67 @@ export async function registerRoutes(
               for (const corner of geometry.corners) {
                 await storage.addExtractedData({ projectId, fileId: file.id, elementType: "canto", data: corner, hasAssumption: 0 });
               }
+            };
+
+            // ===== Execute based on analysisMode =====
+            if (analysisMode === "combinada" && cvServiceUp && plantaPages.length > 0) {
+              // COMBINADA: run both in parallel, merge via fusionMultiView
+              sendProgress(projectId, 3, "Extracao Geometrica (Combinada)", "running", `Executando CV + Gemini em paralelo para ${file.originalName}...`);
+              sendProgress(projectId, 3.5 as any, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+              const [cvResult, geminiResult] = await Promise.all([
+                runCvPipeline().catch((e: any) => { console.warn(`[ETAPA 3] CV falhou no modo combinada: ${e.message}`); return null; }),
+                runGeminiPipeline(),
+              ]);
+              if (cvResult) {
+                allGeometries.push(cvResult);
+                console.log(`[ETAPA 3] Combinada CV: ${cvResult.walls.length} paredes, ${cvResult.slabs.length} lajes`);
+              }
+              allGeometries.push(geminiResult);
+              console.log(`[ETAPA 3] Combinada Gemini: ${geminiResult.walls.length} paredes, ${geminiResult.slabs.length} lajes`);
+              const totalWalls = (cvResult?.walls.length || 0) + geminiResult.walls.length;
+              const totalSlabs = (cvResult?.slabs.length || 0) + geminiResult.slabs.length;
+              sendProgress(projectId, 3, "Extracao Geometrica (Combinada)", "done", `${totalWalls} paredes, ${totalSlabs} lajes (CV + Gemini, antes da fusao)`);
+              // Store combined results
+              const combined: GeometryResult = {
+                walls: [...(cvResult?.walls || []), ...geminiResult.walls],
+                slabs: [...(cvResult?.slabs || []), ...geminiResult.slabs],
+                corners: [...(cvResult?.corners || []), ...geminiResult.corners],
+              };
+              await storeGeometry(combined);
+
+            } else if (analysisMode === "cv-gemini" && cvServiceUp && plantaPages.length > 0) {
+              // CV + GEMINI: try CV, fallback to Gemini
+              sendProgress(projectId, 3, "Extracao Geometrica (CV + IA)", "running", `Analisando ${file.originalName} via Computer Vision + Gemini...`);
+              let usedCv = false;
+              try {
+                const cvResult = await runCvPipeline();
+                if (cvResult) {
+                  allGeometries.push(cvResult);
+                  await storeGeometry(cvResult);
+                  sendProgress(projectId, 3, "Extracao Geometrica (CV + IA)", "done", `${cvResult.walls.length} paredes, ${cvResult.slabs.length} lajes, ${cvResult.corners.length} cantos (CV + IA)`);
+                  usedCv = true;
+                }
+              } catch (cvError: any) {
+                console.warn(`[ETAPA 3] CV falhou: ${cvError.message}. Caindo para Gemini-only.`);
+              }
+              if (!usedCv) {
+                sendProgress(projectId, 3, "Extracao Geometrica", "running", `Fallback Gemini-only para ${file.originalName}...`);
+                sendProgress(projectId, 3.5 as any, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+                const geometry = await runGeminiPipeline();
+                allGeometries.push(geometry);
+                await storeGeometry(geometry);
+                sendProgress(projectId, 3, "Extracao Geometrica", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes, ${geometry.corners.length} cantos`);
+              }
+
+            } else {
+              // GEMINI-ONLY (or CV unavailable)
+              sendProgress(projectId, 3, "Extracao Geometrica", "running", `Analisando geometria de ${file.originalName} (Gemini-only)...`);
+              sendProgress(projectId, 3.5 as any, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
+              const geometry = await runGeminiPipeline();
+              allGeometries.push(geometry);
+              await storeGeometry(geometry);
+              const geoFailedMsg = pipelineFailedPages.length > 0 ? ` | paginas falharam` : "";
+              sendProgress(projectId, 3, "Extracao Geometrica", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes, ${geometry.corners.length} cantos${geoFailedMsg}`);
             }
           }
         } catch (fileError) {
