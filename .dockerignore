@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.gitignore
+npm-debug.log
+Dockerfile*
+server/uploads
+cv-service/.venv
+cv-service/__pycache__
+cv-service/.pytest_cache
+**/__pycache__
+**/*.pyc
+.env
+cv-service/.env

@@ -6,7 +6,8 @@
    * Verifica se todos os componentes estão corretamente configurados
    */
 
-  import { db, pool } from './server/db';
+  import { access } from "fs/promises";
+  import { db, pool } from './db';
   import { products, projects } from '@shared/schema';
   import { eq } from 'drizzle-orm';
 
@@ -78,7 +79,7 @@
     
     for (const dir of uploadDirs) {
       try {
-        await fs.access(dir);
+        await access(dir);
         console.log(`   ✅ Diretório '${dir}' existe`);
       } catch (error) {
         console.warn(`   ⚠️  Diretório '${dir}' não existe - será criado automaticamente`);

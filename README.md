@@ -288,3 +288,8 @@
 
   **Desenvolvido com ❤️ para Lightwall** | Sistema de Orçamento Paramétrico Inteligente
   
+  ---
+
+  ## Deploy VPS
+
+  Para subida em VPS com Docker Compose, use a documentacao em `DEPLOY.md`.
