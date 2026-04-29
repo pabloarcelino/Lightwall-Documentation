@@ -101,6 +101,7 @@ export default function NewProject() {
       "image/webp": [".webp"],
       "image/bmp": [".bmp"],
       "image/tiff": [".tif", ".tiff"],
+      "application/octet-stream": [".ifc"],
     },
     onDrop: (acceptedFiles) => {
       setFiles((prev) => [...prev, ...acceptedFiles]);

@@ -45,6 +45,7 @@ import type { Response } from "express";
 import { requireAuth } from "./auth";
 import { editImage } from "./replit_integrations/image/client";
 import { cvAnalyze, cvAnnotate, isCvServiceAvailable } from "./services/cv/client";
+import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 
 const progressClients = new Map<number, Response[]>();
 
@@ -153,6 +154,50 @@ Resultado: planta original visivel com paredes contornadas em ciano/laranja/roxo
 
 const pipelineStartTimes = new Map<number, number>();
 
+function buildIfcDeterministicDescription(
+  fileCount: number,
+  budget: any,
+  geometry: { wallCount: number; slabCount: number; cornerCount: number; floors: string[] },
+  totalCost: number,
+): string {
+  const pavLines: string[] = [];
+  for (const pav of budget.pavimentos || []) {
+    const pe = pav.paredes_externas || {};
+    const pi = pav.paredes_internas || {};
+    const lp = pav.laje_piso || {};
+    const lc = pav.laje_coberta || {};
+    const totalPaineis = (pe.quantidade_paineis || 0) + (pi.quantidade_paineis || 0) + (lp.quantidade_paineis || 0) + (lc.quantidade_paineis || 0);
+    pavLines.push(`- ${pav.nome}: ${totalPaineis} paineis (ext=${pe.comprimento_total_m?.toFixed(1) || 0}m / int=${pi.comprimento_total_m?.toFixed(1) || 0}m / piso=${lp.area_m2?.toFixed(1) || 0}m2 / coberta=${lc.area_m2?.toFixed(1) || 0}m2)`);
+  }
+  return `## Identificacao do Projeto
+- Origem: modelo BIM (IFC) - extracao deterministica sem IA
+- Arquivos IFC processados: ${fileCount}
+- Numero de pavimentos: ${geometry.floors.length} (${geometry.floors.join(", ") || "-"})
+
+## Quantitativos Identificados
+- Paredes: ${geometry.wallCount} elementos extraidos do modelo
+- Lajes: ${geometry.slabCount} elementos extraidos do modelo
+- Cantos/encontros: ${geometry.cornerCount}
+
+## Distribuicao por Pavimento
+${pavLines.join("\n") || "- (sem pavimentos)"}
+
+## Observacoes para Orcamento
+- Quantitativos derivados diretamente da geometria do modelo BIM (alta confiabilidade).
+- Quando o IFC nao traz Pset/Qto, dimensoes sao inferidas pela bounding box dos solidos.
+- Elementos NAO cobertos pelo Lightwall (fundacao, cobertura, acabamentos) devem ser orcados separadamente.
+
+## Resumo dos Dados Extraidos
+- Geometria extraida: ${geometry.wallCount} paredes, ${geometry.slabCount} lajes, ${geometry.cornerCount} cantos
+- Pavimentos: ${geometry.floors.join(", ") || "-"}
+- Orcamento calculado: ${budget.resumo?.total_geral_paineis || 0} paineis, R$ ${totalCost.toFixed(2)}
+
+## Alertas e Ressalvas
+- Verifique se todos os pavimentos relevantes foram modelados no IFC.
+- Conferir classificacao externa/interna das paredes (Pset_WallCommon.IsExternal).
+- Esquadrias muito pequenas ou ausentes no modelo nao reduzem a area das paredes.`;
+}
+
 function sendProgress(projectId: number, step: number, label: string, status: "running" | "done" | "error", detail?: string) {
   const clients = progressClients.get(projectId) || [];
   const now = Date.now();
@@ -168,7 +213,7 @@ const upload = multer({
   dest: "server/uploads/projects/",
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowed = [
+    const allowedMimes = [
       "application/pdf",
       "image/png",
       "image/jpeg",
@@ -177,11 +222,19 @@ const upload = multer({
       "image/bmp",
       "image/tiff",
     ];
-    if (allowed.includes(file.mimetype)) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const allowedExts = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".ifc"];
+
+    // IFC: browsers usually send application/octet-stream; accept by extension.
+    if (ext === ".ifc") {
+      cb(null, true);
+      return;
+    }
+    if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
       cb(null, true);
     } else {
       const err: any = new Error(
-        `Formato não suportado: "${file.originalname}" (${file.mimetype}). Use PDF, PNG, JPG, WEBP, BMP ou TIFF.`,
+        `Formato não suportado: "${file.originalname}" (${file.mimetype}). Use PDF, PNG, JPG, WEBP, BMP, TIFF ou IFC.`,
       );
       err.status = 400;
       cb(err);
@@ -488,6 +541,7 @@ export async function registerRoutes(
       const mimeTypes: Record<string, string> = {
         pdf: "application/pdf",
         image: "image/png",
+        ifc: "application/octet-stream",
       };
       const ext = targetFile.originalName?.split(".").pop()?.toLowerCase();
       let contentType = mimeTypes[targetFile.fileType] || "application/octet-stream";
@@ -496,6 +550,7 @@ export async function registerRoutes(
       else if (ext === "webp") contentType = "image/webp";
       else if (ext === "bmp") contentType = "image/bmp";
       else if (ext === "tif" || ext === "tiff") contentType = "image/tiff";
+      else if (ext === "ifc") contentType = "application/octet-stream";
 
       res.setHeader("Content-Type", contentType);
       res.setHeader("Content-Disposition", `inline; filename="${targetFile.originalName}"`);
@@ -563,7 +618,7 @@ export async function registerRoutes(
         const savedFiles = [];
         for (const file of uploadedFiles) {
           const ext = path.extname(file.originalname).toLowerCase();
-          const fileType = ext === ".pdf" ? "pdf" : "image";
+          const fileType = ext === ".pdf" ? "pdf" : ext === ".ifc" ? "ifc" : "image";
 
           const saved = await storage.addProjectFile({
             projectId,
@@ -638,6 +693,36 @@ export async function registerRoutes(
 
       for (const file of files) {
         try {
+          // ===== IFC pipeline: skip Gemini entirely, parse structured data directly =====
+          if (file.fileType === "ifc") {
+            sendProgress(projectId, 1, "Leitura IFC", "running", `Lendo modelo BIM ${file.originalName}...`);
+            try {
+              const ifcResult = await parseIfcFile(file.filePath, peDireito);
+              const summary = `${ifcResult.wallCount} paredes, ${ifcResult.slabCount} lajes, ${ifcResult.doorCount} portas, ${ifcResult.windowCount} janelas (${ifcResult.storeyCount} pavimento(s))`;
+              sendProgress(projectId, 1, "Leitura IFC", "done", summary);
+
+              await storage.updateFilePageType(file.id, "ifc_model");
+
+              for (const wall of ifcResult.walls) {
+                await storage.addExtractedData({ projectId, fileId: file.id, elementType: "parede", data: wall, hasAssumption: 0 });
+              }
+              for (const slab of ifcResult.slabs) {
+                await storage.addExtractedData({ projectId, fileId: file.id, elementType: "laje", data: slab, hasAssumption: 0 });
+              }
+
+              allGeometries.push({ walls: ifcResult.walls, slabs: ifcResult.slabs, corners: ifcResult.corners });
+
+              if (ifcResult.warnings.length > 0) {
+                console.log(`[IFC] ${ifcResult.warnings.length} avisos para ${file.originalName}:`);
+                for (const w of ifcResult.warnings.slice(0, 5)) console.log(`  - ${w}`);
+              }
+            } catch (ifcError: any) {
+              console.error(`[IFC] Falha ao ler ${file.originalName}:`, ifcError);
+              sendProgress(projectId, 1, "Leitura IFC", "error", `Falha ao ler ${file.originalName}: ${ifcError.message || "erro desconhecido"}`);
+            }
+            continue;
+          }
+
           sendProgress(projectId, 1, "Classificacao + Tabelas", "running", `Classificando e extraindo tabelas de ${file.originalName} (chamada unificada, paginas em paralelo)...`);
           const ctResult = await classifyAndExtractTables(file.filePath, file.fileType, 3, !!userBuildingType);
           const { classifications, tableData, failedPages: ctFailed, detectedBuildingType: fileBuildingType } = ctResult;
@@ -1142,8 +1227,11 @@ export async function registerRoutes(
         hasAssumption: 0,
       });
 
-      sendProgress(projectId, 8, "Descricao do Projeto", "running", "A IA esta analisando profundamente as imagens para descrever o projeto...");
-      const filePaths = files.map(f => ({ path: f.filePath, fileType: f.fileType, name: f.originalName }));
+      // For IFC files, skip Gemini entirely (zero AI cost, deterministic).
+      // If all files are IFC, generate a deterministic summary from parsed geometry.
+      const nonIfcFiles = files.filter(f => f.fileType !== "ifc");
+      const ifcOnly = nonIfcFiles.length === 0 && files.length > 0;
+      const filePaths = nonIfcFiles.map(f => ({ path: f.filePath, fileType: f.fileType, name: f.originalName }));
       const geometrySummary = {
         wallCount: fused.walls.length,
         slabCount: fused.slabs.length,
@@ -1158,12 +1246,22 @@ export async function registerRoutes(
           panels: p.paredes_externas.quantidade_paineis + p.paredes_internas.quantidade_paineis + p.laje_piso.quantidade_paineis + p.laje_coberta.quantidade_paineis,
         })),
       };
-      const projectDescription = await describeProject(filePaths, allClassifications, geometrySummary, budgetSummaryForDesc);
-      const descriptionFailed = projectDescription.startsWith("Nao foi possivel");
-      if (descriptionFailed) {
-        sendProgress(projectId, 8, "Descricao do Projeto", "error", "Falha ao gerar descricao automatica. O orcamento foi calculado normalmente.");
+
+      let projectDescription: string;
+      let descriptionFailed = false;
+      if (ifcOnly) {
+        sendProgress(projectId, 8, "Descricao do Projeto", "running", "Gerando resumo do modelo IFC (sem IA)...");
+        projectDescription = buildIfcDeterministicDescription(files.length, budget, geometrySummary, totalCost);
+        sendProgress(projectId, 8, "Descricao do Projeto", "done", "Resumo gerado a partir do modelo BIM.");
       } else {
-        sendProgress(projectId, 8, "Descricao do Projeto", "done", projectDescription.substring(0, 150) + "...");
+        sendProgress(projectId, 8, "Descricao do Projeto", "running", "A IA esta analisando profundamente as imagens para descrever o projeto...");
+        projectDescription = await describeProject(filePaths, allClassifications, geometrySummary, budgetSummaryForDesc);
+        descriptionFailed = projectDescription.startsWith("Nao foi possivel");
+        if (descriptionFailed) {
+          sendProgress(projectId, 8, "Descricao do Projeto", "error", "Falha ao gerar descricao automatica. O orcamento foi calculado normalmente.");
+        } else {
+          sendProgress(projectId, 8, "Descricao do Projeto", "done", projectDescription.substring(0, 150) + "...");
+        }
       }
 
       await storage.addExtractedData({

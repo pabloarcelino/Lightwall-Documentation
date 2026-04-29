@@ -1166,7 +1166,7 @@ export default function ProjectDetails() {
                       id="file-upload-input"
                       type="file"
                       multiple
-                      accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff"
+                      accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.ifc"
                       className="hidden"
                       data-testid="input-file-upload"
                       onChange={async (e) => {
