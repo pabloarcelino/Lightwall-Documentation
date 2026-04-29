@@ -172,18 +172,47 @@ function buildConfig(temperature: number, maxTokens: number, thinkingBudget?: nu
   return { temperature, topP: 0.95, topK: 40, maxOutputTokens: maxTokens };
 }
 
+/**
+ * Convert Gemini-style multipart contents to a single-prompt + images list
+ * suitable for the AIProvider interface (used by OpenAI routing).
+ */
+function partsToProviderInput(
+  parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }>,
+): { prompt: string; images: Array<{ base64: string; mimeType: string }> } {
+  const images: Array<{ base64: string; mimeType: string }> = [];
+  const textChunks: string[] = [];
+  for (const p of parts) {
+    if (p.inlineData) {
+      images.push({ base64: p.inlineData.data, mimeType: p.inlineData.mimeType });
+    } else if (p.text) {
+      textChunks.push(p.text);
+    }
+  }
+  return { prompt: textChunks.join("\n\n"), images };
+}
+
+async function maybeRouteToOpenAI(
+  parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }>,
+  maxTokens: number,
+  temperature: number,
+): Promise<string | null> {
+  const { getActiveProvider, createOpenAIProvider, hasOpenAIKey } = await import("../ai/provider");
+  if (getActiveProvider() !== "openai" || !hasOpenAIKey()) return null;
+  const provider = createOpenAIProvider();
+  if (!provider) return null;
+  const { prompt, images } = partsToProviderInput(parts);
+  return provider.generateContent(prompt, images, { temperature, maxOutputTokens: maxTokens });
+}
+
 async function callGemini(base64Data: string, mimeType: string, prompt: string, maxTokens: number = 16384, thinkingBudget?: number): Promise<string> {
+  const parts = [{ inlineData: { mimeType, data: base64Data } }, { text: prompt }];
+  const openaiText = await maybeRouteToOpenAI(parts, maxTokens, 0.1);
+  if (openaiText !== null) return openaiText;
   const { withRetry } = await import("./client");
   return withRetry(async () => {
     const response = await activeGenAI.models.generateContent({
       model: activeModelName,
-      contents: [{
-        role: "user",
-        parts: [
-          { inlineData: { mimeType, data: base64Data } },
-          { text: prompt },
-        ],
-      }],
+      contents: [{ role: "user", parts }],
       config: buildConfig(0.1, maxTokens, thinkingBudget),
     });
     return response.text ?? "";
@@ -193,17 +222,14 @@ async function callGemini(base64Data: string, mimeType: string, prompt: string, 
 const FLASH_MODEL = "gemini-2.5-flash";
 
 async function callGeminiFlash(base64Data: string, mimeType: string, prompt: string, maxTokens: number = 16384, thinkingBudget?: number): Promise<string> {
+  const parts = [{ inlineData: { mimeType, data: base64Data } }, { text: prompt }];
+  const openaiText = await maybeRouteToOpenAI(parts, maxTokens, 0.1);
+  if (openaiText !== null) return openaiText;
   const { withRetry } = await import("./client");
   return withRetry(async () => {
     const response = await activeGenAI.models.generateContent({
       model: FLASH_MODEL,
-      contents: [{
-        role: "user",
-        parts: [
-          { inlineData: { mimeType, data: base64Data } },
-          { text: prompt },
-        ],
-      }],
+      contents: [{ role: "user", parts }],
       config: buildConfig(0.1, maxTokens, thinkingBudget),
     });
     return response.text ?? "";
@@ -216,6 +242,8 @@ async function callGeminiMultiPart(
   temperature: number = 0.1,
   thinkingBudget?: number,
 ): Promise<string> {
+  const openaiText = await maybeRouteToOpenAI(parts, maxTokens, temperature);
+  if (openaiText !== null) return openaiText;
   const { withRetry } = await import("./client");
   return withRetry(async () => {
     const response = await activeGenAI.models.generateContent({
@@ -233,6 +261,8 @@ async function callGeminiFlashMultiPart(
   temperature: number = 0.1,
   thinkingBudget?: number,
 ): Promise<string> {
+  const openaiText = await maybeRouteToOpenAI(parts, maxTokens, temperature);
+  if (openaiText !== null) return openaiText;
   const { withRetry } = await import("./client");
   return withRetry(async () => {
     const response = await activeGenAI.models.generateContent({

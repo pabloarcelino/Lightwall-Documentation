@@ -1223,12 +1223,14 @@ export default function ProjectDetails() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="gemini-only">Gemini-only (IA pura)</SelectItem>
+                        <SelectItem value="openai-only">OpenAI-only (IA pura)</SelectItem>
                         <SelectItem value="cv-gemini">CV + Gemini (hibrido)</SelectItem>
                         <SelectItem value="combinada">Combinada (ambos)</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground mt-1">
                       {analysisMode === "gemini-only" && "Usa apenas o Gemini para analisar a planta. Mais simples, sem dependencias externas."}
+                      {analysisMode === "openai-only" && "Usa apenas a OpenAI (modelo configurado em Configuracoes, padrao gpt-5-mini) para todo o pipeline. Requer chave OpenAI."}
                       {analysisMode === "cv-gemini" && "Computer Vision (OpenCV + OCR) extrai dados estruturados, Gemini classifica. Mais preciso."}
                       {analysisMode === "combinada" && "Executa ambos os pipelines em paralelo e combina os resultados. Maximo de cobertura."}
                     </p>

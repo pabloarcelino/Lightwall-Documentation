@@ -27,6 +27,10 @@ import {
   setOpenAIApiKey,
   clearOpenAIApiKey,
   hasOpenAIKey,
+  setOpenAIModelName,
+  getOpenAIModelName,
+  runWithProvider,
+  DEFAULT_OPENAI_MODEL,
 } from "./services/ai/provider";
 import {
   fusionMultiView,
@@ -261,6 +265,11 @@ export async function registerRoutes(
     setOpenAIApiKey(savedOpenAIKey);
   }
 
+  const savedOpenAIModel = await storage.getSetting("openai_model");
+  if (savedOpenAIModel && savedOpenAIModel.length > 0) {
+    setOpenAIModelName(savedOpenAIModel);
+  }
+
   app.get("/api/settings/gemini-key", async (_req, res) => {
     try {
       const apiKey = await storage.getSetting("gemini_api_key");
@@ -383,6 +392,31 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Erro ao testar OpenAI:", error);
       res.status(400).json({ success: false, message: `Erro: ${error.message || "Falha na conexao"}` });
+    }
+  });
+
+  app.get("/api/settings/openai-model", async (_req, res) => {
+    try {
+      const model = await storage.getSetting("openai_model");
+      res.json({ model: (model && model.trim()) || DEFAULT_OPENAI_MODEL, defaultModel: DEFAULT_OPENAI_MODEL });
+    } catch (error) {
+      console.error("Erro ao buscar modelo OpenAI:", error);
+      res.status(500).json({ message: "Erro ao buscar configuracao" });
+    }
+  });
+
+  app.post("/api/settings/openai-model", async (req, res) => {
+    try {
+      const { model } = req.body;
+      if (!model || typeof model !== "string" || model.trim().length < 2) {
+        return res.status(400).json({ message: "Modelo invalido" });
+      }
+      await storage.setSetting("openai_model", model.trim());
+      setOpenAIModelName(model.trim());
+      res.json({ success: true, model: model.trim() });
+    } catch (error) {
+      console.error("Erro ao salvar modelo OpenAI:", error);
+      res.status(500).json({ message: "Erro ao salvar modelo" });
     }
   });
 
@@ -659,6 +693,22 @@ export async function registerRoutes(
     const peDireito: number = parseFloat(req.body?.peDireito) || 3.0;
     console.log(`[PIPELINE] Escopo selecionado: ext=${scope.paredesExternas} int=${scope.paredesInternas} piso=${scope.lajePiso} coberta=${scope.lajeCoberta} cantos=${scope.cantos}`);
     console.log(`[PIPELINE] Modo de analise: ${analysisMode} | Pe-direito: ${peDireito}m`);
+
+    // Pre-validate OpenAI key for openai-only mode before entering the run context.
+    if (analysisMode === "openai-only" && !hasOpenAIKey()) {
+      return res.status(400).json({
+        message: "Modo OpenAI selecionado mas nenhuma chave OpenAI esta configurada. Adicione a chave em Configuracoes.",
+      });
+    }
+    const providerForRun: "gemini" | "openai" = analysisMode === "openai-only" ? "openai" : "gemini";
+    if (providerForRun === "openai") {
+      console.log(`[PIPELINE] Roteando para OpenAI (modelo: ${getOpenAIModelName()})`);
+    }
+
+    // Wrap the entire pipeline body in an AsyncLocalStorage context so any
+    // concurrent run (e.g. another user simultaneously processing in gemini-only
+    // mode) sees its own provider value via getActiveProvider().
+    await runWithProvider(providerForRun, async () => {
     try {
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -683,8 +733,12 @@ export async function registerRoutes(
       let mergedTableData: TableData = { paredes_de_tabela: [], esquadrias_de_tabela: [], areas_de_tabela: [] };
       const pipelineFailedPages: Array<{ fileId: number; fileName: string; pageIndex: number }> = [];
       const cvAnnotatedImages: Array<{ pavimento: string; pageIndex: number; image: string }> = [];
-      const cvServiceUp = analysisMode !== "gemini-only" ? await isCvServiceAvailable() : false;
+      // CV service is only used by Gemini hybrid modes; bypass it for openai-only and gemini-only.
+      const cvServiceUp = (analysisMode !== "gemini-only" && analysisMode !== "openai-only")
+        ? await isCvServiceAvailable()
+        : false;
       if (analysisMode === "gemini-only") console.log("[PIPELINE] Modo Gemini-only selecionado");
+      else if (analysisMode === "openai-only") console.log("[PIPELINE] Modo OpenAI-only selecionado");
       else if (cvServiceUp) console.log("[PIPELINE] CV service disponivel");
       else console.log("[PIPELINE] CV service indisponivel — fallback para Gemini-only");
       const userBuildingType = project.buildingType || undefined;
@@ -1369,6 +1423,7 @@ export async function registerRoutes(
       cleanupApiMetrics(projectId);
       res.status(500).json({ message: userMsg });
     }
+    }); // end runWithProvider
   });
 
   app.put("/api/projects/:id", async (req, res) => {

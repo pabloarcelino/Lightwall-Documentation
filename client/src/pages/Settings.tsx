@@ -10,6 +10,65 @@ import { ArrowLeft, Key, CheckCircle, XCircle, Loader2, Eye, EyeOff, Trash2, Shi
 import { Link } from "wouter";
 import { LightwallDots } from "@/components/LightwallLogo";
 
+function OpenAIModelCard() {
+  const { toast } = useToast();
+  const [model, setModel] = useState("");
+
+  const { data, isLoading } = useQuery<{ model: string; defaultModel: string }>({
+    queryKey: ["/api/settings/openai-model"],
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async (m: string) => {
+      const res = await apiRequest("POST", "/api/settings/openai-model", { model: m });
+      return res.json();
+    },
+    onSuccess: (d: any) => {
+      toast({ title: "Modelo OpenAI salvo", description: `Agora usando: ${d.model}` });
+      setModel("");
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/openai-model"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const currentModel = data?.model || data?.defaultModel || "gpt-5-mini";
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Modelo OpenAI (modo OpenAI-only)</CardTitle>
+        <CardDescription>
+          Modelo usado quando o pipeline e executado em modo OpenAI-only. O padrao e <code>gpt-5-mini</code>.
+          Voce pode trocar para outros modelos compativeis (ex.: <code>gpt-5</code>, <code>gpt-4o</code>, <code>gpt-4o-mini</code>).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="text-sm text-muted-foreground">
+          Modelo atual: <span className="font-mono font-semibold text-foreground" data-testid="text-openai-current-model">{currentModel}</span>
+          {isLoading && " (carregando...)"}
+        </div>
+        <div className="flex gap-2">
+          <Input
+            placeholder={currentModel}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            data-testid="input-openai-model"
+          />
+          <Button
+            onClick={() => saveMutation.mutate(model.trim())}
+            disabled={!model.trim() || saveMutation.isPending}
+            data-testid="button-save-openai-model"
+          >
+            {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvar"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ApiKeyCard({
   title,
   description,
@@ -259,8 +318,8 @@ export default function Settings() {
         />
 
         <ApiKeyCard
-          title="Chave de API da OpenAI (Verificacao Cross-Model)"
-          description="Configure uma chave OpenAI para habilitar verificacao cross-model (GPT-4o). Quando configurada, a etapa de verificacao usa um modelo diferente do extrator, eliminando vies de auto-verificacao. A chave pode ser obtida em"
+          title="Chave de API da OpenAI (Verificacao + Modo OpenAI-only)"
+          description="Configure uma chave OpenAI para habilitar (1) verificacao cross-model na pipeline padrao e (2) o modo OpenAI-only que roda toda a analise apenas pela OpenAI. A chave pode ser obtida em"
           descriptionLink="https://platform.openai.com/api-keys"
           descriptionLinkText="OpenAI Platform"
           placeholder="sk-..."
@@ -269,6 +328,8 @@ export default function Settings() {
           queryKey="/api/settings/openai-key"
           testIdPrefix="openai"
         />
+
+        <OpenAIModelCard />
 
         <Card className="border-blue-200 dark:border-blue-800">
           <CardHeader className="pb-3">
