@@ -101,6 +101,64 @@ async function getAnnotationImageSources(
     .filter((x): x is NonNullable<typeof x> => x !== null);
 }
 
+// ===== Reference page sources =====
+// Extracts NON-planta_baixa pages (cortes, fachadas, planta_cobertura,
+// detalhe_construtivo, quadros) so the UI can show them alongside the
+// annotated floor plans as "outras vistas" reference images. These pages are
+// NOT sent through the AI annotator — they are kept as the original page so
+// the user can see them faithfully without distortion.
+const REFERENCE_PAGE_TYPES = new Set([
+  "planta_cobertura",
+  "corte",
+  "fachada",
+  "detalhe_construtivo",
+  "quadro_esquadrias",
+  "tabela_quantitativo",
+]);
+
+function pageTypeLabel(pageType: string): string {
+  switch (pageType) {
+    case "planta_cobertura": return "Planta de Cobertura";
+    case "corte": return "Corte";
+    case "fachada": return "Fachada";
+    case "detalhe_construtivo": return "Detalhe Construtivo";
+    case "quadro_esquadrias": return "Quadro de Esquadrias";
+    case "tabela_quantitativo": return "Tabela / Quantitativo";
+    case "planta_baixa": return "Planta Baixa";
+    default: return pageType.replace(/_/g, " ");
+  }
+}
+
+async function getReferencePageSources(
+  files: any[],
+  classifications?: PageClassification[],
+): Promise<Array<{ pageIndex: number; pageType: string; pavimento?: string; base64: string; mimeType: string }>> {
+  if (!classifications || classifications.length === 0) return [];
+
+  const pdfFile = files.find((f: any) => f.fileType === "pdf" || /\.pdf$/i.test(f.originalName || ""));
+  if (!pdfFile) return [];
+
+  const refClassifications = classifications.filter(c => REFERENCE_PAGE_TYPES.has(c.classificacao));
+  if (refClassifications.length === 0) return [];
+
+  const pages = await splitPdfPages(path.resolve(pdfFile.filePath));
+  if (pages.length === 0) return [];
+
+  return refClassifications
+    .map(c => {
+      const page = pages.find(p => p.pageIndex === c.page_index);
+      if (!page) return null;
+      return {
+        pageIndex: c.page_index,
+        pageType: c.classificacao,
+        pavimento: c.pavimento,
+        base64: page.base64,
+        mimeType: "application/pdf" as const,
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+}
+
 function buildAnnotationPrompt(walls: any[], slabs: any[]): string {
   const enabledWalls = walls.filter((w: any) => w.enabled !== false);
   const externas = enabledWalls.filter((w: any) => w.classe === "externa");
@@ -1156,12 +1214,19 @@ export async function registerRoutes(
           lajeCoberta: totalSlabs.filter((s: any) => s.classe === "coberta").length,
         };
 
+        // Annotated images of the planta_baixa pages (the ones that actually
+        // need wall/slab overlays). Reference images of OTHER plan types
+        // (cortes, fachadas, planta_cobertura, detalhes, quadros) are gathered
+        // separately and shown in the UI as a parallel section. This guarantees
+        // the AI annotator only paints over floor plans it can understand,
+        // while still surfacing the rest of the project to the user.
+        let annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
+        let annotationSource: "cv_pipeline" | "ia" | "none" = "none";
+
         if (cvAnnotatedImages.length > 0) {
           // ---- CV path: use pre-computed deterministic images from Python renderer ----
           sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Usando imagens anotadas do pipeline CV (deterministico)...");
-
-          // Build annotatedImages with summary per floor
-          const annotatedImages = cvAnnotatedImages.map(cv => {
+          annotatedImages = cvAnnotatedImages.map(cv => {
             const floorWalls = totalWalls.filter((w: any) => cv.pavimento === "all" || w.nivel === cv.pavimento);
             const floorSlabs = totalSlabs.filter((s: any) => cv.pavimento === "all" || s.nivel === cv.pavimento);
             return {
@@ -1175,90 +1240,131 @@ export async function registerRoutes(
               },
             };
           });
+          annotationSource = "cv_pipeline";
+        } else {
+          // ---- IA path: Gemini image editing on planta_baixa pages only ----
+          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Extraindo paginas da planta baixa e gerando imagens anotadas com IA...");
+          const imgSources = await getAnnotationImageSources(files, allClassifications);
+          for (const src of imgSources) {
+            const floorWalls = fusaoWallsWithScope.filter((w: any) =>
+              src.pavimento === "all" || w.nivel === src.pavimento
+            );
+            const floorSlabs = fusaoSlabsWithScope.filter((s: any) =>
+              src.pavimento === "all" || s.nivel === src.pavimento
+            );
+            const enabledFloorWalls = floorWalls.filter((w: any) => w.enabled !== false);
+            const enabledFloorSlabs = floorSlabs.filter((s: any) => s.enabled !== false);
+            if (enabledFloorWalls.length === 0 && enabledFloorSlabs.length === 0) continue;
 
+            try {
+              const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
+              const dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
+              annotatedImages.push({
+                pavimento: src.pavimento,
+                pageIndex: src.pageIndex,
+                image: dataUrl,
+                summary: {
+                  externas: enabledFloorWalls.filter((w: any) => w.classe === "externa").length,
+                  internas: enabledFloorWalls.filter((w: any) => w.classe === "interna").length,
+                  muros: enabledFloorWalls.filter((w: any) => w.classe === "muro").length,
+                  lajePiso: enabledFloorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
+                  lajeCoberta: enabledFloorSlabs.filter((s: any) => s.classe === "coberta").length,
+                },
+              });
+              console.log(`[ETAPA 4.5] Imagem anotada ${src.pavimento} (pg ${src.pageIndex}): ${Math.round(dataUrl.length / 1024)}KB`);
+            } catch (floorError: any) {
+              console.error(`[ETAPA 4.5] Falha na imagem do pav ${src.pavimento}:`, floorError?.message);
+            }
+          }
+          if (annotatedImages.length > 0) annotationSource = "ia";
+        }
+
+        // ===== Always extract reference images for OTHER plan types =====
+        // This runs for every mode (gemini-only, openai-only, cv-gemini,
+        // combinada) because the user explicitly asked that "outras partes"
+        // (cortes, fachadas, planta_cobertura, detalhes, quadros) get
+        // separate visualizations. We embed them as PDF-page data URLs and let
+        // the frontend render them via PdfViewer.
+        //
+        // Additionally, when AI annotation produced ZERO images (e.g.
+        // openai-only mode without a Gemini key, or AI failure), we also
+        // include the planta_baixa pages as reference so the user never loses
+        // sight of their floor plans.
+        let referenceImages: Array<{
+          kind: "reference"; pageType: string; pageTypeLabel: string;
+          pageIndex: number; pavimento?: string;
+          image: string; mimeType: string;
+        }> = [];
+        try {
+          const refSources = await getReferencePageSources(files, allClassifications);
+          referenceImages = refSources.map(src => ({
+            kind: "reference" as const,
+            pageType: src.pageType,
+            pageTypeLabel: pageTypeLabel(src.pageType),
+            pageIndex: src.pageIndex,
+            pavimento: src.pavimento,
+            image: `data:${src.mimeType};base64,${src.base64}`,
+            mimeType: src.mimeType,
+          }));
+
+          if (annotatedImages.length === 0) {
+            const fallbackSources = await getAnnotationImageSources(files, allClassifications);
+            for (const src of fallbackSources) {
+              if (src.pavimento === "all" && src.pageIndex === 0 && fallbackSources.length === 1) {
+                // Pure image upload fallback — already a single image, not really a planta_baixa classification.
+                continue;
+              }
+              referenceImages.unshift({
+                kind: "reference" as const,
+                pageType: "planta_baixa",
+                pageTypeLabel: pageTypeLabel("planta_baixa"),
+                pageIndex: src.pageIndex,
+                pavimento: src.pavimento,
+                image: `data:${src.mimeType};base64,${src.base64}`,
+                mimeType: src.mimeType,
+              });
+            }
+          }
+
+          if (referenceImages.length > 0) {
+            console.log(`[ETAPA 4.5] ${referenceImages.length} imagem(ns) de referencia (outras vistas) extraida(s)`);
+          }
+        } catch (refError: any) {
+          console.error(`[ETAPA 4.5] Falha ao extrair imagens de referencia:`, refError?.message);
+        }
+
+        // ===== Persist annotated + reference together (single record) =====
+        if (annotatedImages.length > 0 || referenceImages.length > 0) {
           const sourceFileId = files.find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""))?.id
             || files.find((f: any) => f.fileType === "pdf")?.id
             || null;
-
+          const labelByMode = annotationSource === "cv_pipeline"
+            ? "Imagem Anotada (CV pipeline)"
+            : annotationSource === "ia"
+              ? "Imagem Anotada (auto-gerada)"
+              : "Vistas de Referencia";
           await storage.addExtractedData({
             projectId, fileId: sourceFileId, elementType: "etapa3_annotated_plan",
             data: {
-              etapa: 4.5, label: "Imagem Anotada (CV pipeline)",
-              image: annotatedImages[0].image,
+              etapa: 4.5,
+              label: labelByMode,
+              image: annotatedImages[0]?.image,
               images: annotatedImages,
+              referenceImages,
               summary: summaryAll,
               generatedAt: new Date().toISOString(),
-              source: "cv_pipeline",
+              source: annotationSource,
             },
             hasAssumption: 0,
           });
-
-          const totalKB = annotatedImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
-          sendProgress(projectId, 7.5, "Imagem Anotada", "done", `${annotatedImages.length} imagem(ns) via CV pipeline (${totalKB}KB) | ${totalWalls.length} paredes`);
-
+          const annotatedKB = annotatedImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
+          const refKB = referenceImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
+          const parts: string[] = [];
+          if (annotatedImages.length > 0) parts.push(`${annotatedImages.length} planta(s) anotada(s) (${annotatedKB}KB)`);
+          if (referenceImages.length > 0) parts.push(`${referenceImages.length} vista(s) de referencia (${refKB}KB)`);
+          sendProgress(projectId, 7.5, "Imagem Anotada", "done", parts.join(" + ") || "Nenhuma imagem gerada");
         } else {
-          // ---- Fallback: Gemini image editing (original path) ----
-          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Extraindo paginas da planta e gerando imagens anotadas com IA...");
-          const imgSources = await getAnnotationImageSources(files, allClassifications);
-          if (imgSources.length > 0) {
-            const annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
-
-            for (const src of imgSources) {
-              const floorWalls = fusaoWallsWithScope.filter((w: any) =>
-                src.pavimento === "all" || w.nivel === src.pavimento
-              );
-              const floorSlabs = fusaoSlabsWithScope.filter((s: any) =>
-                src.pavimento === "all" || s.nivel === src.pavimento
-              );
-              const enabledFloorWalls = floorWalls.filter((w: any) => w.enabled !== false);
-              const enabledFloorSlabs = floorSlabs.filter((s: any) => s.enabled !== false);
-
-              if (enabledFloorWalls.length === 0 && enabledFloorSlabs.length === 0) continue;
-
-              try {
-                const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
-                const dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
-                annotatedImages.push({
-                  pavimento: src.pavimento,
-                  pageIndex: src.pageIndex,
-                  image: dataUrl,
-                  summary: {
-                    externas: enabledFloorWalls.filter((w: any) => w.classe === "externa").length,
-                    internas: enabledFloorWalls.filter((w: any) => w.classe === "interna").length,
-                    muros: enabledFloorWalls.filter((w: any) => w.classe === "muro").length,
-                    lajePiso: enabledFloorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
-                    lajeCoberta: enabledFloorSlabs.filter((s: any) => s.classe === "coberta").length,
-                  },
-                });
-                console.log(`[ETAPA 4.5] Imagem anotada ${src.pavimento} (pg ${src.pageIndex}): ${Math.round(dataUrl.length / 1024)}KB`);
-              } catch (floorError: any) {
-                console.error(`[ETAPA 4.5] Falha na imagem do pav ${src.pavimento}:`, floorError?.message);
-              }
-            }
-
-            if (annotatedImages.length > 0) {
-              const sourceFileId = files.find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""))?.id
-                || files.find((f: any) => f.fileType === "pdf")?.id
-                || null;
-              await storage.addExtractedData({
-                projectId, fileId: sourceFileId, elementType: "etapa3_annotated_plan",
-                data: {
-                  etapa: 4.5, label: "Imagem Anotada (auto-gerada)",
-                  image: annotatedImages[0].image,
-                  images: annotatedImages,
-                  summary: summaryAll,
-                  generatedAt: new Date().toISOString(),
-                },
-                hasAssumption: 0,
-              });
-              const totalKB = annotatedImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
-              sendProgress(projectId, 7.5, "Imagem Anotada", "done", `${annotatedImages.length} imagem(ns) gerada(s) (${totalKB}KB) | ${totalWalls.length} paredes`);
-            } else {
-              sendProgress(projectId, 7.5, "Imagem Anotada", "done", "Nenhuma imagem gerada (sem paredes/lajes habilitadas)");
-            }
-          } else {
-            sendProgress(projectId, 7.5, "Imagem Anotada", "done", "Nenhum arquivo de planta encontrado para anotacao");
-          }
+          sendProgress(projectId, 7.5, "Imagem Anotada", "done", "Nenhum arquivo de planta encontrado para anotacao");
         }
       } catch (annotatedError: any) {
         console.error(`[ETAPA 4.5] Falha ao gerar imagem anotada:`, annotatedError);

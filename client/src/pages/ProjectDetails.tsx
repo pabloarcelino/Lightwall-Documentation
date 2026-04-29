@@ -1654,6 +1654,87 @@ export default function ProjectDetails() {
                       </Card>
                     );
                   })()}
+                  {/* ===== Outras Vistas do Projeto =====
+                      Reference pages (cortes, fachadas, planta de cobertura,
+                      detalhes, quadros) shown as their original PDF page so
+                      the user sees the complete project, not only the floor
+                      plans. Generated for ALL analysis modes. */}
+                  {(() => {
+                    const refs: Array<{
+                      pageType: string; pageTypeLabel: string; pageIndex: number;
+                      pavimento?: string; image: string; mimeType: string;
+                    }> = (annotatedPlan?.data?.referenceImages && Array.isArray(annotatedPlan.data.referenceImages))
+                      ? annotatedPlan.data.referenceImages
+                      : [];
+                    if (refs.length === 0) return null;
+
+                    const groups = new Map<string, typeof refs>();
+                    for (const r of refs) {
+                      const key = r.pageType;
+                      if (!groups.has(key)) groups.set(key, []);
+                      groups.get(key)!.push(r);
+                    }
+                    const orderedTypes = ["planta_cobertura", "corte", "fachada", "detalhe_construtivo", "quadro_esquadrias", "tabela_quantitativo"];
+                    const orderedGroups = orderedTypes
+                      .filter(t => groups.has(t))
+                      .map(t => ({ type: t, label: groups.get(t)![0].pageTypeLabel, items: groups.get(t)! }));
+
+                    return (
+                      <Card data-testid="card-reference-views">
+                        <CardHeader className="pb-3">
+                          <CardTitle className="flex items-center gap-2 text-base">
+                            <FileText className="h-5 w-5 text-slate-500" />
+                            Outras Vistas do Projeto ({refs.length})
+                          </CardTitle>
+                          <p className="text-xs text-muted-foreground">
+                            Paginas de cortes, fachadas, cobertura, detalhes e quadros — extraidas como referencia visual sem anotacoes de IA.
+                          </p>
+                        </CardHeader>
+                        <CardContent>
+                          <Tabs defaultValue={orderedGroups[0].type} className="w-full">
+                            <TabsList className="w-full justify-start flex-wrap h-auto">
+                              {orderedGroups.map(g => (
+                                <TabsTrigger key={g.type} value={g.type} data-testid={`tab-reference-${g.type}`}>
+                                  {g.label} ({g.items.length})
+                                </TabsTrigger>
+                              ))}
+                            </TabsList>
+                            {orderedGroups.map(g => (
+                              <TabsContent key={g.type} value={g.type} className="space-y-4">
+                                {g.items.map((item, idx) => (
+                                  <div key={`${item.pageType}-${item.pageIndex}-${idx}`} className="space-y-2">
+                                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                      <span data-testid={`text-reference-label-${item.pageType}-${item.pageIndex}`}>
+                                        {g.label}{item.pavimento && item.pavimento !== "all" ? ` — ${item.pavimento}` : ""} (pag. {item.pageIndex + 1})
+                                      </span>
+                                      <a href={item.image} download={`${item.pageType}-pag${item.pageIndex + 1}.${item.mimeType === "application/pdf" ? "pdf" : "png"}`}>
+                                        <Button variant="outline" size="sm" data-testid={`button-download-reference-${item.pageType}-${item.pageIndex}`}>
+                                          <Download className="h-3.5 w-3.5 mr-1" /> Baixar
+                                        </Button>
+                                      </a>
+                                    </div>
+                                    {item.mimeType === "application/pdf" ? (
+                                      <div className="border rounded overflow-hidden bg-slate-100 dark:bg-slate-900" style={{ minHeight: 480 }}>
+                                        <PdfViewer url={item.image} className="h-[600px]" />
+                                      </div>
+                                    ) : (
+                                      <img
+                                        src={item.image}
+                                        alt={`${g.label} pag. ${item.pageIndex + 1}`}
+                                        className="block w-full h-auto rounded border"
+                                        data-testid={`img-reference-${item.pageType}-${item.pageIndex}`}
+                                      />
+                                    )}
+                                  </div>
+                                ))}
+                              </TabsContent>
+                            ))}
+                          </Tabs>
+                        </CardContent>
+                      </Card>
+                    );
+                  })()}
+
                   {/* If no AI image, show bbox-based annotated plan only (no schematic fallback) */}
                   {!annotatedPlan?.data?.image && !annotatedPlan?.data?.images && planWalls.length > 0 && hasBboxWalls && files && files.length > 0 && (
                     <AnnotatedFloorPlan
