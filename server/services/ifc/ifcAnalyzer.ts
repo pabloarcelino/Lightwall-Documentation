@@ -1,6 +1,18 @@
 import * as fs from "fs";
 import * as path from "path";
 import { createRequire } from "module";
+
+/**
+ * Resolve the web-ifc package directory in a way that works for both:
+ *  - Dev (ESM via tsx): no global `require`, but cwd is the project root.
+ *  - Production (CJS bundle from esbuild): global `require` is available.
+ * We avoid `import.meta.url` because it's emitted as empty by esbuild in CJS.
+ */
+function resolveWebIfcDir(): string {
+  const globalRequire = (globalThis as any).require as NodeRequire | undefined;
+  const requireFn: NodeRequire = globalRequire ?? createRequire(path.join(process.cwd(), "package.json"));
+  return path.dirname(requireFn.resolve("web-ifc"));
+}
 import {
   IfcAPI,
   IFCWALL,
@@ -35,8 +47,8 @@ async function getApi(): Promise<IfcAPI> {
   if (apiInitPromise) return apiInitPromise;
   apiInitPromise = (async () => {
     const api = new IfcAPI();
-    const localRequire = createRequire(import.meta.url);
-    const wasmDir = path.dirname(localRequire.resolve("web-ifc")) + path.sep;
+    const wasmDir = resolveWebIfcDir() + path.sep;
+    console.log(`[IFC] Carregando WASM de: ${wasmDir}`);
     api.SetWasmPath(wasmDir, true);
     await api.Init(undefined, true);
     apiSingleton = api;
