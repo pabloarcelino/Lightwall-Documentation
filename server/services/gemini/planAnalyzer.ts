@@ -1008,6 +1008,22 @@ function parseGeometryJSON(parsed: any, rawText: string, defaultNivel: string): 
     return { walls, slabs: [], corners: [] };
   }
 
+  const toNum = (v: any, fallback = 0): number => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = parseFloat(v.replace(",", "."));
+      if (Number.isFinite(n)) return n;
+    }
+    return fallback;
+  };
+  const toNumOrFirst = (...vals: any[]): number => {
+    for (const v of vals) {
+      const n = toNum(v, NaN);
+      if (Number.isFinite(n) && n !== 0) return n;
+    }
+    return 0;
+  };
+
   const walls: ExtractedWall[] = (parsed.walls || []).map((w: any, i: number) => {
     const rawBox = w.box_2d || w.bbox || w.boundingBox || null;
     let bbox: [number, number, number, number] | undefined;
@@ -1021,20 +1037,20 @@ function parseGeometryJSON(parsed: any, rawText: string, defaultNivel: string): 
       id: w.id || `P${i + 1}`,
       nivel: w.nivel || defaultNivel,
       classe: (w.classe === "muro" ? "muro" : (w.classe === "interna" ? "interna" : "externa")) as "externa" | "interna" | "muro",
-      comprimento_m: w.comprimento_m || w.length || 0,
-      altura_m: w.altura_m || w.height || 3.0,
-      espessura_m: w.espessura_m || 0.10,
+      comprimento_m: toNumOrFirst(w.comprimento_m, w.length),
+      altura_m: toNumOrFirst(w.altura_m, w.height) || 3.0,
+      espessura_m: toNum(w.espessura_m, 0.10) || 0.10,
       measurement_source: w.measurement_source || "inferred_from_symbol",
-      confidence: w.confidence || 0.7,
+      confidence: toNum(w.confidence, 0.7),
       has_door: !!w.has_door,
       has_window: !!w.has_window,
-      opening_area_m2: w.opening_area_m2 || 0,
+      opening_area_m2: toNum(w.opening_area_m2, 0),
       esquadrias: Array.isArray(w.esquadrias) ? w.esquadrias.map((e: any) => ({
         tipo: e.tipo || "porta",
         codigo: e.codigo || "",
-        largura_m: e.largura_m || 0,
-        altura_m: e.altura_m || 0,
-        peitoril_m: e.peitoril_m,
+        largura_m: toNum(e.largura_m, 0),
+        altura_m: toNum(e.altura_m, 0),
+        peitoril_m: e.peitoril_m === undefined || e.peitoril_m === null ? undefined : toNum(e.peitoril_m, 0),
         measurement_source: e.measurement_source || "inferred_from_symbol",
       })) : [],
       bbox,
@@ -1046,15 +1062,15 @@ function parseGeometryJSON(parsed: any, rawText: string, defaultNivel: string): 
     id: s.id || `L${i + 1}`,
     nivel: s.nivel || defaultNivel,
     classe: s.classe || (s.nivel?.toLowerCase().includes("coberta") ? "coberta" : "piso"),
-    area_m2: s.area_m2 || s.area || 0,
+    area_m2: toNumOrFirst(s.area_m2, s.area),
     measurement_source: s.measurement_source || "inferred_from_symbol",
-    confidence: s.confidence || 0.7,
+    confidence: toNum(s.confidence, 0.7),
   }));
 
   const corners: ExtractedCorner[] = (parsed.corners || []).map((c: any, i: number) => ({
     id: c.id || `C${i + 1}`,
     nivel: c.nivel || defaultNivel,
-    qtd_cantos: c.qtd_cantos || 0,
+    qtd_cantos: Math.round(toNum(c.qtd_cantos, 0)),
   }));
 
   return { walls, slabs, corners };

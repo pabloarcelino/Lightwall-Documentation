@@ -63,13 +63,29 @@ export interface BudgetResult {
   aviso: string;
 }
 
+function num(v: any, fallback = 0): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = parseFloat(v.replace(",", "."));
+    if (Number.isFinite(n)) return n;
+  }
+  return fallback;
+}
+
 function applyWallDefaults(wall: ExtractedWall): ExtractedWall {
   const w = { ...wall, esquadrias: [...(wall.esquadrias || [])] };
+  w.altura_m = num(w.altura_m, 0);
+  w.espessura_m = num(w.espessura_m, 0);
+  w.comprimento_m = num(w.comprimento_m, 0);
+  w.opening_area_m2 = num(w.opening_area_m2, 0);
   if (!w.altura_m || w.altura_m <= 0) w.altura_m = DEFAULT_ASSUMPTIONS.wallHeight.value;
   if (!w.espessura_m || w.espessura_m <= 0) w.espessura_m = 0.10;
   if (!w.comprimento_m || w.comprimento_m <= 0) w.comprimento_m = 0;
 
   for (const esq of w.esquadrias) {
+    esq.largura_m = num(esq.largura_m, 0);
+    esq.altura_m = num(esq.altura_m, 0);
+    if (esq.peitoril_m !== undefined && esq.peitoril_m !== null) esq.peitoril_m = num(esq.peitoril_m, 0);
     if (esq.tipo === "porta") {
       if (!esq.largura_m || esq.largura_m <= 0) esq.largura_m = DEFAULT_ASSUMPTIONS.doorWidth.value;
       if (!esq.altura_m || esq.altura_m <= 0) esq.altura_m = DEFAULT_ASSUMPTIONS.doorHeight.value;
@@ -127,15 +143,18 @@ export function fusionMultiView(
 
   if (tableData) {
     for (const tw of tableData.paredes_de_tabela) {
+      const twComprimento = num(tw.comprimento_m, 0);
+      const twAltura = num(tw.altura_m, 0);
+      const twEspessura = num(tw.espessura_m, 0.10);
       const existing = allWalls.find(w =>
         w.nivel === tw.nivel &&
         w.classe === (tw.classe as "externa" | "interna" | "muro") &&
-        Math.abs(w.comprimento_m - tw.comprimento_m) < 0.5
+        Math.abs(w.comprimento_m - twComprimento) < 0.5
       );
       if (existing) {
-        existing.comprimento_m = tw.comprimento_m;
-        existing.altura_m = tw.altura_m;
-        existing.espessura_m = tw.espessura_m;
+        existing.comprimento_m = twComprimento;
+        existing.altura_m = twAltura;
+        existing.espessura_m = twEspessura;
         existing.measurement_source = "table";
         existing.confidence = 0.95;
       } else {
@@ -143,9 +162,9 @@ export function fusionMultiView(
           id: tw.id || `PT${allWalls.length + 1}`,
           nivel: tw.nivel || "Terreo",
           classe: (tw.classe === "muro" ? "muro" : tw.classe === "interna" ? "interna" : "externa") as "externa" | "interna" | "muro",
-          comprimento_m: tw.comprimento_m,
-          altura_m: tw.altura_m,
-          espessura_m: tw.espessura_m,
+          comprimento_m: twComprimento,
+          altura_m: twAltura,
+          espessura_m: twEspessura,
           measurement_source: "table",
           confidence: 0.95,
           has_door: false, has_window: false, opening_area_m2: 0, esquadrias: [],
@@ -154,11 +173,13 @@ export function fusionMultiView(
     }
 
     for (const te of tableData.esquadrias_de_tabela) {
+      const teLargura = num(te.largura_m, 0);
+      const teAltura = num(te.altura_m, 0);
       for (const wall of allWalls) {
         for (const esq of wall.esquadrias) {
           if (esq.codigo === te.codigo) {
-            esq.largura_m = te.largura_m;
-            esq.altura_m = te.altura_m;
+            esq.largura_m = teLargura;
+            esq.altura_m = teAltura;
             esq.measurement_source = "table";
           }
         }
@@ -168,11 +189,12 @@ export function fusionMultiView(
     if (tableData.areas_de_tabela.length > 0) {
       const areasByNivel = new Map<string, number>();
       for (const at of tableData.areas_de_tabela) {
+        const atArea = num(at.area_m2, 0);
         if (at.tipo === "area_total") {
-          areasByNivel.set(at.nivel, at.area_m2);
+          areasByNivel.set(at.nivel, atArea);
         } else {
           const current = areasByNivel.get(at.nivel) || 0;
-          areasByNivel.set(at.nivel, current + at.area_m2);
+          areasByNivel.set(at.nivel, current + atArea);
         }
       }
 
