@@ -180,7 +180,11 @@ const upload = multer({
     if (allowed.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Formato não suportado. Use PDF, PNG, JPG, WEBP, BMP ou TIFF."));
+      const err: any = new Error(
+        `Formato não suportado: "${file.originalname}" (${file.mimetype}). Use PDF, PNG, JPG, WEBP, BMP ou TIFF.`,
+      );
+      err.status = 400;
+      cb(err);
     }
   },
 });

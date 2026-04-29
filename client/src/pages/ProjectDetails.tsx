@@ -1181,11 +1181,18 @@ export default function ProjectDetails() {
                             method: "POST",
                             body: formData,
                           });
-                          if (!res.ok) throw new Error("Erro no upload");
+                          if (!res.ok) {
+                            const errBody = await res.json().catch(() => ({} as any));
+                            throw new Error(errBody?.message || `Erro no upload (HTTP ${res.status})`);
+                          }
                           queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
                           toast({ title: `${selectedFiles.length} arquivo(s) adicionado(s)` });
-                        } catch {
-                          toast({ title: "Erro no upload", variant: "destructive" });
+                        } catch (err: any) {
+                          toast({
+                            title: "Erro no upload",
+                            description: err?.message || "Falha desconhecida ao enviar arquivo.",
+                            variant: "destructive",
+                          });
                         }
                         e.target.value = "";
                       }}

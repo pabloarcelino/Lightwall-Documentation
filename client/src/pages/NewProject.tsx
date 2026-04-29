@@ -65,10 +65,12 @@ export default function NewProject() {
         );
 
         if (!uploadRes.ok) {
+          const errBody = await uploadRes.json().catch(() => ({} as any));
           toast({
             title: "Aviso",
             description:
-              "Projeto criado, mas houve erro no upload dos arquivos",
+              errBody?.message ||
+              `Projeto criado, mas houve erro no upload dos arquivos (HTTP ${uploadRes.status})`,
             variant: "destructive",
           });
         }
