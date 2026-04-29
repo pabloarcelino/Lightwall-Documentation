@@ -255,7 +255,15 @@ export default function AnnotatedFloorPlan({ projectId, walls, files, highlighte
       setAiSummary(json.summary || null);
       toast({ title: "Imagem anotada gerada", description: "A IA pintou os elementos identificados." });
     } catch (e: any) {
-      toast({ title: "Falha ao gerar imagem", description: e?.message || "Erro desconhecido", variant: "destructive" });
+      const raw = e?.message || "Erro desconhecido";
+      // Strip giant JSON dumps from upstream API errors so the toast stays readable.
+      const friendly = raw.length > 240 ? raw.replace(/\{[\s\S]*$/, "").trim() || raw.slice(0, 240) + "..." : raw;
+      toast({
+        title: "Falha ao gerar imagem",
+        description: friendly,
+        variant: "destructive",
+        duration: 10000,
+      });
     } finally {
       setAiLoading(false);
     }

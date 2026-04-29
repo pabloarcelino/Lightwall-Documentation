@@ -66,6 +66,20 @@ export async function editImage(
 
   if (!response.ok) {
     const errText = await response.text();
+    // Detect well-known Gemini errors and surface a clean, actionable message.
+    if (response.status === 400 && /API_KEY_INVALID|API key not valid/i.test(errText)) {
+      throw new Error(
+        "Chave Gemini invalida. Configure uma chave valida em Configuracoes (AI_INTEGRATIONS_GEMINI_API_KEY) ou use o modo OpenAI.",
+      );
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(
+        "Acesso negado pela API Gemini (chave ausente ou sem permissao). Verifique sua chave em Configuracoes.",
+      );
+    }
+    if (response.status === 429) {
+      throw new Error("Limite de uso da API Gemini atingido. Tente novamente em alguns instantes.");
+    }
     throw new Error(`Gemini image API error ${response.status}: ${errText.substring(0, 300)}`);
   }
 
