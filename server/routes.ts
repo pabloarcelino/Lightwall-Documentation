@@ -12,6 +12,7 @@ import {
   setUserApiKey,
   clearUserApiKey,
   splitPdfPages,
+  getFilePages,
   type PageClassification,
   type GeometryResult,
   type TableData,
@@ -51,6 +52,7 @@ import { registerTakeoffRoutes } from "./takeoffRoutes";
 import { editImage } from "./replit_integrations/image/client";
 import { cvAnalyze, cvAnnotate, isCvServiceAvailable } from "./services/cv/client";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
+import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
 
 const progressClients = new Map<number, Response[]>();
 
@@ -755,13 +757,14 @@ export async function registerRoutes(
     console.log(`[PIPELINE] Escopo selecionado: ext=${scope.paredesExternas} int=${scope.paredesInternas} piso=${scope.lajePiso} coberta=${scope.lajeCoberta} cantos=${scope.cantos}`);
     console.log(`[PIPELINE] Modo de analise: ${analysisMode} | Pe-direito: ${peDireito}m`);
 
-    // Pre-validate OpenAI key for openai-only mode before entering the run context.
-    if (analysisMode === "openai-only" && !hasOpenAIKey()) {
+    // Pre-validate OpenAI key for OpenAI-based modes before entering the run context.
+    if ((analysisMode === "openai-only" || analysisMode === "openai-vision-takeoff") && !hasOpenAIKey()) {
       return res.status(400).json({
         message: "Modo OpenAI selecionado mas nenhuma chave OpenAI esta configurada. Adicione a chave em Configuracoes.",
       });
     }
-    const providerForRun: "gemini" | "openai" = analysisMode === "openai-only" ? "openai" : "gemini";
+    const providerForRun: "gemini" | "openai" =
+      analysisMode === "openai-only" || analysisMode === "openai-vision-takeoff" ? "openai" : "gemini";
     if (providerForRun === "openai") {
       console.log(`[PIPELINE] Roteando para OpenAI (modelo: ${getOpenAIModelName()})`);
     }
@@ -794,12 +797,13 @@ export async function registerRoutes(
       let mergedTableData: TableData = { paredes_de_tabela: [], esquadrias_de_tabela: [], areas_de_tabela: [] };
       const pipelineFailedPages: Array<{ fileId: number; fileName: string; pageIndex: number }> = [];
       const cvAnnotatedImages: Array<{ pavimento: string; pageIndex: number; image: string }> = [];
-      // CV service is only used by Gemini hybrid modes; bypass it for openai-only and gemini-only.
-      const cvServiceUp = (analysisMode !== "gemini-only" && analysisMode !== "openai-only")
+      // CV service is only used by Gemini hybrid modes; bypass it for openai-only, openai-vision-takeoff and gemini-only.
+      const cvServiceUp = (analysisMode !== "gemini-only" && analysisMode !== "openai-only" && analysisMode !== "openai-vision-takeoff")
         ? await isCvServiceAvailable()
         : false;
       if (analysisMode === "gemini-only") console.log("[PIPELINE] Modo Gemini-only selecionado");
       else if (analysisMode === "openai-only") console.log("[PIPELINE] Modo OpenAI-only selecionado");
+      else if (analysisMode === "openai-vision-takeoff") console.log("[PIPELINE] Modo OpenAI Vision Takeoff selecionado");
       else if (cvServiceUp) console.log("[PIPELINE] CV service disponivel");
       else console.log("[PIPELINE] CV service indisponivel — fallback para Gemini-only");
       const userBuildingType = project.buildingType || undefined;
@@ -924,6 +928,80 @@ export async function registerRoutes(
               return geometry;
             };
 
+            // Helper: run OpenAI Vision Takeoff pipeline (per planta_baixa page, structured-output JSON)
+            const runOpenAiVisionPipeline = async (): Promise<GeometryResult> => {
+              const geo: GeometryResult = { walls: [], slabs: [], corners: [] };
+              if (plantaPages.length === 0) return geo;
+              const service = new AiTakeoffService();
+              // Supports both PDF (multi-page) and single-page images
+              const pages = await getFilePages(path.resolve(file.filePath), file.fileType);
+              for (const pc of plantaPages) {
+                const page = pages.find(p => p.pageIndex === pc.page_index);
+                if (!page) continue;
+                const raw64 = page.base64.includes(",") ? page.base64.split(",", 2)[1] : page.base64;
+                const pavimento = pc.pavimento || "Terreo";
+                try {
+                  const result = await service.analyzeSheetImage({
+                    projectId,
+                    pageId: null,
+                    pageNumber: pc.page_index + 1,
+                    pageLabel: `Pag ${pc.page_index + 1}`,
+                    pavimento,
+                    imageBase64: raw64,
+                    imageMimeType: page.mimeType,
+                    imageWidthPx: 2480,
+                    imageHeightPx: 3508,
+                  });
+                  let segCount = 0;
+                  let slabCount = 0;
+                  for (const seg of result.sheet.segments) {
+                    const len = seg.length_m_ai ?? seg.length_m_calculated ?? 0;
+                    if (!len || len <= 0) continue;
+                    const classe: "externa" | "interna" | "muro" =
+                      seg.category === "parede_externa" ? "externa" :
+                      seg.category === "parede_interna" ? "interna" : "muro";
+                    geo.walls.push({
+                      id: `${file.id}-${pc.page_index}-${seg.id}`,
+                      nivel: pavimento,
+                      classe,
+                      comprimento_m: len,
+                      altura_m: seg.height_m ?? peDireito,
+                      espessura_m: 0.10,
+                      measurement_source: "ai_vision_takeoff",
+                      confidence: seg.confidence ?? 0.75,
+                      has_door: false,
+                      has_window: false,
+                      opening_area_m2: 0,
+                      esquadrias: [],
+                      page_index: pc.page_index,
+                    });
+                    segCount++;
+                  }
+                  for (const sl of result.sheet.slabs) {
+                    const area = sl.area_m2_declared ?? sl.area_m2_ai ?? sl.area_m2_calculated ?? 0;
+                    if (!area || area <= 0) continue;
+                    const classe: "piso" | "coberta" =
+                      sl.category === "laje_piso" ? "piso" : "coberta";
+                    geo.slabs.push({
+                      id: `${file.id}-${pc.page_index}-${sl.id}`,
+                      nivel: pavimento,
+                      classe,
+                      area_m2: area,
+                      measurement_source: "ai_vision_takeoff",
+                      confidence: sl.confidence ?? 0.75,
+                    });
+                    slabCount++;
+                  }
+                  console.log(`[ETAPA 3 OPENAI-VISION] Pav ${pavimento} pg ${pc.page_index}: ${segCount} paredes, ${slabCount} lajes`);
+                } catch (err: any) {
+                  console.error(`[ETAPA 3 OPENAI-VISION] Falha pg ${pc.page_index}:`, err?.message || err);
+                  pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: pc.page_index });
+                  recordFailedPage({ fileId: file.id, fileName: file.originalName, pageIndex: pc.page_index, reason: `OpenAI Vision: ${err?.message || "erro desconhecido"}` });
+                }
+              }
+              return geo;
+            };
+
             // Helper: store geometry in DB
             const storeGeometry = async (geometry: GeometryResult) => {
               for (const wall of geometry.walls) {
@@ -938,7 +1016,14 @@ export async function registerRoutes(
             };
 
             // ===== Execute based on analysisMode =====
-            if (analysisMode === "combinada" && cvServiceUp && plantaPages.length > 0) {
+            if (analysisMode === "openai-vision-takeoff") {
+              sendProgress(projectId, 3, "Extracao Geometrica (OpenAI Vision)", "running", `Analisando ${file.originalName} via OpenAI Vision Takeoff...`);
+              const geometry = await runOpenAiVisionPipeline();
+              allGeometries.push(geometry);
+              await storeGeometry(geometry);
+              sendProgress(projectId, 3, "Extracao Geometrica (OpenAI Vision)", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes (OpenAI Vision)`);
+
+            } else if (analysisMode === "combinada" && cvServiceUp && plantaPages.length > 0) {
               // COMBINADA: run both in parallel, merge via fusionMultiView
               sendProgress(projectId, 3, "Extracao Geometrica (Combinada)", "running", `Executando CV + Gemini em paralelo para ${file.originalName}...`);
               sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);

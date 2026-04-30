@@ -8,7 +8,7 @@ Output format matches the real Lightwall commercial proposal format (4 categorie
 ## Architecture
 - **Frontend**: React 18 + TypeScript, Tailwind CSS + Shadcn UI, TanStack Query, wouter routing, react-dropzone
 - **Backend**: Express + TypeScript, Drizzle ORM, PostgreSQL
-- **AI**: Google Gemini 2.5 Pro via Replit AI Integrations or user's own API key (`@google/genai` with `GoogleGenAI` class). Optional OpenAI GPT-4o for cross-model verification (Etapa 3.5). Optional **OpenAI-only mode** that runs the entire pipeline through OpenAI (default model `gpt-5-mini`, configurable in Settings) instead of Gemini, selected per-project via the analysisMode dropdown.
+- **AI**: Google Gemini 2.5 Pro via Replit AI Integrations or user's own API key (`@google/genai` with `GoogleGenAI` class). Optional OpenAI GPT-4o for cross-model verification (Etapa 3.5). Optional **OpenAI-only mode** that runs the entire pipeline through OpenAI (default model `gpt-5-mini`, configurable in Settings) instead of Gemini, selected per-project via the analysisMode dropdown. Additional **OpenAI Vision Takeoff mode** uses OpenAI Responses API with strict JSON Schema (structured outputs via `AiTakeoffService`) per planta_baixa page to extract paredes/lajes; results map directly into the existing pipeline (fusion → budget → annotated PNG). All AI runs are audited in the `ai_runs` table.
 - **Export**: PDFKit (PDF), ExcelJS (Excel), JSON
 
 ## 8-Step Processing Pipeline (with AI enhancements)

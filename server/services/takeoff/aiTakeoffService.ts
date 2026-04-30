@@ -14,7 +14,7 @@ import {
 
 export interface AnalyzeOptions {
   projectId: number;
-  pageId: number;
+  pageId: number | null;
   pageNumber: number;
   pageLabel?: string | null;
   pavimento?: string | null;

@@ -295,7 +295,7 @@ export async function splitPdfPages(pdfPath: string): Promise<Array<{ pageIndex:
   return pages;
 }
 
-async function getFilePages(filePath: string, fileType?: string): Promise<Array<{ pageIndex: number; base64: string; mimeType: string }>> {
+export async function getFilePages(filePath: string, fileType?: string): Promise<Array<{ pageIndex: number; base64: string; mimeType: string }>> {
   const mimeType = getMimeType(filePath, fileType);
 
   if (mimeType === "application/pdf") {
