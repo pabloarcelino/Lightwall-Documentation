@@ -7,7 +7,6 @@ import { storage } from "./storage";
 import {
   classifyAndExtractTables,
   extractGeometryParallel,
-  verifyExtraction,
   describeProject,
   setUserApiKey,
   clearUserApiKey,
@@ -39,6 +38,10 @@ import {
   budgetToLegacy,
   inconsistenciasToAlerts,
 } from "./services/calculation/engine";
+import { validateGeometry, summarizeValidation } from "./services/calculation/geometryValidator";
+import { inspectFile, summarizePreflight } from "./services/preflight/inspector";
+import { extractFromVectorPdf } from "./services/preflight/pdfVectorExtractor";
+import { auditAiCall } from "./services/audit/aiAuditor";
 import type { ExtractedWall, ExtractedSlab, ExtractedCorner } from "./services/gemini/planAnalyzer";
 import {
   exportToExcel,
@@ -48,7 +51,6 @@ import {
 
 import type { Response } from "express";
 import { requireAuth } from "./auth";
-import { registerTakeoffRoutes } from "./takeoffRoutes";
 import { editImage } from "./replit_integrations/image/client";
 import { cvAnalyze, cvAnnotate, isCvServiceAvailable } from "./services/cv/client";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
@@ -315,8 +317,6 @@ export async function registerRoutes(
     if (req.path.startsWith("/auth/")) return next();
     return requireAuth(req, res, next);
   });
-
-  registerTakeoffRoutes(app);
 
   const savedGeminiKey = await storage.getSetting("gemini_api_key");
   if (savedGeminiKey && savedGeminiKey.length > 0) {
@@ -812,6 +812,20 @@ export async function registerRoutes(
 
       for (const file of files) {
         try {
+          // ===== Pre-flight inspection: detect file type, vector vs raster, recommend mode =====
+          let preflight: Awaited<ReturnType<typeof inspectFile>> | null = null;
+          try {
+            sendProgress(projectId, 0, "Pre-flight", "running", `Inspecionando ${file.originalName}...`);
+            preflight = await inspectFile(path.resolve(file.filePath), file.fileType);
+            const summary = summarizePreflight(preflight);
+            console.log(`[PREFLIGHT] ${file.originalName}: ${summary}`);
+            for (const n of preflight.notes) console.log(`[PREFLIGHT]   - ${n}`);
+            sendProgress(projectId, 0, "Pre-flight", "done", `${file.originalName}: ${summary}`);
+          } catch (preErr: any) {
+            console.warn(`[PREFLIGHT] Falha ao inspecionar ${file.originalName}:`, preErr?.message || preErr);
+            sendProgress(projectId, 0, "Pre-flight", "done", `Inspeção pulada (${preErr?.message || "erro"})`);
+          }
+
           // ===== IFC pipeline: skip Gemini entirely, parse structured data directly =====
           if (file.fileType === "ifc") {
             sendProgress(projectId, 1, "Leitura IFC", "running", `Lendo modelo BIM ${file.originalName}...`);
@@ -843,7 +857,25 @@ export async function registerRoutes(
           }
 
           sendProgress(projectId, 1, "Classificacao + Tabelas", "running", `Classificando e extraindo tabelas de ${file.originalName} (chamada unificada, paginas em paralelo)...`);
-          const ctResult = await classifyAndExtractTables(file.filePath, file.fileType, 3, !!userBuildingType);
+          const ctModel = providerForRun === "openai" ? `openai:${getOpenAIModelName()}` : "gemini-2.5-pro";
+          const ctResult = await auditAiCall(
+            {
+              projectId,
+              promptVersion: "classifyAndExtractTables_v1",
+              model: ctModel,
+              inputSummary: `file=${file.originalName} type=${file.fileType} maxPages=3 userBuildingType=${!!userBuildingType}`,
+              inputFileId: String(file.id),
+            },
+            () => classifyAndExtractTables(file.filePath, file.fileType, 3, !!userBuildingType),
+            (out: any) => ({
+              classCount: out?.classifications?.length ?? 0,
+              tableWalls: out?.tableData?.paredes_de_tabela?.length ?? 0,
+              tableWindows: out?.tableData?.esquadrias_de_tabela?.length ?? 0,
+              tableAreas: out?.tableData?.areas_de_tabela?.length ?? 0,
+              detectedBuildingType: out?.detectedBuildingType ?? null,
+              failedPages: out?.failedPages ?? [],
+            }),
+          );
           const { classifications, tableData, failedPages: ctFailed, detectedBuildingType: fileBuildingType } = ctResult;
 
           if (fileBuildingType && !detectedBuildingType) {
@@ -917,7 +949,23 @@ export async function registerRoutes(
 
             // Helper: run Gemini-only pipeline (Flash extraction + Flash per-floor verification, all parallel)
             const runGeminiPipeline = async (): Promise<GeometryResult> => {
-              const geoResult = await extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType(), peDireito);
+              const geoModel = providerForRun === "openai" ? `openai:${getOpenAIModelName()}` : "gemini-2.5-flash";
+              const geoResult = await auditAiCall(
+                {
+                  projectId,
+                  promptVersion: "extractGeometryParallel_v1",
+                  model: geoModel,
+                  inputSummary: `file=${file.originalName} type=${file.fileType} pages=${classifications.length} buildingType=${effectiveBuildingType() || "n/a"} peDireito=${peDireito}`,
+                  inputFileId: String(file.id),
+                },
+                () => extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType(), peDireito),
+                (out: any) => ({
+                  walls: out?.walls?.length ?? 0,
+                  slabs: out?.slabs?.length ?? 0,
+                  corners: out?.corners?.length ?? 0,
+                  failedPages: out?.failedPages ?? [],
+                }),
+              );
               for (const p of geoResult.failedPages) {
                 pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: p });
                 recordFailedPage({ fileId: file.id, fileName: file.originalName, pageIndex: p, reason: "Falha na extracao geometrica" });
@@ -1015,6 +1063,28 @@ export async function registerRoutes(
               }
             };
 
+            // ===== Native PDF vector extraction (additional source for vector PDFs) =====
+            if (preflight?.isPdfVector && file.fileType === "pdf" && plantaPages.length > 0) {
+              try {
+                sendProgress(projectId, 2.5, "Extracao Vetorial Nativa", "running", `Lendo geometria nativa do PDF ${file.originalName}...`);
+                // Restrict to planta_baixa pages only (avoid facades/cortes/details)
+                const pavMap = new Map<number, string>();
+                for (const pc of plantaPages) pavMap.set(pc.page_index, pc.pavimento || "Terreo");
+                const vec = await extractFromVectorPdf(path.resolve(file.filePath), pavMap, peDireito);
+                if (vec.geometry.walls.length > 0 || vec.geometry.slabs.length > 0) {
+                  allGeometries.push(vec.geometry);
+                  await storeGeometry(vec.geometry);
+                }
+                sendProgress(projectId, 2.5, "Extracao Vetorial Nativa", "done",
+                  `${vec.candidateWallCount} paredes em ${vec.pagesProcessed} plantas (${vec.segmentCount} segmentos, escala: ${vec.scale.detail})`);
+                console.log(`[PDF-VECTOR] ${file.originalName}: ${vec.candidateWallCount} paredes (escala ${vec.scale.source})`);
+                for (const n of vec.notes.slice(0, 5)) console.log(`[PDF-VECTOR]   - ${n}`);
+              } catch (vErr: any) {
+                console.warn(`[PDF-VECTOR] Falha em ${file.originalName}:`, vErr?.message || vErr);
+                sendProgress(projectId, 2.5, "Extracao Vetorial Nativa", "done", `Pulado (${vErr?.message || "erro"})`);
+              }
+            }
+
             // ===== Execute based on analysisMode =====
             if (analysisMode === "openai-vision-takeoff") {
               sendProgress(projectId, 3, "Extracao Geometrica (OpenAI Vision)", "running", `Analisando ${file.originalName} via OpenAI Vision Takeoff...`);
@@ -1100,6 +1170,17 @@ export async function registerRoutes(
       const hasTableData = mergedTableData.paredes_de_tabela.length > 0 || mergedTableData.esquadrias_de_tabela.length > 0;
       const fused = fusionMultiView(allGeometries, hasTableData ? mergedTableData : null, effectiveBuildingType());
       sendProgress(projectId, 4, "Fusao Multivista", "done", `${fused.walls.length} paredes, ${fused.slabs.length} lajes, ${fused.corners.length} cantos (apos deduplicacao)`);
+
+      // ===== Geometric validators (plausibility filters) =====
+      sendProgress(projectId, 4.5, "Validacao Geometrica", "running", "Removendo geometria implausivel...");
+      const validated = validateGeometry(fused.walls, fused.slabs, fused.corners, { defaultPeDireitoM: peDireito });
+      fused.walls = validated.walls;
+      fused.slabs = validated.slabs;
+      fused.corners = validated.corners;
+      const valSummary = summarizeValidation(validated.stats);
+      console.log(`[VALIDATOR] ${valSummary}`);
+      for (const n of validated.stats.notes) console.log(`[VALIDATOR]   - ${n}`);
+      sendProgress(projectId, 4.5, "Validacao Geometrica", "done", valSummary);
 
       const scopedWalls = fused.walls.filter(w => {
         if (w.classe === "externa" && !scope.paredesExternas) return false;
@@ -1503,7 +1584,17 @@ export async function registerRoutes(
         sendProgress(projectId, 8, "Descricao do Projeto", "done", "Resumo gerado a partir do modelo BIM.");
       } else {
         sendProgress(projectId, 8, "Descricao do Projeto", "running", "A IA esta analisando profundamente as imagens para descrever o projeto...");
-        projectDescription = await describeProject(filePaths, allClassifications, geometrySummary, budgetSummaryForDesc);
+        const descModel = providerForRun === "openai" ? `openai:${getOpenAIModelName()}` : "gemini-2.5-pro";
+        projectDescription = await auditAiCall(
+          {
+            projectId,
+            promptVersion: "describeProject_v1",
+            model: descModel,
+            inputSummary: `files=${filePaths.length} pages=${allClassifications.length}`,
+          },
+          () => describeProject(filePaths, allClassifications, geometrySummary, budgetSummaryForDesc),
+          (out: any) => ({ length: typeof out === "string" ? out.length : 0 }),
+        );
         descriptionFailed = projectDescription.startsWith("Nao foi possivel");
         if (descriptionFailed) {
           sendProgress(projectId, 8, "Descricao do Projeto", "error", "Falha ao gerar descricao automatica. O orcamento foi calculado normalmente.");

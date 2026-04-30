@@ -164,7 +164,14 @@ budgetData = {
 - Key files: server/auth.ts, client/src/pages/Login.tsx
 
 ## Database
-- PostgreSQL with 7 tables: users, products (with panel_type), projects, project_files, extracted_data, budgets, settings + user_sessions (auto-managed)
+- PostgreSQL with 8 tables: users, products (with panel_type), projects, project_files, extracted_data, budgets, settings, ai_runs + user_sessions (auto-managed)
+- Orphan tables removed (Apr 2026): takeoff_segments, takeoff_slabs, takeoff_revisions, takeoff_exports, project_pages
+
+## Pre-flight & Native PDF Vector Pipeline (Apr 2026)
+- **server/services/preflight/inspector.ts**: Inspects every uploaded file before any IA call. Returns {fileType, isPdfVector, pageCount, hasEmbeddedText, dimensions, recommendedMode}. Counts only path-drawing OPS (constructPath/rectangle/stroke/fill) and applies a paths-per-page ratio check to distinguish true vector PDFs from raster-only scans. Result is logged + sent as a progress event.
+- **server/services/preflight/pdfVectorExtractor.ts**: Native vector extraction via pdfjs-dist v5 legacy build. Handles the v5 fused `constructPath(op, data, minMax)` encoding where `args[0]` is the painting op (whitelisted: stroke/closeStroke/fill/eoFill/fillStroke/eoFillStroke/closeFillStroke/closeEOFillStroke) and `args[1]` is a Float32Array of inline DrawOPS (moveTo=0, lineTo=1, curveTo=2, quadraticCurveTo=3, closePath=4). Includes standalone OPS.rectangle handler. Wall pairing uses real projected overlap + collinearity (>=60% min side). Scale derived from cota text with a dispersion gate: requires >=60% of cotas to agree within +/-25% of median, otherwise falls back to default 1:50 scale. Scoped to plantaPages only. Pushed into allGeometries as candidates with measurement_source="pdf_vector".
+- **server/services/calculation/geometryValidator.ts**: Applied between fusion and budget calc. filterByThickness, snapOrthogonal, closeSmallGaps, removeFloatingWalls, removeOpenSlabLoops + Number.isFinite guards everywhere. Logs dropped/modified counts (e.g., `[VALIDATOR] paredes: 175→175 | lajes: 2→0 (-2)` with reason `2 laje(s) absurdas (> 5000m²)`).
+- **server/services/audit/aiAuditor.ts**: `auditAiCall(name, fn, ctx)` wraps every IA call (classifyAndExtractTables, extractGeometryParallel, describeProject, OpenAI Vision Takeoff). Persists projectId, model (dynamic: `openai:${getOpenAIModelName()}` vs `gemini-2.5-pro/flash`), inputSummary, durationMs, status, errorMessage to `ai_runs`.
 
 ## Scripts
 - `npm run dev` - Development server (port 5000)

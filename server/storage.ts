@@ -7,12 +7,7 @@ import {
   extractedData,
   budgets,
   settings,
-  projectPages,
-  takeoffSegments,
-  takeoffSlabs,
   aiRuns,
-  takeoffRevisions,
-  takeoffExports,
   type Product,
   type InsertProduct,
   type Project,
@@ -24,18 +19,8 @@ import {
   type Budget,
   type InsertBudget,
   type Setting,
-  type ProjectPage,
-  type InsertProjectPage,
-  type TakeoffSegment,
-  type InsertTakeoffSegment,
-  type TakeoffSlab,
-  type InsertTakeoffSlab,
   type AiRun,
   type InsertAiRun,
-  type TakeoffRevision,
-  type InsertTakeoffRevision,
-  type TakeoffExport,
-  type InsertTakeoffExport,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -78,38 +63,9 @@ export interface IStorage {
   getSetting(key: string): Promise<string | undefined>;
   setSetting(key: string, value: string): Promise<void>;
 
-  // ===== Takeoff =====
-  createProjectPage(page: InsertProjectPage): Promise<ProjectPage>;
-  getProjectPages(projectId: number): Promise<ProjectPage[]>;
-  getProjectPage(pageId: number): Promise<ProjectPage | undefined>;
-  updateProjectPage(pageId: number, data: Partial<InsertProjectPage>): Promise<ProjectPage | undefined>;
-  deleteProjectPage(pageId: number): Promise<void>;
-  deleteProjectPages(projectId: number): Promise<void>;
-
-  createTakeoffSegment(segment: InsertTakeoffSegment): Promise<TakeoffSegment>;
-  bulkCreateTakeoffSegments(segments: InsertTakeoffSegment[]): Promise<TakeoffSegment[]>;
-  getTakeoffSegments(projectId: number): Promise<TakeoffSegment[]>;
-  getTakeoffSegment(segmentId: number): Promise<TakeoffSegment | undefined>;
-  updateTakeoffSegment(segmentId: number, data: Partial<InsertTakeoffSegment>): Promise<TakeoffSegment | undefined>;
-  deleteTakeoffSegment(segmentId: number): Promise<void>;
-  deleteTakeoffSegmentsByPage(pageId: number): Promise<void>;
-
-  createTakeoffSlab(slab: InsertTakeoffSlab): Promise<TakeoffSlab>;
-  bulkCreateTakeoffSlabs(slabs: InsertTakeoffSlab[]): Promise<TakeoffSlab[]>;
-  getTakeoffSlabs(projectId: number): Promise<TakeoffSlab[]>;
-  getTakeoffSlab(slabId: number): Promise<TakeoffSlab | undefined>;
-  updateTakeoffSlab(slabId: number, data: Partial<InsertTakeoffSlab>): Promise<TakeoffSlab | undefined>;
-  deleteTakeoffSlab(slabId: number): Promise<void>;
-  deleteTakeoffSlabsByPage(pageId: number): Promise<void>;
-
+  // ===== AI audit =====
   createAiRun(run: InsertAiRun): Promise<AiRun>;
   getAiRuns(projectId: number): Promise<AiRun[]>;
-
-  createTakeoffRevision(rev: InsertTakeoffRevision): Promise<TakeoffRevision>;
-  getTakeoffRevisions(projectId: number): Promise<TakeoffRevision[]>;
-
-  createTakeoffExport(exp: InsertTakeoffExport): Promise<TakeoffExport>;
-  getTakeoffExports(projectId: number): Promise<TakeoffExport[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -298,141 +254,12 @@ export class DatabaseStorage implements IStorage {
   async deleteProject(id: number): Promise<void> {
     await db.delete(budgets).where(eq(budgets.projectId, id));
     await db.delete(extractedData).where(eq(extractedData.projectId, id));
-    await db.delete(takeoffExports).where(eq(takeoffExports.projectId, id));
-    await db.delete(takeoffRevisions).where(eq(takeoffRevisions.projectId, id));
     await db.delete(aiRuns).where(eq(aiRuns.projectId, id));
-    await db.delete(takeoffSegments).where(eq(takeoffSegments.projectId, id));
-    await db.delete(takeoffSlabs).where(eq(takeoffSlabs.projectId, id));
-    await db.delete(projectPages).where(eq(projectPages.projectId, id));
     await db.delete(projectFiles).where(eq(projectFiles.projectId, id));
     await db.delete(projects).where(eq(projects.id, id));
   }
 
-  // ===== Takeoff =====
-  async createProjectPage(page: InsertProjectPage): Promise<ProjectPage> {
-    const [created] = await db.insert(projectPages).values(page).returning();
-    return created;
-  }
-
-  async getProjectPages(projectId: number): Promise<ProjectPage[]> {
-    return db
-      .select()
-      .from(projectPages)
-      .where(eq(projectPages.projectId, projectId))
-      .orderBy(asc(projectPages.pageNumber));
-  }
-
-  async getProjectPage(pageId: number): Promise<ProjectPage | undefined> {
-    const [page] = await db.select().from(projectPages).where(eq(projectPages.id, pageId));
-    return page;
-  }
-
-  async updateProjectPage(
-    pageId: number,
-    data: Partial<InsertProjectPage>,
-  ): Promise<ProjectPage | undefined> {
-    const [updated] = await db
-      .update(projectPages)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(projectPages.id, pageId))
-      .returning();
-    return updated;
-  }
-
-  async deleteProjectPage(pageId: number): Promise<void> {
-    await db.delete(projectPages).where(eq(projectPages.id, pageId));
-  }
-
-  async deleteProjectPages(projectId: number): Promise<void> {
-    await db.delete(projectPages).where(eq(projectPages.projectId, projectId));
-  }
-
-  async createTakeoffSegment(segment: InsertTakeoffSegment): Promise<TakeoffSegment> {
-    const [created] = await db.insert(takeoffSegments).values(segment).returning();
-    return created;
-  }
-
-  async bulkCreateTakeoffSegments(segments: InsertTakeoffSegment[]): Promise<TakeoffSegment[]> {
-    if (segments.length === 0) return [];
-    return db.insert(takeoffSegments).values(segments).returning();
-  }
-
-  async getTakeoffSegments(projectId: number): Promise<TakeoffSegment[]> {
-    return db
-      .select()
-      .from(takeoffSegments)
-      .where(eq(takeoffSegments.projectId, projectId))
-      .orderBy(asc(takeoffSegments.id));
-  }
-
-  async getTakeoffSegment(segmentId: number): Promise<TakeoffSegment | undefined> {
-    const [s] = await db.select().from(takeoffSegments).where(eq(takeoffSegments.id, segmentId));
-    return s;
-  }
-
-  async updateTakeoffSegment(
-    segmentId: number,
-    data: Partial<InsertTakeoffSegment>,
-  ): Promise<TakeoffSegment | undefined> {
-    const [updated] = await db
-      .update(takeoffSegments)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(takeoffSegments.id, segmentId))
-      .returning();
-    return updated;
-  }
-
-  async deleteTakeoffSegment(segmentId: number): Promise<void> {
-    await db.delete(takeoffSegments).where(eq(takeoffSegments.id, segmentId));
-  }
-
-  async deleteTakeoffSegmentsByPage(pageId: number): Promise<void> {
-    await db.delete(takeoffSegments).where(eq(takeoffSegments.pageId, pageId));
-  }
-
-  async createTakeoffSlab(slab: InsertTakeoffSlab): Promise<TakeoffSlab> {
-    const [created] = await db.insert(takeoffSlabs).values(slab).returning();
-    return created;
-  }
-
-  async bulkCreateTakeoffSlabs(slabs: InsertTakeoffSlab[]): Promise<TakeoffSlab[]> {
-    if (slabs.length === 0) return [];
-    return db.insert(takeoffSlabs).values(slabs).returning();
-  }
-
-  async getTakeoffSlabs(projectId: number): Promise<TakeoffSlab[]> {
-    return db
-      .select()
-      .from(takeoffSlabs)
-      .where(eq(takeoffSlabs.projectId, projectId))
-      .orderBy(asc(takeoffSlabs.id));
-  }
-
-  async getTakeoffSlab(slabId: number): Promise<TakeoffSlab | undefined> {
-    const [s] = await db.select().from(takeoffSlabs).where(eq(takeoffSlabs.id, slabId));
-    return s;
-  }
-
-  async updateTakeoffSlab(
-    slabId: number,
-    data: Partial<InsertTakeoffSlab>,
-  ): Promise<TakeoffSlab | undefined> {
-    const [updated] = await db
-      .update(takeoffSlabs)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(takeoffSlabs.id, slabId))
-      .returning();
-    return updated;
-  }
-
-  async deleteTakeoffSlab(slabId: number): Promise<void> {
-    await db.delete(takeoffSlabs).where(eq(takeoffSlabs.id, slabId));
-  }
-
-  async deleteTakeoffSlabsByPage(pageId: number): Promise<void> {
-    await db.delete(takeoffSlabs).where(eq(takeoffSlabs.pageId, pageId));
-  }
-
+  // ===== AI audit =====
   async createAiRun(run: InsertAiRun): Promise<AiRun> {
     const [created] = await db.insert(aiRuns).values(run).returning();
     return created;
@@ -444,32 +271,6 @@ export class DatabaseStorage implements IStorage {
       .from(aiRuns)
       .where(eq(aiRuns.projectId, projectId))
       .orderBy(desc(aiRuns.createdAt));
-  }
-
-  async createTakeoffRevision(rev: InsertTakeoffRevision): Promise<TakeoffRevision> {
-    const [created] = await db.insert(takeoffRevisions).values(rev).returning();
-    return created;
-  }
-
-  async getTakeoffRevisions(projectId: number): Promise<TakeoffRevision[]> {
-    return db
-      .select()
-      .from(takeoffRevisions)
-      .where(eq(takeoffRevisions.projectId, projectId))
-      .orderBy(desc(takeoffRevisions.createdAt));
-  }
-
-  async createTakeoffExport(exp: InsertTakeoffExport): Promise<TakeoffExport> {
-    const [created] = await db.insert(takeoffExports).values(exp).returning();
-    return created;
-  }
-
-  async getTakeoffExports(projectId: number): Promise<TakeoffExport[]> {
-    return db
-      .select()
-      .from(takeoffExports)
-      .where(eq(takeoffExports.projectId, projectId))
-      .orderBy(desc(takeoffExports.createdAt));
   }
 
   async getSetting(key: string): Promise<string | undefined> {

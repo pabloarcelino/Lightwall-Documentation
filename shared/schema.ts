@@ -107,30 +107,7 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// ===== OpenAI Vision Takeoff =====
-// Per-page state: rendered image (data URL or relative path), dims and scale calibration.
-export const projectPages = pgTable("project_pages", {
-  id: serial("id").primaryKey(),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  fileId: integer("file_id").references(() => projectFiles.id, {
-    onDelete: "set null",
-  }),
-  pageNumber: integer("page_number").notNull(),
-  imageData: text("image_data").notNull(),
-  widthPx: integer("width_px").notNull(),
-  heightPx: integer("height_px").notNull(),
-  scaleText: varchar("scale_text", { length: 100 }),
-  pxPerMeter: real("px_per_meter"),
-  calibrationPoints: jsonb("calibration_points"),
-  selectedForAnalysis: boolean("selected_for_analysis").notNull().default(false),
-  pageLabel: varchar("page_label", { length: 100 }),
-  pavimento: varchar("pavimento", { length: 100 }),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
+// ===== OpenAI Vision Takeoff: type constants used by AiTakeoffService prompts =====
 export const TAKEOFF_SEGMENT_CATEGORY = ["parede_externa", "parede_interna", "muro"] as const;
 export type TakeoffSegmentCategory = (typeof TAKEOFF_SEGMENT_CATEGORY)[number];
 
@@ -147,63 +124,8 @@ export type TakeoffLevel = (typeof TAKEOFF_LEVEL)[number];
 export const TAKEOFF_GEOMETRY = ["line", "polyline", "arc"] as const;
 export type TakeoffGeometryType = (typeof TAKEOFF_GEOMETRY)[number];
 
-export const takeoffSegments = pgTable("takeoff_segments", {
-  id: serial("id").primaryKey(),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  pageId: integer("page_id")
-    .notNull()
-    .references(() => projectPages.id, { onDelete: "cascade" }),
-  code: varchar("code", { length: 30 }),
-  category: varchar("category", { length: 30 }).notNull(),
-  level: varchar("level", { length: 30 }).notNull(),
-  geometryType: varchar("geometry_type", { length: 20 }).notNull().default("line"),
-  pointsJson: jsonb("points_json").notNull(),
-  lengthMAi: real("length_m_ai"),
-  lengthMCalculated: real("length_m_calculated"),
-  lengthMFinal: real("length_m_final"),
-  heightM: real("height_m"),
-  areaM2OneFace: real("area_m2_one_face"),
-  areaM2TwoFaces: real("area_m2_two_faces"),
-  openingsDetected: boolean("openings_detected").notNull().default(false),
-  grossOrNet: varchar("gross_or_net", { length: 20 }).notNull().default("bruta"),
-  confidence: real("confidence"),
-  evidence: text("evidence"),
-  needsReview: boolean("needs_review").notNull().default(false),
-  reviewed: boolean("reviewed").notNull().default(false),
-  createdByAi: boolean("created_by_ai").notNull().default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
 export const TAKEOFF_SLAB_CATEGORY = ["laje_piso", "laje_cobertura"] as const;
 export type TakeoffSlabCategory = (typeof TAKEOFF_SLAB_CATEGORY)[number];
-
-export const takeoffSlabs = pgTable("takeoff_slabs", {
-  id: serial("id").primaryKey(),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  pageId: integer("page_id")
-    .notNull()
-    .references(() => projectPages.id, { onDelete: "cascade" }),
-  code: varchar("code", { length: 30 }),
-  category: varchar("category", { length: 30 }).notNull(),
-  level: varchar("level", { length: 30 }).notNull(),
-  polygonJson: jsonb("polygon_json").notNull(),
-  areaM2Ai: real("area_m2_ai"),
-  areaM2Declared: real("area_m2_declared"),
-  areaM2Calculated: real("area_m2_calculated"),
-  areaM2Final: real("area_m2_final"),
-  confidence: real("confidence"),
-  evidence: text("evidence"),
-  needsReview: boolean("needs_review").notNull().default(false),
-  reviewed: boolean("reviewed").notNull().default(false),
-  createdByAi: boolean("created_by_ai").notNull().default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
 
 // Audit table for AI runs (raw input, raw output, token usage)
 export const aiRuns = pgTable("ai_runs", {
@@ -211,9 +133,7 @@ export const aiRuns = pgTable("ai_runs", {
   projectId: integer("project_id")
     .notNull()
     .references(() => projects.id, { onDelete: "cascade" }),
-  pageId: integer("page_id").references(() => projectPages.id, {
-    onDelete: "set null",
-  }),
+  pageId: integer("page_id"),
   promptVersion: varchar("prompt_version", { length: 50 }).notNull(),
   model: varchar("model", { length: 100 }).notNull(),
   inputFileId: varchar("input_file_id", { length: 100 }),
@@ -223,31 +143,6 @@ export const aiRuns = pgTable("ai_runs", {
   durationMs: integer("duration_ms"),
   status: varchar("status", { length: 30 }).notNull(),
   errorMessage: text("error_message"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-export const takeoffRevisions = pgTable("takeoff_revisions", {
-  id: serial("id").primaryKey(),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
-  entityType: varchar("entity_type", { length: 30 }).notNull(),
-  entityId: integer("entity_id").notNull(),
-  beforeJson: jsonb("before_json"),
-  afterJson: jsonb("after_json"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-export const takeoffExports = pgTable("takeoff_exports", {
-  id: serial("id").primaryKey(),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  type: varchar("type", { length: 20 }).notNull(),
-  fileName: varchar("file_name", { length: 255 }),
-  fileData: text("file_data"),
-  reviewedSegmentIds: jsonb("reviewed_segment_ids"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -287,35 +182,7 @@ export const insertUserSchema = createInsertSchema(users).omit({
   updatedAt: true,
 });
 
-export const insertProjectPageSchema = createInsertSchema(projectPages).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertTakeoffSegmentSchema = createInsertSchema(takeoffSegments).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertTakeoffSlabSchema = createInsertSchema(takeoffSlabs).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
 export const insertAiRunSchema = createInsertSchema(aiRuns).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertTakeoffRevisionSchema = createInsertSchema(takeoffRevisions).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertTakeoffExportSchema = createInsertSchema(takeoffExports).omit({
   id: true,
   createdAt: true,
 });
@@ -336,18 +203,8 @@ export type InsertExtractedData = z.infer<typeof insertExtractedDataSchema>;
 export type Budget = typeof budgets.$inferSelect;
 export type InsertBudget = z.infer<typeof insertBudgetSchema>;
 
-export type ProjectPage = typeof projectPages.$inferSelect;
-export type InsertProjectPage = z.infer<typeof insertProjectPageSchema>;
-export type TakeoffSegment = typeof takeoffSegments.$inferSelect;
-export type InsertTakeoffSegment = z.infer<typeof insertTakeoffSegmentSchema>;
-export type TakeoffSlab = typeof takeoffSlabs.$inferSelect;
-export type InsertTakeoffSlab = z.infer<typeof insertTakeoffSlabSchema>;
 export type AiRun = typeof aiRuns.$inferSelect;
 export type InsertAiRun = z.infer<typeof insertAiRunSchema>;
-export type TakeoffRevision = typeof takeoffRevisions.$inferSelect;
-export type InsertTakeoffRevision = z.infer<typeof insertTakeoffRevisionSchema>;
-export type TakeoffExport = typeof takeoffExports.$inferSelect;
-export type InsertTakeoffExport = z.infer<typeof insertTakeoffExportSchema>;
 
 // ===== Strict structured-output schema for OpenAI Responses API =====
 // Mirror of the JSON Schema used in the Responses call for runtime validation.
