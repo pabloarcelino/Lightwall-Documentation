@@ -11,6 +11,7 @@ import Settings from "@/pages/Settings";
 import MetodologiaPage from "@/pages/MetodologiaPage";
 import Catalogo from "@/pages/Catalogo";
 import Calibracao from "@/pages/Calibracao";
+import TakeoffPage from "@/pages/TakeoffPage";
 import Login from "@/pages/Login";
 import { Loader2 } from "lucide-react";
 
@@ -20,6 +21,7 @@ function Router() {
       <Route path="/" component={Dashboard} />
       <Route path="/new-project" component={NewProject} />
       <Route path="/project/:id" component={ProjectDetails} />
+      <Route path="/project/:id/takeoff" component={TakeoffPage} />
       <Route path="/settings" component={Settings} />
       <Route path="/metodologia" component={MetodologiaPage} />
       <Route path="/catalogo" component={Catalogo} />

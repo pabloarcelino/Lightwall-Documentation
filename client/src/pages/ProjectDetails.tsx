@@ -1226,6 +1226,7 @@ export default function ProjectDetails() {
                         <SelectItem value="openai-only">OpenAI-only (IA pura)</SelectItem>
                         <SelectItem value="cv-gemini">CV + Gemini (hibrido)</SelectItem>
                         <SelectItem value="combinada">Combinada (ambos)</SelectItem>
+                        <SelectItem value="openai-vision-takeoff">OpenAI Vision Takeoff (estruturado + revisão)</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground mt-1">
@@ -1233,7 +1234,15 @@ export default function ProjectDetails() {
                       {analysisMode === "openai-only" && "Usa apenas a OpenAI (modelo configurado em Configuracoes, padrao gpt-5-mini) para todo o pipeline. Requer chave OpenAI."}
                       {analysisMode === "cv-gemini" && "Computer Vision (OpenCV + OCR) extrai dados estruturados, Gemini classifica. Mais preciso."}
                       {analysisMode === "combinada" && "Executa ambos os pipelines em paralelo e combina os resultados. Maximo de cobertura."}
+                      {analysisMode === "openai-vision-takeoff" && "Pipeline completo com saida estruturada da OpenAI, calibracao manual de escala, editor SVG e revisao humana antes de fechar o quantitativo. Requer chave OpenAI."}
                     </p>
+                    {analysisMode === "openai-vision-takeoff" && (
+                      <Link href={`/project/${params?.id}/takeoff`}>
+                        <Button size="sm" className="mt-2" data-testid="button-open-takeoff">
+                          Abrir Takeoff →
+                        </Button>
+                      </Link>
+                    )}
                   </div>
                   <div className="mb-3">
                     <Label className="text-xs font-medium text-muted-foreground">Pe-direito (m):</Label>

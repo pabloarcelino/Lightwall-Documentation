@@ -47,6 +47,7 @@ import {
 
 import type { Response } from "express";
 import { requireAuth } from "./auth";
+import { registerTakeoffRoutes } from "./takeoffRoutes";
 import { editImage } from "./replit_integrations/image/client";
 import { cvAnalyze, cvAnnotate, isCvServiceAvailable } from "./services/cv/client";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
@@ -312,6 +313,8 @@ export async function registerRoutes(
     if (req.path.startsWith("/auth/")) return next();
     return requireAuth(req, res, next);
   });
+
+  registerTakeoffRoutes(app);
 
   const savedGeminiKey = await storage.getSetting("gemini_api_key");
   if (savedGeminiKey && savedGeminiKey.length > 0) {
