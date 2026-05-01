@@ -32,21 +32,21 @@ interface Props {
   preGeneratedSummary?: any;
 }
 
+// Color scheme matches the AI-generated annotated PNG (server/routes.ts buildAnnotationPrompt)
+// and the visual reference: red=externas, green=internas, blue=muros.
 const EXT_COLORS = [
-  "#0ea5e9", "#0284c7", "#0369a1", "#075985",
-  "#06b6d4", "#0891b2", "#0e7490", "#155e75",
-  "#14b8a6", "#0d9488", "#0f766e", "#115e59",
+  "#dc2626", "#b91c1c", "#991b1b", "#7f1d1d",
+  "#ef4444", "#f87171", "#e11d48", "#be123c",
 ];
 
 const INT_COLORS = [
-  "#f97316", "#ea580c", "#c2410c", "#9a3412",
-  "#eab308", "#ca8a04", "#a16207", "#854d0e",
-  "#f59e0b", "#d97706", "#b45309", "#92400e",
+  "#16a34a", "#15803d", "#166534", "#14532d",
+  "#22c55e", "#4ade80", "#10b981", "#059669",
 ];
 
 const MURO_COLORS = [
-  "#a855f7", "#9333ea", "#7e22ce", "#6b21a8",
-  "#d946ef", "#c026d3", "#a21caf", "#86198f",
+  "#1d4ed8", "#1e40af", "#1e3a8a", "#172554",
+  "#2563eb", "#3b82f6", "#60a5fa", "#0c4a6e",
 ];
 
 function assignColors(walls: Wall[]): Map<string, string> {
@@ -369,11 +369,11 @@ export default function AnnotatedFloorPlan({ projectId, walls, files, highlighte
                 {aiSummary && (
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 text-xs" data-testid="grid-ai-summary">
                     {([
-                      { key: "ext", label: "Externas", color: "#06b6d4", count: aiSummary.externas, metric: `${Number(aiSummary.comprimento_externas_m || 0).toFixed(1)}m`, paineis: aiSummary.paineis?.externas },
-                      { key: "int", label: "Internas", color: "#f97316", count: aiSummary.internas, metric: `${Number(aiSummary.comprimento_internas_m || 0).toFixed(1)}m`, paineis: aiSummary.paineis?.internas },
-                      { key: "muros", label: "Muros", color: "#a855f7", count: aiSummary.muros, metric: `${Number(aiSummary.comprimento_muros_m || 0).toFixed(1)}m`, paineis: aiSummary.paineis?.muros },
-                      { key: "piso", label: "Laje Piso", color: "#10b981", count: aiSummary.lajePiso, metric: `${Number(aiSummary.area_piso_m2 || 0).toFixed(1)}m²`, paineis: aiSummary.paineis?.lajePiso },
-                      { key: "coberta", label: "Laje Coberta", color: "#ef4444", count: aiSummary.lajeCoberta, metric: `${Number(aiSummary.area_coberta_m2 || 0).toFixed(1)}m²`, paineis: aiSummary.paineis?.lajeCoberta },
+                      { key: "ext", label: "Externas", color: "#dc2626", count: aiSummary.externas, metric: `${Number(aiSummary.comprimento_externas_m || 0).toFixed(1)}m`, paineis: aiSummary.paineis?.externas },
+                      { key: "int", label: "Internas", color: "#16a34a", count: aiSummary.internas, metric: `${Number(aiSummary.comprimento_internas_m || 0).toFixed(1)}m`, paineis: aiSummary.paineis?.internas },
+                      { key: "muros", label: "Muros", color: "#1d4ed8", count: aiSummary.muros, metric: `${Number(aiSummary.comprimento_muros_m || 0).toFixed(1)}m`, paineis: aiSummary.paineis?.muros },
+                      { key: "piso", label: "Laje Piso", color: "#64748b", count: aiSummary.lajePiso, metric: `${Number(aiSummary.area_piso_m2 || 0).toFixed(1)}m²`, paineis: aiSummary.paineis?.lajePiso },
+                      { key: "coberta", label: "Laje Coberta", color: "#0ea5e9", count: aiSummary.lajeCoberta, metric: `${Number(aiSummary.area_coberta_m2 || 0).toFixed(1)}m²`, paineis: aiSummary.paineis?.lajeCoberta },
                     ]).map(it => (
                       <div key={it.key} className="rounded border border-slate-200 dark:border-slate-700 p-2 bg-white dark:bg-slate-950" data-testid={`summary-${it.key}`}>
                         <div className="flex items-center gap-1 mb-1">

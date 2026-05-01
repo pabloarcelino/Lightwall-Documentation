@@ -2,11 +2,11 @@ import os
 
 # Color scheme matching the existing TypeScript system
 COLORS = {
-    "externa": {"hex": "#06b6d4", "bgr": (212, 182, 6), "rgb": (6, 182, 212)},
-    "interna": {"hex": "#f97316", "bgr": (22, 115, 249), "rgb": (249, 115, 22)},
-    "muro":    {"hex": "#a855f7", "bgr": (247, 85, 168), "rgb": (168, 85, 247)},
+    "externa": {"hex": "#dc2626", "bgr": (38, 38, 220),  "rgb": (220, 38, 38)},
+    "interna": {"hex": "#16a34a", "bgr": (74, 163, 22),  "rgb": (22, 163, 74)},
+    "muro":    {"hex": "#1d4ed8", "bgr": (216, 78, 29),  "rgb": (29, 78, 216)},
     "piso":    {"hex": "#10b981", "bgr": (129, 185, 16), "rgb": (16, 185, 129)},
-    "coberta": {"hex": "#ef4444", "bgr": (68, 68, 239), "rgb": (239, 68, 68)},
+    "coberta": {"hex": "#f97316", "bgr": (22, 115, 249), "rgb": (249, 115, 22)},
     "radier":  {"hex": "#10b981", "bgr": (129, 185, 16), "rgb": (16, 185, 129)},
 }
 

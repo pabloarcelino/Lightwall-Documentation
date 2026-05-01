@@ -42,6 +42,7 @@ import { validateGeometry, summarizeValidation } from "./services/calculation/ge
 import { inspectFile, summarizePreflight } from "./services/preflight/inspector";
 import { extractFromVectorPdf } from "./services/preflight/pdfVectorExtractor";
 import { auditAiCall } from "./services/audit/aiAuditor";
+import { runGlobalCrossValidation } from "./services/gemini/globalValidator";
 import type { ExtractedWall, ExtractedSlab, ExtractedCorner } from "./services/gemini/planAnalyzer";
 import {
   exportToExcel,
@@ -53,6 +54,7 @@ import type { Response } from "express";
 import { requireAuth } from "./auth";
 import { editImage } from "./replit_integrations/image/client";
 import { cvAnalyze, cvAnnotate, isCvServiceAvailable } from "./services/cv/client";
+import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
 
@@ -164,6 +166,53 @@ async function getReferencePageSources(
     .filter((x): x is NonNullable<typeof x> => x !== null);
 }
 
+/**
+ * Assigns sequential, stable W##/M##/L## labels per pavimento.
+ * Mutates each item by adding `displayLabel` (does NOT touch internal `id`).
+ * Order: walls first by classe (externa→interna), then muros, then slabs.
+ * The new labels match the visual style of professional takeoff overlays
+ * (W01..Wnn for walls, M01..Mnn for muros, L01..Lnn for slabs).
+ */
+function assignDisplayLabels(walls: any[], slabs: any[]): void {
+  const byPav = new Map<string, { walls: any[]; muros: any[]; slabs: any[] }>();
+  for (const w of walls) {
+    const pav = w.nivel || "Terreo";
+    if (!byPav.has(pav)) byPav.set(pav, { walls: [], muros: [], slabs: [] });
+    if (w.classe === "muro") byPav.get(pav)!.muros.push(w);
+    else byPav.get(pav)!.walls.push(w);
+  }
+  for (const s of slabs) {
+    const pav = s.nivel || "Terreo";
+    if (!byPav.has(pav)) byPav.set(pav, { walls: [], muros: [], slabs: [] });
+    byPav.get(pav)!.slabs.push(s);
+  }
+  for (const [, group] of byPav) {
+    // Walls (externa first, then interna) get W01.. sequentially
+    group.walls.sort((a, b) => {
+      if (a.classe !== b.classe) return a.classe === "externa" ? -1 : 1;
+      return (b.comprimento_m || 0) - (a.comprimento_m || 0);
+    });
+    group.walls.forEach((w, i) => {
+      w.displayLabel = `W${String(i + 1).padStart(2, "0")}`;
+    });
+    group.muros.sort((a, b) => (b.comprimento_m || 0) - (a.comprimento_m || 0));
+    group.muros.forEach((m, i) => {
+      m.displayLabel = `M${String(i + 1).padStart(2, "0")}`;
+    });
+    // Slabs: classe order (coberta first, then piso, then radier) then desc area
+    // for stable, deterministic L## numbering across runs.
+    const slabRank = (c: string) => (c === "coberta" ? 0 : c === "piso" ? 1 : 2);
+    group.slabs.sort((a, b) => {
+      const r = slabRank(a.classe) - slabRank(b.classe);
+      if (r !== 0) return r;
+      return (b.area_m2 || 0) - (a.area_m2 || 0);
+    });
+    group.slabs.forEach((s, i) => {
+      s.displayLabel = `L${String(i + 1).padStart(2, "0")}`;
+    });
+  }
+}
+
 function buildAnnotationPrompt(walls: any[], slabs: any[]): string {
   const enabledWalls = walls.filter((w: any) => w.enabled !== false);
   const externas = enabledWalls.filter((w: any) => w.classe === "externa");
@@ -173,33 +222,45 @@ function buildAnnotationPrompt(walls: any[], slabs: any[]): string {
   const slabPiso = enabledSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier");
   const slabCoberta = enabledSlabs.filter((s: any) => s.classe === "coberta");
 
-  const fmt = (n: number) => Number(n || 0).toFixed(2);
+  // Assign W##/M##/L## sequential labels per pavimento (mutates items in place).
+  assignDisplayLabels(enabledWalls, enabledSlabs);
+
+  const fmt = (n: number) => Number(n || 0).toFixed(2).replace(".", ",");
   // Include bbox coordinates when available so Gemini paints at the right locations
   const wallLine = (w: any) => {
     const bbox = w.bbox || w.box_2d;
     const bboxStr = bbox ? ` [bbox: y${bbox[0]}-${bbox[2]}, x${bbox[1]}-${bbox[3]}]` : "";
-    return `${w.id}: ${fmt(w.comprimento_m)}m${bboxStr}`;
+    return `${w.displayLabel || w.id}: ${fmt(w.comprimento_m)} m${bboxStr}`;
   };
-  const slabLine = (s: any, i: number) => `${s.id || `L${i + 1}`}: ${fmt(s.area_m2)}m2`;
+  const slabLine = (s: any) => `${s.displayLabel || s.id}: ${fmt(s.area_m2)} m²`;
 
   const hasBbox = enabledWalls.some((w: any) => w.bbox || w.box_2d);
 
-  return `Pinte contornos coloridos semi-transparentes sobre esta planta arquitetonica para identificar elementos Lightwall.
+  return `Pinte contornos coloridos semi-transparentes sobre esta planta arquitetonica para identificar elementos Lightwall, no estilo de uma prancha de quantitativo profissional.
 
 REGRAS:
 - NAO altere o desenho tecnico por baixo. Apenas sobreponha cores.
-- Use contornos GROSSOS (3-5px) e fill semi-transparente.
-- A planta original deve continuar visivel.
+- Use contornos GROSSOS (3-5px) e fill semi-transparente (~25%).
+- A planta original deve continuar perfeitamente visivel.
 ${hasBbox ? `- Cada parede inclui coordenadas [bbox: ymin-ymax, xmin-xmax] normalizadas 0-1000. Use estas coordenadas para localizar EXATAMENTE cada parede na imagem.` : ""}
-- REGRA ANTI-SOBREPOSICAO: Se uma parede EXTERNA e uma INTERNA compartilham uma borda, pinte SOMENTE a cor EXTERNA. Externas tem precedencia visual.
-- TAGS OBRIGATORIAS: Em CADA parede e laje pintada, escreva o ID (P1, P2, M1, L1...) como TAG visivel. Use texto BRANCO GRANDE em negrito com fundo retangular da cor do elemento. Posicione a tag NO CENTRO do elemento. A tag deve ser legivel mesmo em zoom reduzido.
+- REGRA ANTI-SOBREPOSICAO: Se uma parede EXTERNA e uma INTERNA compartilham uma borda, pinte SOMENTE a cor EXTERNA (vermelha). Externas tem precedencia visual.
+- TAGS OBRIGATORIAS: Em CADA parede e laje desenhe uma TAG no formato:
+    W01
+    9,20 m
+  (duas linhas: codigo na primeira, comprimento/area na segunda).
+  Use fundo branco com borda colorida (cor do elemento) e texto preto, posicionada PERTO da parede sem cobri-la (acima de paredes horizontais, ao lado de paredes verticais).
+- LEGENDA OBRIGATORIA no rodape da imagem (caixa branca com 3 linhas):
+    Vermelho = paredes externas
+    Verde = paredes internas
+    Azul = muros
+  Use bolinhas coloridas + texto preto.
 
-CORES:
-- Paredes EXTERNAS → CIANO (#06b6d4) contorno + fill 35%
-- Paredes INTERNAS → LARANJA (#f97316) contorno + fill 35%
-- MUROS → ROXO (#a855f7) contorno + fill 35%
-- LAJE PISO → VERDE (#10b981) fill 25%
-- LAJE COBERTA → VERMELHO (#ef4444) fill 25%
+CORES (siga RIGOROSAMENTE):
+- Paredes EXTERNAS → VERMELHO (#dc2626) contorno + fill 25%
+- Paredes INTERNAS → VERDE (#16a34a) contorno + fill 25%
+- MUROS → AZUL (#1d4ed8) contorno + fill 25%
+- LAJE PISO → VERDE-AGUA (#10b981) fill 20%
+- LAJE COBERTA → LARANJA (#f97316) fill 20%
 
 PAREDES EXTERNAS (${externas.length}):
 ${externas.map(wallLine).join("\n") || "(nenhuma)"}
@@ -216,7 +277,7 @@ ${slabPiso.map(slabLine).join("\n") || "(nenhuma)"}
 LAJE COBERTA (${slabCoberta.length}):
 ${slabCoberta.map(slabLine).join("\n") || "(nenhuma)"}
 
-Resultado: planta original visivel com paredes contornadas em ciano/laranja/roxo e areas de laje em verde/vermelho semi-transparente.`;
+Resultado: planta original visivel com paredes contornadas em VERMELHO (externas) / VERDE (internas) / AZUL (muros), tags W01/W02/M01... com comprimento em metros, e legenda de cores no rodape.`;
 }
 
 const pipelineStartTimes = new Map<number, number>();
@@ -1181,6 +1242,43 @@ export async function registerRoutes(
       console.log(`[VALIDATOR] ${valSummary}`);
       for (const n of validated.stats.notes) console.log(`[VALIDATOR]   - ${n}`);
       sendProgress(projectId, 4.5, "Validacao Geometrica", "done", valSummary);
+
+      // ===== Global cross-validation pass (Etapa 4.6) — opt-in =====
+      // Sends ALL planta_baixa pages + the fused JSON to the AI in a single
+      // conversational call. Catches duplicates / missing walls / unit errors
+      // that per-page extraction misses. Conservative: corrections only applied
+      // when AI confidence >= 0.7. Disabled by default; enable via
+      // project.settings.useGlobalValidation = true OR ?globalValidation=1.
+      const globalValidationFlag = (project as any).settings?.useGlobalValidation === true
+        || req.query.globalValidation === "1";
+      if (globalValidationFlag) {
+        try {
+          sendProgress(projectId, 4.6, "Validacao Global IA", "running", "Cross-validando com IA contra todas as plantas...");
+          const sources = await getAnnotationImageSources(files, allClassifications);
+          const plantaImages = sources.map(s => ({ base64: s.base64, mimeType: s.mimeType }));
+          const gvResult = await runGlobalCrossValidation(fused.walls, fused.slabs, plantaImages, { projectId });
+          // CRITICAL: re-run validateGeometry after AI corrections so any
+          // edge case (e.g., a corrected length crossing a different rule like
+          // floating walls / slab loops) is still caught by the same plausibility
+          // ruleset that protects the rest of the pipeline. AI is an assistant,
+          // not the final authority.
+          if (gvResult.applied.walls + gvResult.applied.slabs + gvResult.applied.removedWalls + gvResult.applied.removedSlabs > 0) {
+            const reval = validateGeometry(fused.walls, fused.slabs, fused.corners, { defaultPeDireitoM: peDireito });
+            fused.walls = reval.walls;
+            fused.slabs = reval.slabs;
+            fused.corners = reval.corners;
+            const revalSummary = summarizeValidation(reval.stats);
+            console.log(`[GLOBAL-VALIDATOR] Re-validacao apos correcoes IA: ${revalSummary}`);
+          }
+          const gvDetail = gvResult.confidence > 0
+            ? `conf ${gvResult.confidence.toFixed(2)}: +${gvResult.applied.walls} paredes, +${gvResult.applied.slabs} lajes, -${gvResult.applied.removedWalls + gvResult.applied.removedSlabs} removidos | ${gvResult.summary}`
+            : gvResult.summary;
+          sendProgress(projectId, 4.6, "Validacao Global IA", "done", gvDetail);
+        } catch (gvErr: any) {
+          console.warn(`[GLOBAL-VALIDATOR] Pulando (erro): ${gvErr?.message || gvErr}`);
+          sendProgress(projectId, 4.6, "Validacao Global IA", "done", `pulado (erro: ${gvErr?.message || "desconhecido"})`);
+        }
+      }
 
       const scopedWalls = fused.walls.filter(w => {
         if (w.classe === "externa" && !scope.paredesExternas) return false;
@@ -2391,6 +2489,49 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[ANNOTATED-IMG] Erro:", error);
       res.status(500).json({ message: error?.message || "Erro ao gerar imagem anotada" });
+    }
+  });
+
+  // Consolidates per-pavimento annotated images into a single grid PNG (prancha-style).
+  // Reuses the per-pavimento images cached in extracted_data → etapa3_annotated_plan
+  // (auto-generated by /process). Returns an error if the project hasn't been processed yet.
+  app.post("/api/projects/:id/annotated-image-consolidated", requireAuth, async (req, res) => {
+    try {
+      const projectId = parseInt(req.params.id);
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto nao encontrado" });
+
+      const extracted = await storage.getExtractedData(projectId);
+      const cached = extracted.find((d: any) => d.elementType === "etapa3_annotated_plan");
+      const cachedImgs = (cached?.data as any)?.images || [];
+      if (!Array.isArray(cachedImgs) || cachedImgs.length === 0) {
+        return res.status(400).json({
+          message: "Sem imagens anotadas em cache. Processe o projeto primeiro (POST /api/projects/:id/process).",
+        });
+      }
+      const tiles: AnnotatedTile[] = cachedImgs.map((c: any) => ({
+        pavimento: c.pavimento || "Pavimento",
+        pageIndex: c.pageIndex || 0,
+        image: c.image,
+        summary: c.summary,
+      }));
+
+      console.log(`[ANNOTATED-CONSOLIDADO] Compondo ${tiles.length} pavimento(s) em prancha unica`);
+      const base64 = await buildConsolidatedAnnotation(tiles, { columns: tiles.length === 1 ? 1 : 2 });
+      const dataUrl = `data:image/png;base64,${base64}`;
+      console.log(`[ANNOTATED-CONSOLIDADO] PNG consolidado: ${Math.round(base64.length / 1024)}KB`);
+      res.json({
+        image: dataUrl,
+        tileCount: tiles.length,
+        pavimentos: tiles.map(t => ({
+          pavimento: t.pavimento,
+          pageIndex: t.pageIndex,
+          summary: t.summary,
+        })),
+      });
+    } catch (error: any) {
+      console.error("[ANNOTATED-CONSOLIDADO] Erro:", error);
+      res.status(500).json({ message: error?.message || "Erro ao consolidar imagens anotadas" });
     }
   });
 
