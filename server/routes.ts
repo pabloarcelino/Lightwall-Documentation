@@ -63,22 +63,24 @@ import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
 
 const progressClients = new Map<number, Response[]>();
 
+const PANEL_AREA_M2 = 1.83;
+
 function computeTotaisPorSku(itens: Array<{ discriminacao: string; sku?: string; qtd_un: number; qtd_m2: number; preco_total: number }>) {
-  const map = new Map<string, { sku: string; nome: string; qtd_un: number; qtd_m2: number; preco_total: number }>();
+  const map = new Map<string, { sku: string; nome: string; qtd_m2: number; preco_total: number }>();
   for (const item of itens) {
-    const key = item.sku || item.discriminacao;
+    const key = item.discriminacao;
     const existing = map.get(key);
     if (existing) {
-      existing.qtd_un += item.qtd_un;
       existing.qtd_m2 += item.qtd_m2;
       existing.preco_total += item.preco_total;
     } else {
-      map.set(key, { sku: item.sku || "", nome: item.discriminacao, qtd_un: item.qtd_un, qtd_m2: item.qtd_m2, preco_total: item.preco_total });
+      map.set(key, { sku: item.sku || "", nome: item.discriminacao, qtd_m2: item.qtd_m2, preco_total: item.preco_total });
     }
   }
   return Array.from(map.values()).map(v => ({
     ...v,
     qtd_m2: Math.round(v.qtd_m2 * 1000) / 1000,
+    qtd_un: Math.round(v.qtd_m2 / PANEL_AREA_M2),
     preco_total: Math.round(v.preco_total * 100) / 100,
   }));
 }

@@ -1942,29 +1942,43 @@ export default function ProjectDetails() {
 
                       {budget.proposta.totais_por_sku && budget.proposta.totais_por_sku.length > 0 && (
                         <div className="mt-6">
-                          <h4 className="font-semibold mb-3">Total de Paineis por SKU (Tipo de Painel)</h4>
+                          <h4 className="font-semibold mb-3">Total de Paineis por Tipo de Painel</h4>
                           <div className="overflow-x-auto">
                             <table className="w-full text-sm" data-testid="table-sku-totals">
                               <thead>
                                 <tr className="border-b-2 border-slate-300 dark:border-slate-600">
+                                  <th className="text-left p-3 font-semibold">TIPO DE PAINEL</th>
                                   <th className="text-left p-3 font-semibold">SKU</th>
-                                  <th className="text-left p-3 font-semibold">DESCRICAO</th>
-                                  <th className="text-right p-3 font-semibold">QTD (UN)</th>
-                                  <th className="text-right p-3 font-semibold">QTD (M2)</th>
+                                  <th className="text-right p-3 font-semibold">AREA TOTAL (M2)</th>
+                                  <th className="text-right p-3 font-semibold">QTD PAINEIS</th>
                                   <th className="text-right p-3 font-semibold">PRECO TOTAL</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {budget.proposta.totais_por_sku.map((sku: any, idx: number) => (
                                   <tr key={idx} className="border-b" data-testid={`sku-row-${idx}`}>
-                                    <td className="p-3 font-mono text-xs font-medium">{sku.sku || "-"}</td>
-                                    <td className="p-3 text-xs">{sku.nome}</td>
-                                    <td className="p-3 text-right font-bold">{sku.qtd_un}</td>
+                                    <td className="p-3 text-sm font-medium">{sku.nome}</td>
+                                    <td className="p-3 font-mono text-xs text-muted-foreground">{sku.sku || "-"}</td>
                                     <td className="p-3 text-right">{sku.qtd_m2?.toLocaleString("pt-BR", { minimumFractionDigits: 3 })}</td>
+                                    <td className="p-3 text-right font-bold text-lg">{sku.qtd_un}</td>
                                     <td className="p-3 text-right font-medium">R$ {sku.preco_total?.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
                                   </tr>
                                 ))}
                               </tbody>
+                              <tfoot>
+                                <tr className="border-t-2 border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800">
+                                  <td colSpan={2} className="p-3 font-bold">TOTAL:</td>
+                                  <td className="p-3 text-right font-bold">
+                                    {budget.proposta.totais_por_sku.reduce((sum: number, s: any) => sum + (s.qtd_m2 || 0), 0).toLocaleString("pt-BR", { minimumFractionDigits: 3 })}
+                                  </td>
+                                  <td className="p-3 text-right font-bold text-lg">
+                                    {budget.proposta.totais_por_sku.reduce((sum: number, s: any) => sum + (s.qtd_un || 0), 0)}
+                                  </td>
+                                  <td className="p-3 text-right font-bold">
+                                    R$ {budget.proposta.totais_por_sku.reduce((sum: number, s: any) => sum + (s.preco_total || 0), 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                              </tfoot>
                             </table>
                           </div>
                         </div>
