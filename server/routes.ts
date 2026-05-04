@@ -32,6 +32,8 @@ import {
   getOpenAIModelName,
   runWithProvider,
   DEFAULT_OPENAI_MODEL,
+  setGeminiApiKey,
+  clearGeminiApiKey,
 } from "./services/ai/provider";
 import {
   fusionMultiView,
@@ -382,6 +384,7 @@ export async function registerRoutes(
   const savedGeminiKey = await storage.getSetting("gemini_api_key");
   if (savedGeminiKey && savedGeminiKey.length > 0) {
     setUserApiKey(savedGeminiKey);
+    setGeminiApiKey(savedGeminiKey);
   }
 
   const savedOpenAIKey = await storage.getSetting("openai_api_key");
@@ -412,6 +415,7 @@ export async function registerRoutes(
       }
       await storage.setSetting("gemini_api_key", apiKey.trim());
       setUserApiKey(apiKey.trim());
+      setGeminiApiKey(apiKey.trim());
       res.json({ success: true, message: "Chave de API salva com sucesso" });
     } catch (error) {
       console.error("Erro ao salvar chave:", error);
@@ -423,6 +427,7 @@ export async function registerRoutes(
     try {
       await storage.setSetting("gemini_api_key", "");
       clearUserApiKey();
+      clearGeminiApiKey();
       res.json({ success: true, message: "Chave de API removida" });
     } catch (error) {
       console.error("Erro ao remover chave:", error);

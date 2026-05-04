@@ -113,6 +113,20 @@ export class OpenAIProvider implements AIProvider {
   }
 }
 
+let geminiUserApiKey: string | null = null;
+
+export function setGeminiApiKey(key: string) {
+  geminiUserApiKey = key;
+}
+
+export function clearGeminiApiKey() {
+  geminiUserApiKey = null;
+}
+
+export function getGeminiApiKey(): string | null {
+  return geminiUserApiKey || process.env.AI_INTEGRATIONS_GEMINI_API_KEY || null;
+}
+
 let openaiApiKey: string | null = null;
 let openaiModelName: string = DEFAULT_OPENAI_MODEL;
 

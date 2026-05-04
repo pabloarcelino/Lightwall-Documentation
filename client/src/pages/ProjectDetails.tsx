@@ -279,6 +279,7 @@ export default function ProjectDetails() {
 
     es.onerror = () => {
       es.close();
+      setIsProcessing(false);
     };
   };
 
