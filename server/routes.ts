@@ -213,26 +213,26 @@ function assignDisplayLabels(walls: any[], slabs: any[]): void {
   }
   for (const [, group] of byPav) {
     // Walls (externa first, then interna) get W01.. sequentially
-    group.walls.sort((a, b) => {
+    group.walls.sort((a: any, b: any) => {
       if (a.classe !== b.classe) return a.classe === "externa" ? -1 : 1;
       return (b.comprimento_m || 0) - (a.comprimento_m || 0);
     });
-    group.walls.forEach((w, i) => {
+    group.walls.forEach((w: any, i: number) => {
       w.displayLabel = `W${String(i + 1).padStart(2, "0")}`;
     });
-    group.muros.sort((a, b) => (b.comprimento_m || 0) - (a.comprimento_m || 0));
-    group.muros.forEach((m, i) => {
+    group.muros.sort((a: any, b: any) => (b.comprimento_m || 0) - (a.comprimento_m || 0));
+    group.muros.forEach((m: any, i: number) => {
       m.displayLabel = `M${String(i + 1).padStart(2, "0")}`;
     });
     // Slabs: classe order (coberta first, then piso, then radier) then desc area
     // for stable, deterministic L## numbering across runs.
     const slabRank = (c: string) => (c === "coberta" ? 0 : c === "piso" ? 1 : 2);
-    group.slabs.sort((a, b) => {
+    group.slabs.sort((a: any, b: any) => {
       const r = slabRank(a.classe) - slabRank(b.classe);
       if (r !== 0) return r;
       return (b.area_m2 || 0) - (a.area_m2 || 0);
     });
-    group.slabs.forEach((s, i) => {
+    group.slabs.forEach((s: any, i: number) => {
       s.displayLabel = `L${String(i + 1).padStart(2, "0")}`;
     });
   }
@@ -608,7 +608,7 @@ export async function registerRoutes(
 
   app.put("/api/products/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       const { name, panelType, unitPrice, category, thickness, unit, description } = req.body;
       const updateData: any = {};
       if (name !== undefined) updateData.name = name;
@@ -629,7 +629,7 @@ export async function registerRoutes(
 
   app.delete("/api/products/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       await storage.deleteProduct(id);
       res.json({ success: true });
     } catch (error: any) {
@@ -683,7 +683,7 @@ export async function registerRoutes(
 
   app.get("/api/projects/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       const project = await storage.getProject(id);
       if (!project) {
         return res.status(404).json({ message: "Projeto não encontrado" });
@@ -707,7 +707,7 @@ export async function registerRoutes(
 
   app.delete("/api/projects/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       const project = await storage.getProject(id);
       if (!project) {
         return res.status(404).json({ message: "Projeto não encontrado" });
@@ -722,7 +722,7 @@ export async function registerRoutes(
 
   app.get("/api/files/:fileId/content", async (req, res) => {
     try {
-      const fileId = parseInt(req.params.fileId);
+      const fileId = parseInt(String(req.params.fileId));
       const targetFile = await storage.getProjectFile(fileId);
       if (!targetFile) {
         return res.status(404).json({ message: "Arquivo nao encontrado" });
@@ -755,7 +755,7 @@ export async function registerRoutes(
 
   app.delete("/api/files/:fileId", async (req, res) => {
     try {
-      const fileId = parseInt(req.params.fileId);
+      const fileId = parseInt(String(req.params.fileId));
       const targetFile = await storage.getProjectFile(fileId);
       if (!targetFile) {
         return res.status(404).json({ message: "Arquivo nao encontrado" });
@@ -773,7 +773,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/projects/:id/progress", (req, res) => {
-    const projectId = parseInt(req.params.id);
+    const projectId = parseInt(String(req.params.id));
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -795,7 +795,7 @@ export async function registerRoutes(
     upload.array("files", 20),
     async (req, res) => {
       try {
-        const projectId = parseInt(req.params.id);
+        const projectId = parseInt(String(req.params.id));
         const project = await storage.getProject(projectId);
         if (!project) {
           return res.status(404).json({ message: "Projeto não encontrado" });
@@ -840,7 +840,7 @@ export async function registerRoutes(
   );
 
   app.post("/api/projects/:id/process", async (req, res) => {
-    const projectId = parseInt(req.params.id);
+    const projectId = parseInt(String(req.params.id));
     const selectedProductIdExt = req.body?.productIdExt ? parseInt(req.body.productIdExt) : (req.body?.productId ? parseInt(req.body.productId) : null);
     const selectedProductIdInt = req.body?.productIdInt ? parseInt(req.body.productIdInt) : null;
     const selectedProductIdMuros = req.body?.productIdMuros ? parseInt(req.body.productIdMuros) : null;
@@ -1796,7 +1796,7 @@ export async function registerRoutes(
 
   app.put("/api/projects/:id", async (req, res) => {
     try {
-      const projectId = parseInt(req.params.id);
+      const projectId = parseInt(String(req.params.id));
       const { name, clientName, description, projectType, buildingType, realCost, realAreaExt, realAreaInt, realAreaMuros, realAreaPiso, realAreaCoberta, status } = req.body;
       const validBuildingTypes = ["residencial", "comercial", "institucional", "industrial", "outro"];
       const updateData: any = {};
@@ -1844,7 +1844,7 @@ export async function registerRoutes(
 
   app.put("/api/projects/:id/quantitativos", async (req, res) => {
     try {
-      const projectId = parseInt(req.params.id);
+      const projectId = parseInt(String(req.params.id));
       const { walls, slabs, corners } = req.body;
 
       if (!walls || !slabs) {
@@ -2011,7 +2011,7 @@ export async function registerRoutes(
 
   app.get("/api/projects/:id/export/:format", async (req, res) => {
     try {
-      const projectId = parseInt(req.params.id);
+      const projectId = parseInt(String(req.params.id));
       const format = req.params.format as "pdf" | "excel" | "json";
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -2419,7 +2419,7 @@ export async function registerRoutes(
 
   app.post("/api/projects/:id/annotated-image", requireAuth, async (req, res) => {
     try {
-      const projectId = parseInt(req.params.id);
+      const projectId = parseInt(String(req.params.id));
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Projeto nao encontrado" });
 
@@ -2492,7 +2492,7 @@ export async function registerRoutes(
   // (auto-generated by /process). Returns an error if the project hasn't been processed yet.
   app.post("/api/projects/:id/annotated-image-consolidated", requireAuth, async (req, res) => {
     try {
-      const projectId = parseInt(req.params.id);
+      const projectId = parseInt(String(req.params.id));
       const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Projeto nao encontrado" });
 
@@ -2591,7 +2591,7 @@ export async function registerRoutes(
 
   app.put("/api/users/:id", requireAdmin, async (req, res) => {
     try {
-      const userId = parseInt(req.params.id);
+      const userId = parseInt(String(req.params.id));
       const { displayName, role, active, storeName, password } = req.body;
       const normalizedActive = active !== undefined ? (active ? 1 : 0) : undefined;
       const normalizedRole = role !== undefined ? (role === "admin" ? "admin" : "viewer") : undefined;

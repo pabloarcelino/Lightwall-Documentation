@@ -181,6 +181,17 @@ budgetData = {
 - Instructs AI to ignore: furniture, vegetation, vehicles, decorative hatching, area text, level markers, projection lines
 - Focuses extraction on: solid wall lines, door arcs, window marks, dimensional annotations, slab boundaries
 
+## Senior Architect Review (May 2026)
+- **TypeScript baseline**: tsconfig now sets `target: ES2022`, eliminating Map/Set iteration errors and `function`-in-block strict-mode errors. `npx tsc --noEmit` returns clean.
+- **Dead code removed**: `server/replit_integrations/chat/` (broken imports, never wired) and `server/replit_integrations/batch/` (unused, broken `pRetry.AbortError`) deleted. Only the `image/` integration remains.
+- **Type cleanup**: `server/services/export/exportService.ts` now uses the actual `LegacyQuantitativeResult` shape and a locally-defined `MaterialList` type (mirrors the runtime shape produced in routes.ts). Removed dead references to legacy panel categories (SP, Tipo L, Eletricos) — all panels are 2P in current model.
+- **Runtime hardening**: `parseInt(req.params.id)` → `parseInt(String(req.params.id))` on all Express handlers in routes.ts (defensive against the `string | string[]` type in some Express overloads). `assignDisplayLabels` now has explicit param types.
+- **buildingTypePrompts**: `getBuildingTypeConfig` uses a typed key cast, removing implicit any.
+- **Pending recommendations** (deferred to avoid behavior risk):
+  1. Header wrapper duplicated across 9 pages (`glass-header border-b ...`) — could extract a thin `PageHeader` shell, but inner content varies enough that the marginal gain is small.
+  2. `server/routes.ts` (2635 lines) and `client/src/pages/ProjectDetails.tsx` (2271 lines) are oversized — splitting by domain (projects/files/AI/users routes; per-tab components) would improve maintainability but is a multi-day refactor with regression risk.
+  3. Per-page loading/error UX is inconsistent (some skeletons, some text). Standardizing would require a UX decision pass.
+
 ## Database
 - PostgreSQL with 8 tables: users, products (with panel_type), projects (with client_email + file_fingerprint), project_files, extracted_data, budgets, settings, ai_runs + user_sessions (auto-managed)
 - Orphan tables removed (Apr 2026): takeoff_segments, takeoff_slabs, takeoff_revisions, takeoff_exports, project_pages

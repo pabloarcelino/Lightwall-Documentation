@@ -3,17 +3,30 @@ import PDFDocument from "pdfkit";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import type {
-  QuantitativeResult,
-  MaterialList,
+  LegacyQuantitativeResult,
   TechnicalAlert,
 } from "../calculation/engine";
 import type { Assumption } from "../calculation/assumptions";
+
+// Material list shape used by the export service. Mirrors the structure produced
+// in routes.ts ("materials.complementaryMaterials") and consumed below.
+export interface MaterialList {
+  complementaryMaterials: Array<{
+    material: string;
+    description?: string;
+    quantity: number;
+    unit: string;
+    unitPrice: number;
+    totalPrice: number;
+  }>;
+  totalCost: number;
+}
 
 export interface BudgetExportData {
   projectName: string;
   clientName?: string;
   date: Date;
-  quantitatives: QuantitativeResult;
+  quantitatives: LegacyQuantitativeResult;
   materials: MaterialList;
   alerts: TechnicalAlert[];
   assumptions: Assumption[];
@@ -46,20 +59,8 @@ export async function exportToExcel(
       value: data.quantitatives.totals.totalSlabArea.toFixed(2),
     },
     {
-      item: "Total de Paineis SP",
-      value: data.quantitatives.totals.totalPanelsSP,
-    },
-    {
       item: "Total de Paineis 2P",
       value: data.quantitatives.totals.totalPanels2P,
-    },
-    {
-      item: "Total de Paineis Tipo L",
-      value: data.quantitatives.totals.totalPanelsTypeL,
-    },
-    {
-      item: "Total de Paineis Eletricos",
-      value: data.quantitatives.totals.totalPanelsElectric,
     },
     {
       item: "TOTAL DE PAINEIS",
@@ -76,8 +77,7 @@ export async function exportToExcel(
     { header: "Proporcao Esquadrias (%)", key: "openingsRatio", width: 25 },
     { header: "Perda (%)", key: "loss", width: 12 },
     { header: "Area com Perda (m2)", key: "areaWithLoss", width: 20 },
-    { header: "Paineis SP", key: "panelsSP", width: 15 },
-    { header: "Paineis Tipo L", key: "panelsTypeL", width: 18 },
+    { header: "Paineis 2P", key: "panels2P", width: 15 },
   ];
 
   wallsSheet.addRows([
@@ -95,8 +95,7 @@ export async function exportToExcel(
       ).toFixed(0),
       areaWithLoss:
         data.quantitatives.walls.external.areaWithLoss.toFixed(2),
-      panelsSP: data.quantitatives.walls.external.panelsSP,
-      panelsTypeL: data.quantitatives.walls.external.panelsTypeL,
+      panels2P: data.quantitatives.walls.external.panels2P,
     },
     {
       type: "Internas",
@@ -112,8 +111,7 @@ export async function exportToExcel(
       ).toFixed(0),
       areaWithLoss:
         data.quantitatives.walls.internal.areaWithLoss.toFixed(2),
-      panelsSP: data.quantitatives.walls.internal.panelsSP,
-      panelsTypeL: data.quantitatives.walls.internal.panelsTypeL,
+      panels2P: data.quantitatives.walls.internal.panels2P,
     },
   ]);
 
@@ -234,16 +232,7 @@ export async function exportToPDF(
       `Area Total de Lajes: ${data.quantitatives.totals.totalSlabArea.toFixed(2)} m2`,
     );
     doc.text(
-      `Total de Paineis SP: ${data.quantitatives.totals.totalPanelsSP} un`,
-    );
-    doc.text(
       `Total de Paineis 2P: ${data.quantitatives.totals.totalPanels2P} un`,
-    );
-    doc.text(
-      `Total de Paineis Tipo L: ${data.quantitatives.totals.totalPanelsTypeL} un`,
-    );
-    doc.text(
-      `Total de Paineis Eletricos: ${data.quantitatives.totals.totalPanelsElectric} un`,
     );
     doc
       .fontSize(12)
@@ -260,10 +249,7 @@ export async function exportToPDF(
       `  Area Liquida: ${data.quantitatives.walls.external.netArea.toFixed(2)} m2`,
     );
     doc.text(
-      `  Paineis SP: ${data.quantitatives.walls.external.panelsSP} un`,
-    );
-    doc.text(
-      `  Paineis Tipo L: ${data.quantitatives.walls.external.panelsTypeL} un`,
+      `  Paineis 2P: ${data.quantitatives.walls.external.panels2P} un`,
     );
     doc.moveDown(0.5);
     doc.text("Paredes Internas:");
@@ -271,10 +257,7 @@ export async function exportToPDF(
       `  Area Liquida: ${data.quantitatives.walls.internal.netArea.toFixed(2)} m2`,
     );
     doc.text(
-      `  Paineis SP: ${data.quantitatives.walls.internal.panelsSP} un`,
-    );
-    doc.text(
-      `  Paineis Tipo L: ${data.quantitatives.walls.internal.panelsTypeL} un`,
+      `  Paineis 2P: ${data.quantitatives.walls.internal.panels2P} un`,
     );
     doc.moveDown();
 
@@ -295,7 +278,7 @@ export async function exportToPDF(
     doc.moveDown(0.5);
     doc.fontSize(10);
     for (const material of data.materials.complementaryMaterials) {
-      doc.text(`${material.name}: ${material.quantity} ${material.unit}`);
+      doc.text(`${material.material}: ${material.quantity} ${material.unit}`);
     }
     doc.moveDown();
 

@@ -151,9 +151,11 @@ Analise a planta sem assumir um tipo especifico de edificacao. Use heuristicas g
   },
 };
 
+type BuildingTypeKey = keyof typeof CONFIGS;
+
 export function getBuildingTypeConfig(buildingType?: string | null): BuildingTypeConfig {
   if (buildingType && buildingType in CONFIGS) {
-    return CONFIGS[buildingType];
+    return CONFIGS[buildingType as BuildingTypeKey];
   }
   return CONFIGS.outro;
 }

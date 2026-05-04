@@ -142,7 +142,7 @@ export default function Catalogo() {
     ? panels
     : panels.filter(p => p.panelType === filterType);
 
-  const panelTypes = [...new Set(panels.map(p => p.panelType).filter(Boolean))].sort();
+  const panelTypes = Array.from(new Set(panels.map(p => p.panelType).filter(Boolean))).sort();
 
   return (
     <div className="min-h-screen lw-gradient-bg">
