@@ -640,7 +640,7 @@ export async function registerRoutes(
 
   app.post("/api/projects", async (req, res) => {
     try {
-      const { name, clientName, description, buildingType } = req.body;
+      const { name, clientName, clientEmail, description, buildingType } = req.body;
       if (!name) {
         return res.status(400).json({ message: "Nome do projeto é obrigatório" });
       }
@@ -648,6 +648,7 @@ export async function registerRoutes(
       const project = await storage.createProject({
         name,
         clientName: clientName || null,
+        clientEmail: clientEmail?.trim().toLowerCase() || null,
         description: description || null,
         buildingType: buildingType && validTypes.includes(buildingType) ? buildingType : null,
         status: "draft",
@@ -659,14 +660,16 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/projects", async (_req, res) => {
+  app.get("/api/projects", async (req, res) => {
     try {
       const projects = await storage.getProjects();
+      const isAdmin = req.user?.role === "admin";
       const projectsWithBudget = await Promise.all(
         projects.map(async (p) => {
           const budget = await storage.getBudget(p.id);
+          const { clientEmail, fileFingerprint, ...publicFields } = p;
           return {
-            ...p,
+            ...(isAdmin ? p : publicFields),
             budgetTotalCost: budget?.totalCost ? parseFloat(budget.totalCost) : null,
           };
         })
@@ -685,11 +688,13 @@ export async function registerRoutes(
       if (!project) {
         return res.status(404).json({ message: "Projeto não encontrado" });
       }
+      const isAdmin = req.user?.role === "admin";
       const files = await storage.getProjectFiles(id);
       const extracted = await storage.getExtractedData(id);
       const budget = await storage.getBudget(id);
+      const { clientEmail, fileFingerprint, ...publicFields } = project;
       res.json({
-        project: { ...project, budgetTotalCost: budget?.totalCost ?? null },
+        project: { ...(isAdmin ? project : publicFields), budgetTotalCost: budget?.totalCost ?? null },
         files,
         extractedData: extracted,
         budget: budget ? budget.budgetData : null,
@@ -817,7 +822,16 @@ export async function registerRoutes(
           savedFiles.push(saved);
         }
 
-        res.json({ files: savedFiles });
+        const crypto = await import("crypto");
+        const hash = crypto.createHash("sha256");
+        for (const file of [...uploadedFiles].sort((a, b) => a.originalname.localeCompare(b.originalname))) {
+          const content = await fs.readFile(file.path);
+          hash.update(content);
+        }
+        const fingerprint = hash.digest("hex").substring(0, 64);
+        await storage.updateProject(projectId, { fileFingerprint: fingerprint });
+
+        res.json({ files: savedFiles, fingerprint });
       } catch (error) {
         console.error("Erro no upload:", error);
         res.status(500).json({ message: "Erro no upload de arquivos" });
@@ -866,6 +880,26 @@ export async function registerRoutes(
       const project = await storage.getProject(projectId);
       if (!project) {
         return res.status(404).json({ message: "Projeto não encontrado" });
+      }
+
+      if (project.fileFingerprint) {
+        const allProjects = await storage.getProjects();
+        const duplicate = allProjects.find(
+          (p) =>
+            p.id !== projectId &&
+            p.fileFingerprint === project.fileFingerprint &&
+            p.status === "completed" &&
+            (!project.clientEmail || !p.clientEmail || p.clientEmail === project.clientEmail)
+        );
+        if (duplicate) {
+          console.log(`[PIPELINE] Projeto duplicado detectado: projeto ${projectId} tem mesma impressao digital que projeto ${duplicate.id}`);
+          return res.status(409).json({
+            message: "Projeto com arquivos identicos ja foi processado anteriormente.",
+            duplicateProjectId: duplicate.id,
+            duplicateProjectName: duplicate.name,
+            duplicateClientName: duplicate.clientName,
+          });
+        }
       }
 
       await storage.updateProjectStatus(projectId, "processing");

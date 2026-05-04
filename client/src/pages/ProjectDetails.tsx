@@ -51,6 +51,8 @@ import {
   ShieldAlert,
   ShieldCheck,
   Activity,
+  Fingerprint,
+  Mail,
 } from "lucide-react";
 import {
   Dialog,
@@ -160,6 +162,11 @@ export default function ProjectDetails() {
       return next;
     });
   };
+
+  const { data: currentUser } = useQuery<{ username: string; displayName: string | null; role: string }>({
+    queryKey: ["/api/auth/me"],
+  });
+  const isAdmin = currentUser?.role === "admin";
 
   const { data, isLoading } = useQuery({
     queryKey: ["/api/projects", projectId],
@@ -301,11 +308,24 @@ export default function ProjectDetails() {
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({ message: "Erro ao processar projeto" }));
+        if (res.status === 409 && errData.duplicateProjectId) {
+          return { duplicate: true, ...errData };
+        }
         throw new Error(errData.message || "Erro ao processar projeto");
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
+      if (data?.duplicate) {
+        setIsProcessing(false);
+        toast({
+          title: "Projeto Duplicado",
+          description: `Arquivos identicos ja processados no projeto "${data.duplicateProjectName}". Redirecionando...`,
+          variant: "destructive",
+        });
+        setTimeout(() => setLocation(`/project/${data.duplicateProjectId}`), 2000);
+        return;
+      }
       toast({ title: "Sucesso!", description: "Projeto processado com sucesso" });
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
     },
@@ -469,6 +489,22 @@ export default function ProjectDetails() {
                       </h1>
                       {project.clientName && (
                         <p className="text-xs text-muted-foreground">Cliente: {project.clientName}</p>
+                      )}
+                      {isAdmin && (project.clientEmail || project.fileFingerprint) && (
+                        <div className="flex items-center gap-3 mt-1">
+                          {project.clientEmail && (
+                            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded" data-testid="text-client-email">
+                              <Mail className="h-3 w-3" />
+                              {project.clientEmail}
+                            </span>
+                          )}
+                          {project.fileFingerprint && (
+                            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded font-mono" data-testid="text-fingerprint" title={project.fileFingerprint}>
+                              <Fingerprint className="h-3 w-3" />
+                              {project.fileFingerprint.substring(0, 12)}...
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                     <Button

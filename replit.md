@@ -62,7 +62,7 @@ All intermediate pipeline results are saved to `extracted_data` table for later 
 - `server/services/calculation/assumptions.ts` - Default assumptions (wall height 3m, door 0.8x2.1m, etc.)
 - `server/services/export/exportService.ts` - PDF/Excel/JSON export
 - `server/seed.ts` - Product catalog seed (LW-2P-090 at R$275/m2, PROJ-PAG at R$11/m2)
-- `client/src/App.tsx` - Frontend routes (Dashboard, NewProject, ProjectDetails, Settings, Metodologia, Catalogo, Calibracao, Usuarios)
+- `client/src/App.tsx` - Frontend routes (Dashboard, NewProject, ProjectDetails, Settings, Metodologia, Catalogo, Calibracao, Usuarios, GuiaExterno)
 - `client/src/components/Metodologia.tsx` - Reusable methodology section (process, calculations, assumptions, methods)
 - `client/src/pages/MetodologiaPage.tsx` - Standalone methodology page (/metodologia)
 - `client/src/pages/Catalogo.tsx` - Product catalog management page (/catalogo) with CRUD
@@ -71,6 +71,7 @@ All intermediate pipeline results are saved to `extracted_data` table for later 
 - `client/src/pages/Settings.tsx` - API key configuration for Gemini and OpenAI (with reusable ApiKeyCard component), multi-model info card
 - `client/src/pages/Calibracao.tsx` - Calibration details page (/calibracao) with comparative table per test project
 - `client/src/pages/Usuarios.tsx` - Admin user management page (/usuarios) with user CRUD, store/origin tracking, role/status toggles
+- `client/src/pages/GuiaExterno.tsx` - External usage guide page (/guia) with accordion sections for store staff
 
 ## Scope Pre-selection
 - **Pre-process scope checkboxes**: Before clicking "Processar Projeto", user can select which categories to include: paredes externas, paredes internas, laje de piso, laje coberta, cantos/conexões
@@ -169,8 +170,19 @@ budgetData = {
 - Self-protection: admins cannot deactivate themselves or remove their own admin role
 - Key files: server/auth.ts, client/src/pages/Login.tsx, client/src/pages/Usuarios.tsx
 
+## Client Identifier System
+- **Client email**: Optional field on project creation, stored lowercase in `projects.client_email`
+- **File fingerprint**: SHA-256 hash of sorted file contents generated on upload, stored in `projects.file_fingerprint` (64 chars)
+- **Duplicate detection**: On `/process`, checks for existing completed projects with same fingerprint (and matching email when both present). Returns HTTP 409 with redirect to existing project
+- **Admin-only visibility**: `clientEmail` and `fileFingerprint` are stripped from API responses for non-admin users (server-side filtering). Admin users see email/fingerprint badges in ProjectDetails header
+
+## AI Pre-Treatment (Furniture/Debris Filtering)
+- Geometry extraction prompt (`buildGeometryPrompt` in planAnalyzer.ts) includes explicit PRE-TREATMENT section
+- Instructs AI to ignore: furniture, vegetation, vehicles, decorative hatching, area text, level markers, projection lines
+- Focuses extraction on: solid wall lines, door arcs, window marks, dimensional annotations, slab boundaries
+
 ## Database
-- PostgreSQL with 8 tables: users, products (with panel_type), projects, project_files, extracted_data, budgets, settings, ai_runs + user_sessions (auto-managed)
+- PostgreSQL with 8 tables: users, products (with panel_type), projects (with client_email + file_fingerprint), project_files, extracted_data, budgets, settings, ai_runs + user_sessions (auto-managed)
 - Orphan tables removed (Apr 2026): takeoff_segments, takeoff_slabs, takeoff_revisions, takeoff_exports, project_pages
 
 ## Pre-flight & Native PDF Vector Pipeline (Apr 2026)

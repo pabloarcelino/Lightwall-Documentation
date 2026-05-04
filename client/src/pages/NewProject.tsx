@@ -32,6 +32,7 @@ export default function NewProject() {
 
   const [projectName, setProjectName] = useState("");
   const [clientName, setClientName] = useState("");
+  const [clientEmail, setClientEmail] = useState("");
   const [description, setDescription] = useState("");
   const [buildingType, setBuildingType] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -40,6 +41,7 @@ export default function NewProject() {
     mutationFn: async (data: {
       name: string;
       clientName?: string;
+      clientEmail?: string;
       description?: string;
       buildingType?: string;
     }) => {
@@ -127,6 +129,7 @@ export default function NewProject() {
     createProjectMutation.mutate({
       name: projectName,
       clientName: clientName || undefined,
+      clientEmail: clientEmail || undefined,
       description: description || undefined,
       buildingType: buildingType || undefined,
     });
@@ -192,6 +195,21 @@ export default function NewProject() {
                   onChange={(e) => setClientName(e.target.value)}
                   placeholder="Ex: Joao Silva"
                 />
+              </div>
+
+              <div>
+                <Label htmlFor="clientEmail">Email do Cliente</Label>
+                <Input
+                  id="clientEmail"
+                  type="email"
+                  data-testid="input-client-email"
+                  value={clientEmail}
+                  onChange={(e) => setClientEmail(e.target.value)}
+                  placeholder="Ex: joao@email.com"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Usado para identificacao do projeto. Nao sera compartilhado.
+                </p>
               </div>
 
               <div>

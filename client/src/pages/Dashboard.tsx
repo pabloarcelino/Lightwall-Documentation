@@ -8,7 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Plus, FolderOpen, Calendar, CheckCircle, Settings, Trash2, BookOpen, Package, LogOut, User, Target, FlaskConical, TrendingUp, TrendingDown, BarChart3, ArrowRight, Users } from "lucide-react";
+import { Plus, FolderOpen, Calendar, CheckCircle, Settings, Trash2, BookOpen, Package, LogOut, User, Target, FlaskConical, TrendingUp, TrendingDown, BarChart3, ArrowRight, Users, HelpCircle } from "lucide-react";
 import { Link } from "wouter";
 import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
@@ -80,6 +80,12 @@ export default function Dashboard() {
           <div className="flex items-center justify-between">
             <LightwallBrand />
             <div className="flex gap-2">
+              <Link href="/guia">
+                <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-guia">
+                  <HelpCircle className="h-4 w-4" />
+                  Guia
+                </Button>
+              </Link>
               <Link href="/catalogo">
                 <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-catalogo">
                   <Package className="h-4 w-4" />

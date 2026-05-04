@@ -925,6 +925,17 @@ function buildGeometryPrompt(pavimentos: string[], buildingType?: string, peDire
 
   return `Voce e um engenheiro orcamentista experiente. Analise ${isSingle ? "esta planta baixa" : "estas plantas baixas"} (${nivelRef}) e extraia TODOS os elementos construtivos para orcamento de paineis Lightwall.
 
+=== PRE-TRATAMENTO (IGNORAR ELEMENTOS NAO-ESTRUTURAIS) ===
+IGNORE COMPLETAMENTE os seguintes elementos do desenho — eles NAO sao paredes nem elementos construtivos:
+- Mobilia e equipamentos: camas, mesas, cadeiras, sofas, fogao, geladeira, pias, vasos sanitarios, chuveiros, armarios, bancadas
+- Vegetacao: arvores, arbustos, jardins, grama
+- Carros e veiculos estacionados
+- Hachuras decorativas internas (piso, revestimento)
+- Textos de area (ex: "A=12,50m2"), setas de norte, logos, carimbos
+- Cotas de nivel (ex: "+0.15", "-0.30")
+- Linhas de projecao pontilhadas (beiral, telhado acima)
+Concentre-se APENAS em: paredes (linhas solidas continuas), portas (arcos), janelas (tracos paralelos), cotas dimensionais (numeros com setas), e limites de laje.
+
 ${btConfig.fewShotContext}
 
 === DEFINICOES DE CLASSIFICACAO (OBRIGATORIO SEGUIR) ===

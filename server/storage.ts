@@ -37,7 +37,7 @@ export interface IStorage {
   createProject(project: InsertProject): Promise<Project>;
   getProjects(): Promise<Project[]>;
   getProject(id: number): Promise<Project | undefined>;
-  updateProject(id: number, data: Partial<{ name: string; clientName: string; description: string; projectType: string; buildingType: string | null; realCost: string | null; realAreaExt: string | null; realAreaInt: string | null; realAreaPiso: string | null; realAreaCoberta: string | null }>): Promise<Project | undefined>;
+  updateProject(id: number, data: Partial<{ name: string; clientName: string; clientEmail: string; description: string; projectType: string; buildingType: string | null; fileFingerprint: string; realCost: string | null; realAreaExt: string | null; realAreaInt: string | null; realAreaPiso: string | null; realAreaCoberta: string | null }>): Promise<Project | undefined>;
   updateProjectStatus(id: number, status: string): Promise<Project | undefined>;
 
   addProjectFile(file: InsertProjectFile): Promise<ProjectFile>;
@@ -137,7 +137,7 @@ export class DatabaseStorage implements IStorage {
 
   async updateProject(
     id: number,
-    data: Partial<{ name: string; clientName: string; description: string; projectType: string; buildingType: string | null; realCost: string | null; realAreaExt: string | null; realAreaInt: string | null; realAreaPiso: string | null; realAreaCoberta: string | null }>,
+    data: Partial<{ name: string; clientName: string; clientEmail: string; description: string; projectType: string; buildingType: string | null; fileFingerprint: string; realCost: string | null; realAreaExt: string | null; realAreaInt: string | null; realAreaPiso: string | null; realAreaCoberta: string | null }>,
   ): Promise<Project | undefined> {
     const [updated] = await db
       .update(projects)
