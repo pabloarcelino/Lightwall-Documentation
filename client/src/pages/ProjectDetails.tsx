@@ -78,6 +78,7 @@ interface PipelineStep {
 }
 
 const STEP_CONFIG: Array<{ step: number; label: string; parentStep?: number; displayNum?: number }> = [
+  { step: 0.5, label: "Pre-flight", parentStep: 1 },
   { step: 1, label: "Classificacao + Tabelas", displayNum: 1 },
   { step: 3, label: "Extracao Geometrica", displayNum: 2 },
   { step: 3.5, label: "Verificacao IA", parentStep: 3 },
@@ -237,11 +238,12 @@ export default function ProjectDetails() {
         const data = JSON.parse(event.data);
         if (data.step === 0) {
           setTickNow(Date.now());
-          if (data.status === "done") {
+          const isTerminal = data.label === "Concluido" || data.label === "Erro";
+          if (isTerminal && data.status === "done") {
             setIsProcessing(false);
             es.close();
             queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-          } else if (data.status === "error") {
+          } else if (isTerminal && data.status === "error") {
             setIsProcessing(false);
             es.close();
           }
@@ -305,7 +307,6 @@ export default function ProjectDetails() {
     onSuccess: () => {
       toast({ title: "Sucesso!", description: "Projeto processado com sucesso" });
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-      setIsProcessing(false);
     },
     onError: (error: Error) => {
       toast({ title: "Erro", description: error.message || "Erro ao processar projeto", variant: "destructive" });

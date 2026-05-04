@@ -870,15 +870,15 @@ export async function registerRoutes(
           // ===== Pre-flight inspection: detect file type, vector vs raster, recommend mode =====
           let preflight: Awaited<ReturnType<typeof inspectFile>> | null = null;
           try {
-            sendProgress(projectId, 0, "Pre-flight", "running", `Inspecionando ${file.originalName}...`);
+            sendProgress(projectId, 0.5, "Pre-flight", "running", `Inspecionando ${file.originalName}...`);
             preflight = await inspectFile(path.resolve(file.filePath), file.fileType);
             const summary = summarizePreflight(preflight);
             console.log(`[PREFLIGHT] ${file.originalName}: ${summary}`);
             for (const n of preflight.notes) console.log(`[PREFLIGHT]   - ${n}`);
-            sendProgress(projectId, 0, "Pre-flight", "done", `${file.originalName}: ${summary}`);
+            sendProgress(projectId, 0.5, "Pre-flight", "done", `${file.originalName}: ${summary}`);
           } catch (preErr: any) {
             console.warn(`[PREFLIGHT] Falha ao inspecionar ${file.originalName}:`, preErr?.message || preErr);
-            sendProgress(projectId, 0, "Pre-flight", "done", `Inspeção pulada (${preErr?.message || "erro"})`);
+            sendProgress(projectId, 0.5, "Pre-flight", "done", `Inspeção pulada (${preErr?.message || "erro"})`);
           }
 
           // ===== IFC pipeline: skip Gemini entirely, parse structured data directly =====
@@ -1727,7 +1727,7 @@ export async function registerRoutes(
   app.put("/api/projects/:id", async (req, res) => {
     try {
       const projectId = parseInt(req.params.id);
-      const { name, clientName, description, projectType, buildingType, realCost, realAreaExt, realAreaInt, realAreaMuros, realAreaPiso, realAreaCoberta } = req.body;
+      const { name, clientName, description, projectType, buildingType, realCost, realAreaExt, realAreaInt, realAreaMuros, realAreaPiso, realAreaCoberta, status } = req.body;
       const validBuildingTypes = ["residencial", "comercial", "institucional", "industrial", "outro"];
       const updateData: any = {};
       if (name !== undefined) updateData.name = name;
@@ -1735,6 +1735,9 @@ export async function registerRoutes(
       if (description !== undefined) updateData.description = description;
       if (projectType !== undefined) updateData.projectType = projectType;
       if (buildingType !== undefined) updateData.buildingType = (buildingType && validBuildingTypes.includes(buildingType)) ? buildingType : null;
+      if (status !== undefined && ["pending", "processing", "completed", "error"].includes(status)) {
+        await storage.updateProjectStatus(projectId, status);
+      }
       if (realCost !== undefined) updateData.realCost = realCost;
       if (realAreaExt !== undefined) updateData.realAreaExt = realAreaExt;
       if (realAreaInt !== undefined) updateData.realAreaInt = realAreaInt;
