@@ -11,6 +11,7 @@ import {
   setUserApiKey,
   clearUserApiKey,
   splitPdfPages,
+  clearSplitCache,
   getFilePages,
   type PageClassification,
   type GeometryResult,
@@ -851,6 +852,7 @@ export async function registerRoutes(
       await storage.clearExtractedData(projectId);
       await storage.deleteBudget(projectId);
       resetApiMetrics(projectId);
+      clearSplitCache();
       pipelineStartTimes.set(projectId, Date.now());
 
       const allClassifications: PageClassification[] = [];
@@ -1469,6 +1471,61 @@ export async function registerRoutes(
         hasAssumption: 0,
       });
 
+      // PARALLELIZED: fire description AI call EARLY so it runs concurrently
+      // with the entire Etapa 4.5 annotation block below. The description only
+      // depends on budget data + file paths — both already computed. We attach
+      // .catch() immediately to prevent unhandled rejection if intermediate steps
+      // throw and the promise is never awaited.
+      const nonIfcFiles = files.filter(f => f.fileType !== "ifc");
+      const ifcOnly = nonIfcFiles.length === 0 && files.length > 0;
+      const filePaths = nonIfcFiles.map(f => ({ path: f.filePath, fileType: f.fileType, name: f.originalName }));
+      const geometrySummary = {
+        wallCount: fused.walls.length,
+        slabCount: fused.slabs.length,
+        cornerCount: fused.corners.length,
+        floors: budget.pavimentos.map((p: any) => p.nome),
+      };
+      const budgetSummaryForDesc = {
+        totalPanels: budget.resumo.total_geral_paineis,
+        totalCost: totalCost,
+        floors: budget.pavimentos.map((p: any) => ({
+          name: p.nome,
+          panels: p.paredes_externas.quantidade_paineis + p.paredes_internas.quantidade_paineis + p.laje_piso.quantidade_paineis + p.laje_coberta.quantidade_paineis,
+        })),
+      };
+
+      const descriptionPromise = (async (): Promise<{ text: string; failed: boolean }> => {
+        if (ifcOnly) {
+          sendProgress(projectId, 8, "Descricao do Projeto", "running", "Gerando resumo do modelo IFC (sem IA)...");
+          const text = buildIfcDeterministicDescription(files.length, budget, geometrySummary, totalCost);
+          sendProgress(projectId, 8, "Descricao do Projeto", "done", "Resumo gerado a partir do modelo BIM.");
+          return { text, failed: false };
+        }
+        sendProgress(projectId, 8, "Descricao do Projeto", "running", "A IA esta analisando profundamente as imagens para descrever o projeto...");
+        const descModel = providerForRun === "openai" ? `openai:${getOpenAIModelName()}` : "gemini-2.5-pro";
+        const text = await auditAiCall(
+          {
+            projectId,
+            promptVersion: "describeProject_v1",
+            model: descModel,
+            inputSummary: `files=${filePaths.length} pages=${allClassifications.length}`,
+          },
+          () => describeProject(filePaths, allClassifications, geometrySummary, budgetSummaryForDesc),
+          (out: any) => ({ length: typeof out === "string" ? out.length : 0 }),
+        );
+        const failed = text.startsWith("Nao foi possivel");
+        if (failed) {
+          sendProgress(projectId, 8, "Descricao do Projeto", "error", "Falha ao gerar descricao automatica. O orcamento foi calculado normalmente.");
+        } else {
+          sendProgress(projectId, 8, "Descricao do Projeto", "done", text.substring(0, 150) + "...");
+        }
+        return { text, failed };
+      })().catch((err: any) => {
+        console.error(`[DESCRICAO] Erro na descricao paralela: ${err?.message || err}`);
+        sendProgress(projectId, 8, "Descricao do Projeto", "error", "Falha ao gerar descricao automatica.");
+        return { text: "Nao foi possivel gerar descricao automatica.", failed: true };
+      });
+
       // ===== Step 4.5: Auto-generate annotated floor plan images (one per floor) =====
       try {
         const totalWalls = fusaoWallsWithScope.filter((w: any) => w.enabled !== false);
@@ -1510,9 +1567,10 @@ export async function registerRoutes(
           annotationSource = "cv_pipeline";
         } else {
           // ---- IA path: Gemini image editing on planta_baixa pages only ----
-          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Extraindo paginas da planta baixa e gerando imagens anotadas com IA...");
+          // PARALLELIZED: all pavimentos are generated concurrently instead of sequentially.
+          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Extraindo paginas da planta baixa e gerando imagens anotadas com IA (paralelo)...");
           const imgSources = await getAnnotationImageSources(files, allClassifications);
-          for (const src of imgSources) {
+          const annotationJobs = imgSources.map(src => {
             const floorWalls = fusaoWallsWithScope.filter((w: any) =>
               src.pavimento === "all" || w.nivel === src.pavimento
             );
@@ -1521,27 +1579,32 @@ export async function registerRoutes(
             );
             const enabledFloorWalls = floorWalls.filter((w: any) => w.enabled !== false);
             const enabledFloorSlabs = floorSlabs.filter((s: any) => s.enabled !== false);
-            if (enabledFloorWalls.length === 0 && enabledFloorSlabs.length === 0) continue;
+            if (enabledFloorWalls.length === 0 && enabledFloorSlabs.length === 0) return null;
+            return { src, floorWalls, floorSlabs, enabledFloorWalls, enabledFloorSlabs };
+          }).filter((j): j is NonNullable<typeof j> => j !== null);
 
-            try {
-              const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
-              const dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
-              annotatedImages.push({
-                pavimento: src.pavimento,
-                pageIndex: src.pageIndex,
+          const annotationResults = await Promise.allSettled(
+            annotationJobs.map(async (job) => {
+              const prompt = buildAnnotationPrompt(job.floorWalls, job.floorSlabs);
+              const dataUrl = await editImage(prompt, [{ data: job.src.base64, mimeType: job.src.mimeType }]);
+              console.log(`[ETAPA 4.5] Imagem anotada ${job.src.pavimento} (pg ${job.src.pageIndex}): ${Math.round(dataUrl.length / 1024)}KB`);
+              return {
+                pavimento: job.src.pavimento,
+                pageIndex: job.src.pageIndex,
                 image: dataUrl,
                 summary: {
-                  externas: enabledFloorWalls.filter((w: any) => w.classe === "externa").length,
-                  internas: enabledFloorWalls.filter((w: any) => w.classe === "interna").length,
-                  muros: enabledFloorWalls.filter((w: any) => w.classe === "muro").length,
-                  lajePiso: enabledFloorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
-                  lajeCoberta: enabledFloorSlabs.filter((s: any) => s.classe === "coberta").length,
+                  externas: job.enabledFloorWalls.filter((w: any) => w.classe === "externa").length,
+                  internas: job.enabledFloorWalls.filter((w: any) => w.classe === "interna").length,
+                  muros: job.enabledFloorWalls.filter((w: any) => w.classe === "muro").length,
+                  lajePiso: job.enabledFloorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
+                  lajeCoberta: job.enabledFloorSlabs.filter((s: any) => s.classe === "coberta").length,
                 },
-              });
-              console.log(`[ETAPA 4.5] Imagem anotada ${src.pavimento} (pg ${src.pageIndex}): ${Math.round(dataUrl.length / 1024)}KB`);
-            } catch (floorError: any) {
-              console.error(`[ETAPA 4.5] Falha na imagem do pav ${src.pavimento}:`, floorError?.message);
-            }
+              };
+            }),
+          );
+          for (const r of annotationResults) {
+            if (r.status === "fulfilled") annotatedImages.push(r.value);
+            else console.error(`[ETAPA 4.5] Falha na imagem de um pavimento:`, (r as PromiseRejectedResult).reason?.message);
           }
           if (annotatedImages.length > 0) annotationSource = "ia";
         }
@@ -1654,52 +1717,9 @@ export async function registerRoutes(
         hasAssumption: 0,
       });
 
-      // For IFC files, skip Gemini entirely (zero AI cost, deterministic).
-      // If all files are IFC, generate a deterministic summary from parsed geometry.
-      const nonIfcFiles = files.filter(f => f.fileType !== "ifc");
-      const ifcOnly = nonIfcFiles.length === 0 && files.length > 0;
-      const filePaths = nonIfcFiles.map(f => ({ path: f.filePath, fileType: f.fileType, name: f.originalName }));
-      const geometrySummary = {
-        wallCount: fused.walls.length,
-        slabCount: fused.slabs.length,
-        cornerCount: fused.corners.length,
-        floors: budget.pavimentos.map((p: any) => p.nome),
-      };
-      const budgetSummaryForDesc = {
-        totalPanels: budget.resumo.total_geral_paineis,
-        totalCost: totalCost,
-        floors: budget.pavimentos.map((p: any) => ({
-          name: p.nome,
-          panels: p.paredes_externas.quantidade_paineis + p.paredes_internas.quantidade_paineis + p.laje_piso.quantidade_paineis + p.laje_coberta.quantidade_paineis,
-        })),
-      };
-
-      let projectDescription: string;
-      let descriptionFailed = false;
-      if (ifcOnly) {
-        sendProgress(projectId, 8, "Descricao do Projeto", "running", "Gerando resumo do modelo IFC (sem IA)...");
-        projectDescription = buildIfcDeterministicDescription(files.length, budget, geometrySummary, totalCost);
-        sendProgress(projectId, 8, "Descricao do Projeto", "done", "Resumo gerado a partir do modelo BIM.");
-      } else {
-        sendProgress(projectId, 8, "Descricao do Projeto", "running", "A IA esta analisando profundamente as imagens para descrever o projeto...");
-        const descModel = providerForRun === "openai" ? `openai:${getOpenAIModelName()}` : "gemini-2.5-pro";
-        projectDescription = await auditAiCall(
-          {
-            projectId,
-            promptVersion: "describeProject_v1",
-            model: descModel,
-            inputSummary: `files=${filePaths.length} pages=${allClassifications.length}`,
-          },
-          () => describeProject(filePaths, allClassifications, geometrySummary, budgetSummaryForDesc),
-          (out: any) => ({ length: typeof out === "string" ? out.length : 0 }),
-        );
-        descriptionFailed = projectDescription.startsWith("Nao foi possivel");
-        if (descriptionFailed) {
-          sendProgress(projectId, 8, "Descricao do Projeto", "error", "Falha ao gerar descricao automatica. O orcamento foi calculado normalmente.");
-        } else {
-          sendProgress(projectId, 8, "Descricao do Projeto", "done", projectDescription.substring(0, 150) + "...");
-        }
-      }
+      // Await the description promise that was fired BEFORE Etapa 4.5
+      // (overlaps with annotation generation + reference image extraction).
+      const { text: projectDescription, failed: descriptionFailed } = await descriptionPromise;
 
       await storage.addExtractedData({
         projectId, fileId: null, elementType: "descricao_projeto",

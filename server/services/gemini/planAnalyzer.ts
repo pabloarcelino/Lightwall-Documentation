@@ -274,8 +274,21 @@ async function callGeminiFlashMultiPart(
   }, "callGeminiFlashMultiPart");
 }
 
+const _splitCache = new Map<string, Array<{ pageIndex: number; base64: string }>>();
+
+export function clearSplitCache(): void {
+  _splitCache.clear();
+}
+
 export async function splitPdfPages(pdfPath: string): Promise<Array<{ pageIndex: number; base64: string }>> {
-  const pdfBytes = await fs.readFile(pdfPath);
+  const absPath = path.resolve(pdfPath);
+  const cached = _splitCache.get(absPath);
+  if (cached) {
+    console.log(`[PDF] Cache hit — ${cached.length} paginas (${absPath})`);
+    return cached;
+  }
+
+  const pdfBytes = await fs.readFile(absPath);
   const pdfDoc = await PDFDocument.load(pdfBytes);
   const pageCount = pdfDoc.getPageCount();
   const pages: Array<{ pageIndex: number; base64: string }> = [];
@@ -292,6 +305,7 @@ export async function splitPdfPages(pdfPath: string): Promise<Array<{ pageIndex:
   }
 
   console.log(`[PDF] Dividido em ${pageCount} paginas individuais`);
+  _splitCache.set(absPath, pages);
   return pages;
 }
 
