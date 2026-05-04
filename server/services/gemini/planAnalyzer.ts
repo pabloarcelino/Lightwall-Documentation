@@ -52,6 +52,8 @@ export interface ExtractedWall {
   esquadrias: WallEsquadria[];
   bbox?: [number, number, number, number];
   page_index?: number;
+  needs_review?: boolean;
+  review_reason?: string;
 }
 
 export interface ExtractedSlab {

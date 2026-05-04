@@ -1088,6 +1088,7 @@ export async function registerRoutes(
                     imageMimeType: page.mimeType,
                     imageWidthPx: 2480,
                     imageHeightPx: 3508,
+                    buildingType: effectiveBuildingType() || undefined,
                   });
                   let segCount = 0;
                   let slabCount = 0;

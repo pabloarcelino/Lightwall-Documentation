@@ -25,6 +25,7 @@ export interface AnalyzeOptions {
   imageWidthPx: number;
   imageHeightPx: number;
   modelOverride?: string;
+  buildingType?: string | null;
 }
 
 export interface AnalyzeResult {

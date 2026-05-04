@@ -196,6 +196,32 @@ budgetData = {
   1. `server/routes.ts` (2635 lines) and `client/src/pages/ProjectDetails.tsx` (2271 lines) splitting — multi-day refactor with regression risk that needs an isolated branch and full E2E tests.
   2. CI integration for `npx tsc --noEmit` and Playwright E2E tests — infra changes outside scope.
 
+## Refinamento de classificacao IA (Maio 2026)
+Refinamento dos prompts e heuristicas para melhorar a identificacao de parede externa/interna, muro, lajes e aberturas:
+
+1. **Prompt enriquecido** (`server/services/takeoff/prompt.ts` — `TAKEOFF_SYSTEM_PROMPT`):
+   - Checklist de raciocinio em 6 passos antes da classificacao.
+   - Definicoes detalhadas com pistas visuais brasileiras (NBR 6492): traco grosso vs fino, hachuras, posicao no perimetro, espessuras tipicas, tem cobertura ou nao.
+   - Secao de anti-exemplos (parede grossa interna != externa, linha tracejada perimetral != externa, muro de divisa != externa, beiral faz parte da laje_cobertura).
+   - Secao de aberturas com pistas visuais (arco da porta, linhas paralelas da janela) e instrucao para cruzar com o quadro_esquadrias usando codigos P1/J1.
+   - `needs_review=true` agora obrigatorio em qualquer ambiguidade entre categorias.
+
+2. **Contexto de tipo de edificacao injetado no prompt visual** (`buildUserPrompt`):
+   - Novo parametro opcional `buildingType?: string | null`.
+   - Quando presente, injeta `fewShotContext` + `verificationHints` do `getBuildingTypeConfig` (residencial/comercial/institucional/industrial/outro). Lazy require com try/catch para nao quebrar caso a config falhe.
+   - `AnalyzeOptions` em `aiTakeoffService.ts` recebeu o campo. Call site em `server/routes.ts` (L1094) passa `effectiveBuildingType()`.
+
+3. **Score-based reclassification sempre rodando como flag** (`server/services/calculation/engine.ts`):
+   - `ExtractedWall` (planAnalyzer.ts) e `WallItem` (engine.ts) ganharam campos opcionais `needs_review?: boolean; review_reason?: string`.
+   - O caso extremo existente (intWallCount === 0 → reclassifica por score) foi preservado e agora tambem marca `needs_review` nas paredes mexidas.
+   - Novo passo sempre-ativo (quando ha 4+ paredes nao-muro): calcula `wallExternalScore` para todas, normaliza 0..1, identifica top expectedPerimeter por score. Marca `needs_review=true` + `review_reason` + reduz confidence (cap em 0.6) quando classificacao IA discorda do score, mas **NAO sobrescreve a classe** — decisao final fica com o humano. Walls ja sinalizadas pelo caso extremo sao puladas (evita double-flag).
+   - `calculateWallPanels` propaga os campos para o `WallItem` consumido pelo frontend.
+
+**Surface de follow-up identificada pela revisao** (nao implementada ainda):
+- `client/src/components/QuantitativosEditor.tsx`: exibir indicador visual (ex: icone laranja) e tooltip com `review_reason` nas linhas onde `needs_review === true`.
+- `server/services/export/exportService.ts`: coluna "Notas de Revisao" no Excel/PDF para alertar a equipe tecnica.
+- `BudgetResult` ja propaga os campos via API existente, dados estao disponiveis no frontend sem mudanca de rota.
+
 ## Database
 - PostgreSQL with 8 tables: users, products (with panel_type), projects (with client_email + file_fingerprint), project_files, extracted_data, budgets, settings, ai_runs + user_sessions (auto-managed)
 - Orphan tables removed (Apr 2026): takeoff_segments, takeoff_slabs, takeoff_revisions, takeoff_exports, project_pages

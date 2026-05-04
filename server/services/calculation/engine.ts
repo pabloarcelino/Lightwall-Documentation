@@ -20,6 +20,8 @@ export interface WallItem {
   area_bruta_m2: number;
   area_liquida_m2: number;
   quantidade_paineis: number;
+  needs_review?: boolean;
+  review_reason?: string;
 }
 
 export interface SlabItem {
@@ -251,6 +253,9 @@ export function fusionMultiView(
   }
 
   const reclassifiable = allWalls.filter(w => w.classe !== "muro");
+
+  // CASO EXTREMO (preservado): se TODAS as paredes vieram como externas e o tipo
+  // de edificacao espera paredes internas, reclassifica por score (sobrescrita).
   if (reclassifiable.length >= 6 && intWallCount === 0 && minInternalRatio > 0.15) {
     console.log(`[FUSAO] CORRECAO (${buildingType || "generico"}): Todas as ${extWallCount} paredes sao externas — reclassificando por score (muros nao afetados)`);
     const sorted = [...reclassifiable].sort((a, b) => wallExternalScore(b) - wallExternalScore(a));
@@ -259,6 +264,8 @@ export function fusionMultiView(
     for (const wall of reclassifiable) {
       if (!perimeterIds.has(wall.id)) {
         wall.classe = "interna";
+        wall.needs_review = true;
+        wall.review_reason = `Reclassificada de externa para interna pelo score (${wallExternalScore(wall).toFixed(1)})`;
         console.log(`[FUSAO] Parede ${wall.id} (${wall.comprimento_m}m, score=${wallExternalScore(wall).toFixed(1)}) reclassificada como interna`);
       } else {
         console.log(`[FUSAO] Parede ${wall.id} (${wall.comprimento_m}m, score=${wallExternalScore(wall).toFixed(1)}) mantida como externa (perimetro)`);
@@ -266,6 +273,51 @@ export function fusionMultiView(
     }
   } else if (reclassifiable.length >= 8 && extWallCount > intWallCount * 2 && buildingType !== "industrial") {
     console.log(`[FUSAO] AVISO (${buildingType || "generico"}): ${extWallCount} externas vs ${intWallCount} internas — proporcao incomum, pode haver classificacao errada`);
+  }
+
+  // SEMPRE: marcar needs_review quando a classificacao da IA discordar do score.
+  // Nao sobrescreve a classe — apenas sinaliza para revisao humana.
+  if (reclassifiable.length >= 4) {
+    const scored = reclassifiable.map(w => ({ wall: w, score: wallExternalScore(w) }));
+    const scores = scored.map(s => s.score);
+    const maxScore = Math.max(...scores, 1);
+    const minScore = Math.min(...scores, 0);
+    const range = Math.max(maxScore - minScore, 0.001);
+
+    // Esperado de "perimeter walls" pelo tipo de edificacao
+    const expectedPerimeter = Math.min(
+      Math.ceil(reclassifiable.length * perimeterFraction),
+      maxPerimeterWalls,
+    );
+    const sortedDesc = [...scored].sort((a, b) => b.score - a.score);
+    const expectedExternalIds = new Set(sortedDesc.slice(0, expectedPerimeter).map(s => s.wall.id));
+
+    for (const { wall, score } of scored) {
+      // Pula paredes ja sinalizadas pelo caso extremo (evita double-flag)
+      if (wall.needs_review) continue;
+
+      // Score normalizado 0..1 dentro do projeto
+      const norm = (score - minScore) / range;
+      const expectedExternal = expectedExternalIds.has(wall.id);
+
+      // Falsa externa: classificada como externa mas com score baixo e fora do top expected
+      if (wall.classe === "externa" && norm < 0.35 && !expectedExternal) {
+        wall.needs_review = true;
+        wall.review_reason = `Classificada como externa mas score baixo (${score.toFixed(1)}, ${wall.comprimento_m.toFixed(1)}m, ${wall.has_window ? "" : "sem janela, "}${wall.bbox ? "" : "sem bbox, "}fora do perimetro esperado)`.replace(/, $/, "");
+        wall.confidence = Math.min(wall.confidence, 0.6);
+      }
+      // Falsa interna: classificada como interna mas com score alto e dentro do top expected
+      else if (wall.classe === "interna" && norm > 0.7 && expectedExternal) {
+        wall.needs_review = true;
+        wall.review_reason = `Classificada como interna mas score alto (${score.toFixed(1)}, ${wall.comprimento_m.toFixed(1)}m${wall.has_window ? ", tem janela" : ""}${wall.bbox ? ", perto da borda" : ""}) sugere externa`;
+        wall.confidence = Math.min(wall.confidence, 0.6);
+      }
+    }
+
+    const flagged = reclassifiable.filter(w => w.needs_review).length;
+    if (flagged > 0) {
+      console.log(`[FUSAO] ${flagged} parede(s) marcada(s) para revisao humana (classificacao vs score divergente)`);
+    }
   }
 
   const seenWalls = new Set<string>();
@@ -478,6 +530,8 @@ function calculateWallPanels(wall: ExtractedWall): WallItem {
     area_bruta_m2: Math.round(area_bruta * 100) / 100,
     area_liquida_m2: Math.round(area_liquida * 100) / 100,
     quantidade_paineis: qtd_paineis,
+    needs_review: wall.needs_review,
+    review_reason: wall.review_reason,
   };
 }
 
