@@ -82,6 +82,8 @@ const STEP_CONFIG: Array<{ step: number; label: string; parentStep?: number; dis
   { step: 3, label: "Extracao Geometrica", displayNum: 2 },
   { step: 3.5, label: "Verificacao IA", parentStep: 3 },
   { step: 4, label: "Fusao Multivista", displayNum: 3 },
+  { step: 4.5, label: "Validacao Geometrica", parentStep: 4 },
+  { step: 4.6, label: "Validacao Global IA", parentStep: 4 },
   { step: 5, label: "Calculo de Quantitativos", displayNum: 4 },
   { step: 6, label: "Integracao com Catalogo", displayNum: 5 },
   { step: 7, label: "Validacao", displayNum: 6 },
@@ -246,10 +248,11 @@ export default function ProjectDetails() {
           return;
         }
         const ts = Date.now();
-        const isSubStepEvent = STEP_CONFIG.find(c => c.step === data.step)?.parentStep != null;
+        const eventConfig = STEP_CONFIG.find(c => c.step === data.step);
+        const isSubStepEvent = eventConfig?.parentStep != null;
+        const isKnownStep = !!eventConfig;
 
         setPipelineSteps(prev => prev.map(s => {
-          // Direct match — update this step
           if (s.step === data.step) {
             return {
               ...s,
@@ -260,16 +263,12 @@ export default function ProjectDetails() {
               completedAt: data.status === "done" || data.status === "error" ? ts : s.completedAt,
             };
           }
-          // Auto-mark: only when a MAIN step event arrives
-          if (!isSubStepEvent && s.status === "pending") {
-            // Earlier main steps → mark done
-            if (!s.parentStep && s.step < data.step) {
-              return { ...s, status: "done" as const, completedAt: ts, startedAt: s.startedAt || ts };
-            }
-            // Sub-steps of earlier main steps → mark done (skipped)
-            if (s.parentStep && s.parentStep < data.step) {
-              return { ...s, status: "done" as const, completedAt: ts, startedAt: s.startedAt || ts };
-            }
+          if (!isKnownStep || isSubStepEvent) return s;
+          if (s.status !== "pending") return s;
+          const eventMainStep = eventConfig.parentStep ?? data.step;
+          const sMainStep = s.parentStep ?? s.step;
+          if (sMainStep < eventMainStep) {
+            return { ...s, status: "done" as const, completedAt: ts, startedAt: s.startedAt || ts };
           }
           return s;
         }));
@@ -370,7 +369,7 @@ export default function ProjectDetails() {
 
   const { project, files, extractedData, budget } = data;
   const mainSteps = pipelineSteps.filter(s => !s.parentStep);
-  const pipelineFinished = mainSteps.length > 0 && mainSteps.every(s => s.status === "done" || s.status === "error");
+  const pipelineFinished = !isProcessing && mainSteps.length > 0 && mainSteps.every(s => s.status === "done" || s.status === "error");
   const showPipeline = pipelineVisible && (isProcessing || processMutation.isPending || project.status === "processing" || pipelineSteps.length > 0);
 
   const pipelineElapsed = pipelineStartTime
