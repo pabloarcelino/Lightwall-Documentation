@@ -662,7 +662,7 @@ function validateResults(
   return issues;
 }
 
-export interface LegacyQuantitativeResult {
+export interface QuantitativeResult {
   walls: {
     external: { grossArea: number; openingsArea: number; netArea: number; openingsRatio: number; lossCoefficient: number; areaWithLoss: number; panels2P: number };
     internal: { grossArea: number; openingsArea: number; netArea: number; openingsRatio: number; lossCoefficient: number; areaWithLoss: number; panels2P: number };
@@ -674,7 +674,7 @@ export interface LegacyQuantitativeResult {
   totals: { totalWallArea: number; totalSlabArea: number; totalPanels2P: number; totalPanels: number };
 }
 
-export function budgetToLegacy(budget: BudgetResult): LegacyQuantitativeResult {
+export function budgetToLegacy(budget: BudgetResult): QuantitativeResult {
   const extGross = budget.pavimentos.reduce((s, p) => s + p.paredes_externas.area_bruta_m2, 0);
   const extNet = budget.pavimentos.reduce((s, p) => s + p.paredes_externas.area_liquida_m2, 0);
   const extOpenings = extGross - extNet;

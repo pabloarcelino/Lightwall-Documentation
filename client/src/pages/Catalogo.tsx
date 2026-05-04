@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { PageHeader } from "@/components/PageHeader";
+import { LoadingState } from "@/components/ui/states";
 import {
   Card,
   CardContent,
@@ -146,35 +148,33 @@ export default function Catalogo() {
 
   return (
     <div className="min-h-screen lw-gradient-bg">
-      <header className="glass-header border-b border-white/20 dark:border-white/5 sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Link href="/">
-                <Button variant="ghost" size="sm" data-testid="button-back-dashboard">
-                  <ArrowLeft className="h-4 w-4 mr-2" />
-                  Voltar
-                </Button>
-              </Link>
-              <div className="flex items-center gap-2">
-                <LightwallDots className="h-5 w-5 lw-text-accent" />
-                <div>
-                  <h1 className="text-lg font-bold" data-testid="text-page-title">
-                    Catalogo de Paineis
-                  </h1>
-                  <p className="text-xs text-muted-foreground">
-                    Gerencie tipos e precos dos paineis Lightwall
-                  </p>
-                </div>
+      <PageHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Link href="/">
+              <Button variant="ghost" size="sm" data-testid="button-back-dashboard">
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Voltar
+              </Button>
+            </Link>
+            <div className="flex items-center gap-2">
+              <LightwallDots className="h-5 w-5 lw-text-accent" />
+              <div>
+                <h1 className="text-lg font-bold" data-testid="text-page-title">
+                  Catalogo de Paineis
+                </h1>
+                <p className="text-xs text-muted-foreground">
+                  Gerencie tipos e precos dos paineis Lightwall
+                </p>
               </div>
             </div>
-            <Button onClick={handleNewProduct} className="gap-2" size="sm" data-testid="button-add-product">
-              <Plus className="h-4 w-4" />
-              Novo Painel
-            </Button>
           </div>
+          <Button onClick={handleNewProduct} className="gap-2" size="sm" data-testid="button-add-product">
+            <Plus className="h-4 w-4" />
+            Novo Painel
+          </Button>
         </div>
-      </header>
+      </PageHeader>
 
       <main className="container mx-auto px-4 py-8 max-w-5xl">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -277,6 +277,7 @@ export default function Catalogo() {
                             <Button
                               variant="ghost"
                               size="sm"
+                              aria-label={`Editar painel ${product.name}`}
                               onClick={() => handleEdit(product)}
                               data-testid={`button-edit-${product.id}`}
                             >
@@ -306,6 +307,7 @@ export default function Catalogo() {
                                 variant="ghost"
                                 size="sm"
                                 className="text-red-500 hover:text-red-700"
+                                aria-label={`Excluir painel ${product.name}`}
                                 onClick={() => setDeleteConfirmId(product.id)}
                                 data-testid={`button-delete-${product.id}`}
                               >

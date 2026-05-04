@@ -4,23 +4,22 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { ArrowLeft, FileUp, Settings, Play, BarChart3, Download, AlertTriangle, CheckCircle, HelpCircle } from "lucide-react";
 import { Link } from "wouter";
 import { LightwallBrand } from "@/components/LightwallLogo";
+import { PageHeader } from "@/components/PageHeader";
 
 export default function GuiaExterno() {
   return (
     <div className="min-h-screen lw-gradient-bg">
-      <header className="glass-header border-b border-white/20 dark:border-white/5 sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <LightwallBrand />
-            <Link href="/">
-              <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back-dashboard">
-                <ArrowLeft className="h-4 w-4" />
-                Voltar
-              </Button>
-            </Link>
-          </div>
+      <PageHeader>
+        <div className="flex items-center justify-between">
+          <LightwallBrand />
+          <Link href="/">
+            <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back-dashboard">
+              <ArrowLeft className="h-4 w-4" />
+              Voltar
+            </Button>
+          </Link>
         </div>
-      </header>
+      </PageHeader>
 
       <main className="container mx-auto px-4 py-8 max-w-4xl">
         <Card>

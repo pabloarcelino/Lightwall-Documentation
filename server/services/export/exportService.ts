@@ -3,7 +3,7 @@ import PDFDocument from "pdfkit";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import type {
-  LegacyQuantitativeResult,
+  QuantitativeResult,
   TechnicalAlert,
 } from "../calculation/engine";
 import type { Assumption } from "../calculation/assumptions";
@@ -26,7 +26,7 @@ export interface BudgetExportData {
   projectName: string;
   clientName?: string;
   date: Date;
-  quantitatives: LegacyQuantitativeResult;
+  quantitatives: QuantitativeResult;
   materials: MaterialList;
   alerts: TechnicalAlert[];
   assumptions: Assumption[];

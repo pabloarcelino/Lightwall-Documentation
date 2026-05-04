@@ -66,6 +66,8 @@ import QuantitativosEditor from "@/components/QuantitativosEditor";
 import FloorPlanDiagram from "@/components/FloorPlanDiagram";
 import AnnotatedFloorPlan from "@/components/AnnotatedFloorPlan";
 import { LightwallDots } from "@/components/LightwallLogo";
+import { PageHeader } from "@/components/PageHeader";
+import { LoadingState } from "@/components/ui/states";
 import type { Product } from "@shared/schema";
 
 interface PipelineStep {
@@ -419,12 +421,11 @@ export default function ProjectDetails() {
 
   return (
     <div className="min-h-screen lw-gradient-bg">
-      <header className="glass-header border-b border-white/20 dark:border-white/5 sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Link href="/">
-                <Button variant="ghost" size="sm" data-testid="button-back">
+      <PageHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Link href="/">
+              <Button variant="ghost" size="sm" data-testid="button-back">
                   <ArrowLeft className="h-4 w-4 mr-2" />
                   Voltar
                 </Button>
@@ -453,6 +454,7 @@ export default function ProjectDetails() {
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8"
+                      aria-label="Salvar alteracoes"
                       data-testid="button-save-project-info"
                       disabled={savingInfo}
                       onClick={async () => {
@@ -477,7 +479,7 @@ export default function ProjectDetails() {
                     >
                       {savingInfo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 text-green-500" />}
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditingInfo(false)}>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Cancelar edicao" onClick={() => setEditingInfo(false)}>
                       <X className="h-4 w-4" />
                     </Button>
                   </div>
@@ -511,6 +513,7 @@ export default function ProjectDetails() {
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
+                      aria-label="Editar nome do projeto e cliente"
                       data-testid="button-edit-project-info"
                       onClick={() => {
                         setEditName(project.name);
@@ -549,8 +552,7 @@ export default function ProjectDetails() {
               )}
             </div>
           </div>
-        </div>
-      </header>
+      </PageHeader>
 
       <main className="container mx-auto px-4 py-8">
         <div className="flex items-center gap-4 mb-6 glass-card rounded-xl p-4">
@@ -1369,6 +1371,7 @@ export default function ProjectDetails() {
                           <Button
                             variant="destructive"
                             size="icon"
+                            aria-label={`Excluir arquivo ${file.originalName}`}
                             className="absolute top-2 right-2 h-7 w-7 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
                             data-testid={`button-delete-file-${file.id}`}
                             onClick={async (e) => {

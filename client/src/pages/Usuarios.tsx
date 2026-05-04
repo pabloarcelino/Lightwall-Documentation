@@ -12,6 +12,8 @@ import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, getQueryFn } from "@/lib/queryClient";
 import { LightwallBrand } from "@/components/LightwallLogo";
+import { PageHeader } from "@/components/PageHeader";
+import { LoadingState, ErrorState } from "@/components/ui/states";
 
 interface UserRow {
   id: number;
@@ -159,21 +161,19 @@ export default function Usuarios() {
 
   return (
     <div className="min-h-screen lw-gradient-bg">
-      <header className="glass-header border-b border-white/20 dark:border-white/5 sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <LightwallBrand />
-            <div className="flex gap-2">
-              <Link href="/">
-                <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back-dashboard">
-                  <ArrowLeft className="h-4 w-4" />
-                  Voltar
-                </Button>
-              </Link>
-            </div>
+      <PageHeader>
+        <div className="flex items-center justify-between">
+          <LightwallBrand />
+          <div className="flex gap-2">
+            <Link href="/">
+              <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back-dashboard">
+                <ArrowLeft className="h-4 w-4" />
+                Voltar
+              </Button>
+            </Link>
           </div>
         </div>
-      </header>
+      </PageHeader>
 
       <main className="container mx-auto px-4 py-8 max-w-5xl">
         <div className="flex items-center justify-between mb-6">
@@ -223,9 +223,13 @@ export default function Usuarios() {
           </CardHeader>
           <CardContent>
             {isLoading ? (
-              <div className="text-center py-8 text-muted-foreground">Carregando...</div>
+              <LoadingState title="Carregando usuarios" message="" testId="state-loading-users" />
             ) : isError ? (
-              <div className="text-center py-8 text-red-500">Erro ao carregar usuarios. Verifique se voce tem permissao de administrador.</div>
+              <ErrorState
+                title="Erro ao carregar usuarios"
+                message="Verifique se voce tem permissao de administrador."
+                testId="state-error-users"
+              />
             ) : !allUsers || allUsers.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">Nenhum usuario encontrado</div>
             ) : (
@@ -281,12 +285,13 @@ export default function Usuarios() {
                         </td>
                         <td className="p-3 text-right">
                           <div className="flex gap-1 justify-end">
-                            <Button variant="ghost" size="sm" onClick={() => openEditDialog(user)} data-testid={`button-edit-user-${user.id}`}>
+                            <Button variant="ghost" size="sm" aria-label={`Editar usuario ${user.username}`} onClick={() => openEditDialog(user)} data-testid={`button-edit-user-${user.id}`}>
                               <Pencil className="h-3.5 w-3.5" />
                             </Button>
                             <Button
                               variant="ghost"
                               size="sm"
+                              aria-label={user.active === 1 ? `Desativar usuario ${user.username}` : `Ativar usuario ${user.username}`}
                               onClick={() => toggleActive(user)}
                               className={user.active === 1 ? "text-red-500 hover:text-red-700" : "text-green-500 hover:text-green-700"}
                               data-testid={`button-toggle-user-${user.id}`}

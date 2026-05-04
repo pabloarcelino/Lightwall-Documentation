@@ -13,6 +13,8 @@ import { Link } from "wouter";
 import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { LightwallBrand } from "@/components/LightwallLogo";
+import { PageHeader } from "@/components/PageHeader";
+import { LoadingState, EmptyState } from "@/components/ui/states";
 import { queryClient } from "@/lib/queryClient";
 
 type ProjectWithBudget = Project & { budgetTotalCost: number | null };
@@ -75,69 +77,68 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen lw-gradient-bg">
-      <header className="glass-header border-b border-white/20 dark:border-white/5 sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <LightwallBrand />
-            <div className="flex gap-2">
-              <Link href="/guia">
-                <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-guia">
-                  <HelpCircle className="h-4 w-4" />
-                  Guia
+      <PageHeader>
+        <div className="flex items-center justify-between">
+          <LightwallBrand />
+          <div className="flex gap-2">
+            <Link href="/guia">
+              <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-guia">
+                <HelpCircle className="h-4 w-4" />
+                Guia
+              </Button>
+            </Link>
+            <Link href="/catalogo">
+              <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-catalogo">
+                <Package className="h-4 w-4" />
+                Catalogo
+              </Button>
+            </Link>
+            <Link href="/metodologia">
+              <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-metodologia">
+                <BookOpen className="h-4 w-4" />
+                Metodologia
+              </Button>
+            </Link>
+            <Link href="/settings">
+              <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-settings">
+                <Settings className="h-4 w-4" />
+                Config
+              </Button>
+            </Link>
+            {currentUser?.role === "admin" && (
+              <Link href="/usuarios">
+                <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-usuarios">
+                  <Users className="h-4 w-4" />
+                  Usuarios
                 </Button>
               </Link>
-              <Link href="/catalogo">
-                <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-catalogo">
-                  <Package className="h-4 w-4" />
-                  Catalogo
-                </Button>
-              </Link>
-              <Link href="/metodologia">
-                <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-metodologia">
-                  <BookOpen className="h-4 w-4" />
-                  Metodologia
-                </Button>
-              </Link>
-              <Link href="/settings">
-                <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-settings">
-                  <Settings className="h-4 w-4" />
-                  Config
-                </Button>
-              </Link>
-              {currentUser?.role === "admin" && (
-                <Link href="/usuarios">
-                  <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-usuarios">
-                    <Users className="h-4 w-4" />
-                    Usuarios
-                  </Button>
-                </Link>
-              )}
-              <Link href="/new-project">
-                <Button size="sm" className="gap-2" data-testid="button-new-project">
-                  <Plus className="h-4 w-4" />
-                  Novo Projeto
-                </Button>
-              </Link>
-              <div className="w-px h-6 bg-border mx-1" />
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground hidden sm:inline" data-testid="text-current-user">
-                  <User className="h-3 w-3 inline mr-1" />
-                  {currentUser?.displayName || currentUser?.username || ""}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleLogout}
-                  className="text-muted-foreground hover:text-red-500"
-                  data-testid="button-logout"
-                >
-                  <LogOut className="h-4 w-4" />
-                </Button>
-              </div>
+            )}
+            <Link href="/new-project">
+              <Button size="sm" className="gap-2" data-testid="button-new-project">
+                <Plus className="h-4 w-4" />
+                Novo Projeto
+              </Button>
+            </Link>
+            <div className="w-px h-6 bg-border mx-1" />
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground hidden sm:inline" data-testid="text-current-user">
+                <User className="h-3 w-3 inline mr-1" />
+                {currentUser?.displayName || currentUser?.username || ""}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleLogout}
+                aria-label="Sair"
+                className="text-muted-foreground hover:text-red-500"
+                data-testid="button-logout"
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </div>
-      </header>
+      </PageHeader>
 
       <main className="container mx-auto px-4 py-8">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
@@ -295,7 +296,11 @@ export default function Dashboard() {
           </div>
           <div className="p-6">
             {isLoading ? (
-              <div className="text-center py-8" data-testid="text-loading">Carregando projetos...</div>
+              <LoadingState
+                title="Carregando projetos"
+                message="Aguarde enquanto buscamos sua lista de orcamentos..."
+                testId="state-loading-projects"
+              />
             ) : projects && projects.length > 0 ? (
               <div className="space-y-3">
                 {projects.map((project) => (
@@ -392,16 +397,20 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : (
-              <div className="text-center py-12" data-testid="text-empty-state">
-                <FolderOpen className="h-12 w-12 mx-auto lw-text-accent opacity-40 mb-4" />
-                <p className="text-muted-foreground mb-4">Nenhum projeto encontrado</p>
-                <Link href="/new-project">
-                  <Button data-testid="button-create-first">
-                    <Plus className="h-4 w-4 mr-2" />
-                    Criar Primeiro Projeto
-                  </Button>
-                </Link>
-              </div>
+              <EmptyState
+                icon={<FolderOpen className="h-12 w-12 mb-3 lw-text-accent opacity-40" aria-hidden="true" />}
+                title="Nenhum projeto encontrado"
+                message=""
+                testId="state-empty-projects"
+                action={
+                  <Link href="/new-project">
+                    <Button data-testid="button-create-first">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Criar Primeiro Projeto
+                    </Button>
+                  </Link>
+                }
+              />
             )}
           </div>
         </div>

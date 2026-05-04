@@ -187,10 +187,14 @@ budgetData = {
 - **Type cleanup**: `server/services/export/exportService.ts` now uses the actual `LegacyQuantitativeResult` shape and a locally-defined `MaterialList` type (mirrors the runtime shape produced in routes.ts). Removed dead references to legacy panel categories (SP, Tipo L, Eletricos) — all panels are 2P in current model.
 - **Runtime hardening**: `parseInt(req.params.id)` → `parseInt(String(req.params.id))` on all Express handlers in routes.ts (defensive against the `string | string[]` type in some Express overloads). `assignDisplayLabels` now has explicit param types.
 - **buildingTypePrompts**: `getBuildingTypeConfig` uses a typed key cast, removing implicit any.
-- **Pending recommendations** (deferred to avoid behavior risk):
-  1. Header wrapper duplicated across 9 pages (`glass-header border-b ...`) — could extract a thin `PageHeader` shell, but inner content varies enough that the marginal gain is small.
-  2. `server/routes.ts` (2635 lines) and `client/src/pages/ProjectDetails.tsx` (2271 lines) are oversized — splitting by domain (projects/files/AI/users routes; per-tab components) would improve maintainability but is a multi-day refactor with regression risk.
-  3. Per-page loading/error UX is inconsistent (some skeletons, some text). Standardizing would require a UX decision pass.
+- **Phase 2 applied** (PageHeader + states + rename + a11y):
+  1. **`client/src/components/PageHeader.tsx`**: thin wrapper for the duplicated `glass-header` shell. Migrated all 9 pages: Dashboard, Settings, GuiaExterno, Catalogo, MetodologiaPage, Calibracao, Usuarios, NewProject, ProjectDetails. Header `<header className="glass-header...">` block + container div eliminated as duplicated code.
+  2. **`client/src/components/ui/states.tsx`**: shared `LoadingState`, `ErrorState`, `EmptyState` components built on Card + lucide icons (Loader2/AlertTriangle/Inbox). Adopted in Calibracao (loading + empty) and Usuarios (loading + error).
+  3. **`LegacyQuantitativeResult` → `QuantitativeResult`**: global rename in engine.ts and exportService.ts. The "Legacy" prefix was a misnomer — it's the only quantitatives shape now.
+  4. **A11y**: `aria-label` added to icon-only Button components in Dashboard (logout) and ProjectDetails (edit/save/cancel project info).
+- **Still deferred** (require dedicated session):
+  1. `server/routes.ts` (2635 lines) and `client/src/pages/ProjectDetails.tsx` (2271 lines) splitting — multi-day refactor with regression risk that needs an isolated branch and full E2E tests.
+  2. CI integration for `npx tsc --noEmit` and Playwright E2E tests — infra changes outside scope.
 
 ## Database
 - PostgreSQL with 8 tables: users, products (with panel_type), projects (with client_email + file_fingerprint), project_files, extracted_data, budgets, settings, ai_runs + user_sessions (auto-managed)

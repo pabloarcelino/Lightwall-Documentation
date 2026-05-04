@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/PageHeader";
+import { LoadingState, EmptyState } from "@/components/ui/states";
 import { useState, Fragment } from "react";
 import {
   BarChart3,
@@ -184,19 +186,17 @@ export default function Calibracao() {
 
   return (
     <div className="min-h-screen lw-gradient-bg">
-      <header className="glass-header border-b border-white/20 dark:border-white/5 sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <LightwallBrand />
-            <Link href="/">
-              <Button variant="outline" size="sm" className="gap-2">
-                <ArrowLeft className="h-4 w-4" />
-                Dashboard
-              </Button>
-            </Link>
-          </div>
+      <PageHeader>
+        <div className="flex items-center justify-between">
+          <LightwallBrand />
+          <Link href="/">
+            <Button variant="outline" size="sm" className="gap-2">
+              <ArrowLeft className="h-4 w-4" />
+              Dashboard
+            </Button>
+          </Link>
         </div>
-      </header>
+      </PageHeader>
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
         <div className="flex items-center gap-3 mb-6">
@@ -208,15 +208,18 @@ export default function Calibracao() {
         </div>
 
         {isLoading ? (
-          <div className="text-center py-16 text-muted-foreground">Carregando dados de calibracao...</div>
+          <LoadingState
+            title="Carregando dados de calibracao"
+            message="Buscando metricas de acuracia por projeto..."
+            testId="state-loading-calibracao"
+          />
         ) : !calibration?.hasData ? (
-          <Card>
-            <CardContent className="text-center py-16">
-              <Target className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
-              <p className="text-muted-foreground mb-2">Nenhum dado de calibracao disponivel</p>
-              <p className="text-sm text-muted-foreground">Processe projetos do tipo "Teste" e informe o m² real por categoria.</p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={<Target className="h-10 w-10 mb-3 text-muted-foreground/40" aria-hidden="true" />}
+            title="Nenhum dado de calibracao disponivel"
+            message='Processe projetos do tipo "Teste" e informe o m² real por categoria.'
+            testId="state-empty-calibracao"
+          />
         ) : (
           <div className="space-y-6">
 
@@ -395,6 +398,7 @@ export default function Calibracao() {
                                     <Button
                                       size="icon"
                                       variant="ghost"
+                                      aria-label="Cancelar edicao"
                                       className="h-7 w-7 text-muted-foreground"
                                       onClick={() => setEditingProject(null)}
                                     >
@@ -405,6 +409,7 @@ export default function Calibracao() {
                                   <Button
                                     size="icon"
                                     variant="ghost"
+                                    aria-label="Editar valores reais"
                                     className="h-7 w-7 text-muted-foreground hover:text-foreground"
                                     onClick={() => startEdit(proj)}
                                   >

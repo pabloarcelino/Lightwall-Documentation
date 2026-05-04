@@ -23,6 +23,7 @@ import {
 import { Upload, ArrowLeft, FileUp, X } from "lucide-react";
 import { Link } from "wouter";
 import { useDropzone } from "react-dropzone";
+import { PageHeader } from "@/components/PageHeader";
 import { LightwallDots } from "@/components/LightwallLogo";
 
 export default function NewProject() {
@@ -137,32 +138,30 @@ export default function NewProject() {
 
   return (
     <div className="min-h-screen lw-gradient-bg">
-      <header className="glass-header border-b border-white/20 dark:border-white/5 sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center gap-4">
-            <Link href="/">
-              <Button variant="ghost" size="sm" data-testid="button-back">
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Voltar
-              </Button>
-            </Link>
-            <div className="flex items-center gap-2">
-              <LightwallDots className="h-5 w-5 lw-text-accent" />
-              <div>
-                <h1
-                  className="text-lg font-bold"
-                  data-testid="text-page-title"
-                >
-                  Novo Projeto
-                </h1>
-                <p className="text-xs text-muted-foreground">
-                  Upload de plantas arquitetonicas
-                </p>
-              </div>
+      <PageHeader>
+        <div className="flex items-center gap-4">
+          <Link href="/">
+            <Button variant="ghost" size="sm" data-testid="button-back">
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Voltar
+            </Button>
+          </Link>
+          <div className="flex items-center gap-2">
+            <LightwallDots className="h-5 w-5 lw-text-accent" />
+            <div>
+              <h1
+                className="text-lg font-bold"
+                data-testid="text-page-title"
+              >
+                Novo Projeto
+              </h1>
+              <p className="text-xs text-muted-foreground">
+                Upload de plantas arquitetonicas
+              </p>
             </div>
           </div>
         </div>
-      </header>
+      </PageHeader>
 
       <main className="container mx-auto px-4 py-8 max-w-4xl">
         <form onSubmit={handleSubmit} className="space-y-6">
