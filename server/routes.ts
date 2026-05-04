@@ -54,7 +54,6 @@ import {
 import type { Response } from "express";
 import { requireAuth } from "./auth";
 import { editImage } from "./replit_integrations/image/client";
-import { cvAnalyze, cvAnnotate, isCvServiceAvailable } from "./services/cv/client";
 import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
@@ -859,16 +858,9 @@ export async function registerRoutes(
       const allGeometries: GeometryResult[] = [];
       let mergedTableData: TableData = { paredes_de_tabela: [], esquadrias_de_tabela: [], areas_de_tabela: [] };
       const pipelineFailedPages: Array<{ fileId: number; fileName: string; pageIndex: number }> = [];
-      const cvAnnotatedImages: Array<{ pavimento: string; pageIndex: number; image: string }> = [];
-      // CV service is only used by Gemini hybrid modes; bypass it for openai-only, openai-vision-takeoff and gemini-only.
-      const cvServiceUp = (analysisMode !== "gemini-only" && analysisMode !== "openai-only" && analysisMode !== "openai-vision-takeoff")
-        ? await isCvServiceAvailable()
-        : false;
       if (analysisMode === "gemini-only") console.log("[PIPELINE] Modo Gemini-only selecionado");
       else if (analysisMode === "openai-only") console.log("[PIPELINE] Modo OpenAI-only selecionado");
       else if (analysisMode === "openai-vision-takeoff") console.log("[PIPELINE] Modo OpenAI Vision Takeoff selecionado");
-      else if (cvServiceUp) console.log("[PIPELINE] CV service disponivel");
-      else console.log("[PIPELINE] CV service indisponivel — fallback para Gemini-only");
       const userBuildingType = project.buildingType || undefined;
       let detectedBuildingType: string | undefined;
       const effectiveBuildingType = (): string | undefined => userBuildingType || detectedBuildingType;
@@ -981,34 +973,6 @@ export async function registerRoutes(
 
           if (hasGeometryPages || classifications.every(c => c.classificacao !== "irrelevante")) {
             const plantaPages = classifications.filter(c => c.classificacao === "planta_baixa");
-
-            // Helper: run CV pipeline for planta pages
-            const runCvPipeline = async (): Promise<GeometryResult | null> => {
-              if (!cvServiceUp || plantaPages.length === 0) return null;
-              const pages = await splitPdfPages(path.resolve(file.filePath));
-              const cvGeo: GeometryResult = { walls: [], slabs: [], corners: [] };
-              for (const pc of plantaPages) {
-                const page = pages.find(p => p.pageIndex === pc.page_index);
-                if (!page) continue;
-                const raw64 = page.base64.includes(",") ? page.base64.split(",", 2)[1] : page.base64;
-                const cvResult = await cvAnalyze({
-                  image_base64: raw64,
-                  mime_type: "application/pdf",
-                  pavimento: pc.pavimento || "Terreo",
-                  building_type: effectiveBuildingType() || "residencial",
-                  gemini_api_key: undefined,
-                  page_index: pc.page_index,
-                });
-                cvGeo.walls.push(...cvResult.geometry.walls);
-                cvGeo.slabs.push(...cvResult.geometry.slabs);
-                cvGeo.corners.push(...cvResult.geometry.corners);
-                if (cvResult.annotated_image_base64) {
-                  cvAnnotatedImages.push({ pavimento: pc.pavimento || "Terreo", pageIndex: pc.page_index, image: cvResult.annotated_image_base64 });
-                }
-                console.log(`[ETAPA 3 CV] Pav ${pc.pavimento} pg ${pc.page_index}: ${cvResult.geometry.walls.length} paredes, ${cvResult.geometry.slabs.length} lajes (OCR=${cvResult.cv_metadata?.ocr_count}, lines=${cvResult.cv_metadata?.line_count})`);
-              }
-              return cvGeo;
-            };
 
             // Helper: run Gemini-only pipeline (Flash extraction + Flash per-floor verification, all parallel)
             const runGeminiPipeline = async (): Promise<GeometryResult> => {
@@ -1156,57 +1120,8 @@ export async function registerRoutes(
               await storeGeometry(geometry);
               sendProgress(projectId, 3, "Extracao Geometrica (OpenAI Vision)", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes (OpenAI Vision)`);
 
-            } else if (analysisMode === "combinada" && cvServiceUp && plantaPages.length > 0) {
-              // COMBINADA: run both in parallel, merge via fusionMultiView
-              sendProgress(projectId, 3, "Extracao Geometrica (Combinada)", "running", `Executando CV + Gemini em paralelo para ${file.originalName}...`);
-              sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
-              const [cvResult, geminiResult] = await Promise.all([
-                runCvPipeline().catch((e: any) => { console.warn(`[ETAPA 3] CV falhou no modo combinada: ${e.message}`); return null; }),
-                runGeminiPipeline(),
-              ]);
-              if (cvResult) {
-                allGeometries.push(cvResult);
-                console.log(`[ETAPA 3] Combinada CV: ${cvResult.walls.length} paredes, ${cvResult.slabs.length} lajes`);
-              }
-              allGeometries.push(geminiResult);
-              console.log(`[ETAPA 3] Combinada Gemini: ${geminiResult.walls.length} paredes, ${geminiResult.slabs.length} lajes`);
-              const totalWalls = (cvResult?.walls.length || 0) + geminiResult.walls.length;
-              const totalSlabs = (cvResult?.slabs.length || 0) + geminiResult.slabs.length;
-              sendProgress(projectId, 3, "Extracao Geometrica (Combinada)", "done", `${totalWalls} paredes, ${totalSlabs} lajes (CV + Gemini, antes da fusao)`);
-              // Store combined results
-              const combined: GeometryResult = {
-                walls: [...(cvResult?.walls || []), ...geminiResult.walls],
-                slabs: [...(cvResult?.slabs || []), ...geminiResult.slabs],
-                corners: [...(cvResult?.corners || []), ...geminiResult.corners],
-              };
-              await storeGeometry(combined);
-
-            } else if (analysisMode === "cv-gemini" && cvServiceUp && plantaPages.length > 0) {
-              // CV + GEMINI: try CV, fallback to Gemini
-              sendProgress(projectId, 3, "Extracao Geometrica (CV + IA)", "running", `Analisando ${file.originalName} via Computer Vision + Gemini...`);
-              let usedCv = false;
-              try {
-                const cvResult = await runCvPipeline();
-                if (cvResult) {
-                  allGeometries.push(cvResult);
-                  await storeGeometry(cvResult);
-                  sendProgress(projectId, 3, "Extracao Geometrica (CV + IA)", "done", `${cvResult.walls.length} paredes, ${cvResult.slabs.length} lajes, ${cvResult.corners.length} cantos (CV + IA)`);
-                  usedCv = true;
-                }
-              } catch (cvError: any) {
-                console.warn(`[ETAPA 3] CV falhou: ${cvError.message}. Caindo para Gemini-only.`);
-              }
-              if (!usedCv) {
-                sendProgress(projectId, 3, "Extracao Geometrica", "running", `Fallback Gemini-only para ${file.originalName}...`);
-                sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
-                const geometry = await runGeminiPipeline();
-                allGeometries.push(geometry);
-                await storeGeometry(geometry);
-                sendProgress(projectId, 3, "Extracao Geometrica", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes, ${geometry.corners.length} cantos`);
-              }
-
             } else {
-              // GEMINI-ONLY (or CV unavailable)
+              // GEMINI-ONLY or OPENAI-ONLY
               sendProgress(projectId, 3, "Extracao Geometrica", "running", `Analisando geometria de ${file.originalName} (Gemini-only)...`);
               sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
               const geometry = await runGeminiPipeline();
@@ -1545,28 +1460,10 @@ export async function registerRoutes(
         // the AI annotator only paints over floor plans it can understand,
         // while still surfacing the rest of the project to the user.
         let annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
-        let annotationSource: "cv_pipeline" | "ia" | "none" = "none";
+        let annotationSource: "ia" | "none" = "none";
 
-        if (cvAnnotatedImages.length > 0) {
-          // ---- CV path: use pre-computed deterministic images from Python renderer ----
-          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Usando imagens anotadas do pipeline CV (deterministico)...");
-          annotatedImages = cvAnnotatedImages.map(cv => {
-            const floorWalls = totalWalls.filter((w: any) => cv.pavimento === "all" || w.nivel === cv.pavimento);
-            const floorSlabs = totalSlabs.filter((s: any) => cv.pavimento === "all" || s.nivel === cv.pavimento);
-            return {
-              ...cv,
-              summary: {
-                externas: floorWalls.filter((w: any) => w.classe === "externa").length,
-                internas: floorWalls.filter((w: any) => w.classe === "interna").length,
-                muros: floorWalls.filter((w: any) => w.classe === "muro").length,
-                lajePiso: floorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
-                lajeCoberta: floorSlabs.filter((s: any) => s.classe === "coberta").length,
-              },
-            };
-          });
-          annotationSource = "cv_pipeline";
-        } else {
-          // ---- IA path: Gemini image editing on planta_baixa pages only ----
+        {
+          // IA path: image editing on planta_baixa pages only.
           // PARALLELIZED: all pavimentos are generated concurrently instead of sequentially.
           sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Extraindo paginas da planta baixa e gerando imagens anotadas com IA (paralelo)...");
           const imgSources = await getAnnotationImageSources(files, allClassifications);
@@ -1610,8 +1507,8 @@ export async function registerRoutes(
         }
 
         // ===== Always extract reference images for OTHER plan types =====
-        // This runs for every mode (gemini-only, openai-only, cv-gemini,
-        // combinada) because the user explicitly asked that "outras partes"
+        // This runs for every mode (gemini-only, openai-only,
+        // openai-vision-takeoff) because the user explicitly asked that "outras partes"
         // (cortes, fachadas, planta_cobertura, detalhes, quadros) get
         // separate visualizations. We embed them as PDF-page data URLs and let
         // the frontend render them via PdfViewer.
@@ -1668,11 +1565,9 @@ export async function registerRoutes(
           const sourceFileId = files.find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""))?.id
             || files.find((f: any) => f.fileType === "pdf")?.id
             || null;
-          const labelByMode = annotationSource === "cv_pipeline"
-            ? "Imagem Anotada (CV pipeline)"
-            : annotationSource === "ia"
-              ? "Imagem Anotada (auto-gerada)"
-              : "Vistas de Referencia";
+          const labelByMode = annotationSource === "ia"
+            ? "Imagem Anotada (auto-gerada)"
+            : "Vistas de Referencia";
           await storage.addExtractedData({
             projectId, fileId: sourceFileId, elementType: "etapa3_annotated_plan",
             data: {
@@ -2452,7 +2347,6 @@ export async function registerRoutes(
       }
 
       const annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
-      const cvUp = await isCvServiceAvailable();
 
       for (const src of imgSources) {
         const floorWalls = walls.filter((w: any) => src.pavimento === "all" || w.nivel === src.pavimento);
@@ -2463,21 +2357,8 @@ export async function registerRoutes(
 
         console.log(`[ANNOTATED-IMG] Gerando imagem ${src.pavimento} (pg ${src.pageIndex}) | ${enabledFloorWalls.length} paredes, ${enabledFloorSlabs.length} lajes`);
 
-        let dataUrl: string;
-        if (cvUp) {
-          // Use Python CV renderer (deterministic, fast, free)
-          const raw64 = src.base64.includes(",") ? src.base64.split(",", 2)[1] : src.base64;
-          dataUrl = await cvAnnotate({
-            image_base64: raw64,
-            mime_type: src.mimeType,
-            walls: enabledFloorWalls,
-            slabs: enabledFloorSlabs,
-          });
-        } else {
-          // Fallback: Gemini image editing
-          const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
-          dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
-        }
+        const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
+        const dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
 
         annotatedImages.push({
           pavimento: src.pavimento,
