@@ -21,6 +21,8 @@ export const users = pgTable("users", {
   displayName: varchar("display_name", { length: 255 }),
   role: varchar("role", { length: 50 }).notNull().default("viewer"),
   active: integer("active").notNull().default(1),
+  storeName: varchar("store_name", { length: 255 }),
+  lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

@@ -114,6 +114,7 @@ export function setupAuth(app: Express) {
       }
       req.logIn(user, (err) => {
         if (err) return next(err);
+        db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id)).then(() => {}).catch(() => {});
         req.session.save((saveErr) => {
           if (saveErr) return next(saveErr);
           return res.json({
@@ -148,6 +149,11 @@ export function setupAuth(app: Express) {
 export const requireAuth: RequestHandler = (req, res, next) => {
   if (req.isAuthenticated()) return next();
   return res.status(401).json({ message: "Nao autenticado" });
+};
+
+export const requireAdmin: RequestHandler = (req, res, next) => {
+  if (req.isAuthenticated() && req.user?.role === "admin") return next();
+  return res.status(403).json({ message: "Acesso restrito a administradores" });
 };
 
 export async function ensureDefaultUser() {

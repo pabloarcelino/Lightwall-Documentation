@@ -54,13 +54,34 @@ import {
 } from "./services/export/exportService";
 
 import type { Response } from "express";
-import { requireAuth } from "./auth";
+import { requireAuth, requireAdmin } from "./auth";
+import bcrypt from "bcryptjs";
 import { editImage } from "./replit_integrations/image/client";
 import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
 
 const progressClients = new Map<number, Response[]>();
+
+function computeTotaisPorSku(itens: Array<{ discriminacao: string; sku?: string; qtd_un: number; qtd_m2: number; preco_total: number }>) {
+  const map = new Map<string, { sku: string; nome: string; qtd_un: number; qtd_m2: number; preco_total: number }>();
+  for (const item of itens) {
+    const key = item.sku || item.discriminacao;
+    const existing = map.get(key);
+    if (existing) {
+      existing.qtd_un += item.qtd_un;
+      existing.qtd_m2 += item.qtd_m2;
+      existing.preco_total += item.preco_total;
+    } else {
+      map.set(key, { sku: item.sku || "", nome: item.discriminacao, qtd_un: item.qtd_un, qtd_m2: item.qtd_m2, preco_total: item.preco_total });
+    }
+  }
+  return Array.from(map.values()).map(v => ({
+    ...v,
+    qtd_m2: Math.round(v.qtd_m2 * 1000) / 1000,
+    preco_total: Math.round(v.preco_total * 100) / 100,
+  }));
+}
 
 /**
  * Obtém TODAS as fontes de imagem para anotação (uma por pavimento/planta_baixa).
@@ -1296,15 +1317,22 @@ export async function registerRoutes(
       const paginacaoCost = Math.round(totalAreaM2 * PRECO_PAGINACAO_M2 * 100) / 100;
       const totalCost = totalPanelCost + paginacaoCost;
 
-      const propostaItens: Array<{ item: number; local: string; discriminacao: string; qtd_un: number; qtd_m2: number; preco_m2: number; preco_total: number }> = [];
+      const skuOf = (p: any, fallback: string) => p?.sku || fallback;
+      const SKU_EXT = skuOf(productExt, "LW-2P-090");
+      const SKU_INT = skuOf(productInt, "LW-SP-090");
+      const SKU_MUROS = skuOf(productMuros, "LW-SP-090");
+      const SKU_PISO = skuOf(productPiso, "LW-2P-090");
+      const SKU_COBERTA = skuOf(productCoberta, "LW-2P-090");
+
+      const propostaItens: Array<{ item: number; local: string; discriminacao: string; sku: string; qtd_un: number; qtd_m2: number; preco_m2: number; preco_total: number }> = [];
       let lineNo = 1;
-      propostaItens.push({ item: lineNo++, local: "PAREDES EXTERNAS", discriminacao: PRODUCT_NAME_EXT, qtd_un: extPanels, qtd_m2: extArea, preco_m2: PRECO_M2_EXT, preco_total: extCost });
-      propostaItens.push({ item: lineNo++, local: "PAREDES INTERNAS", discriminacao: PRODUCT_NAME_INT, qtd_un: intPanels, qtd_m2: intArea, preco_m2: PRECO_M2_INT, preco_total: intCost });
+      propostaItens.push({ item: lineNo++, local: "PAREDES EXTERNAS", discriminacao: PRODUCT_NAME_EXT, sku: SKU_EXT, qtd_un: extPanels, qtd_m2: extArea, preco_m2: PRECO_M2_EXT, preco_total: extCost });
+      propostaItens.push({ item: lineNo++, local: "PAREDES INTERNAS", discriminacao: PRODUCT_NAME_INT, sku: SKU_INT, qtd_un: intPanels, qtd_m2: intArea, preco_m2: PRECO_M2_INT, preco_total: intCost });
       if (murosPanels > 0) {
-        propostaItens.push({ item: lineNo++, local: "MUROS (DIVISA)", discriminacao: PRODUCT_NAME_MUROS, qtd_un: murosPanels, qtd_m2: murosArea, preco_m2: PRECO_M2_MUROS, preco_total: murosCost });
+        propostaItens.push({ item: lineNo++, local: "MUROS (DIVISA)", discriminacao: PRODUCT_NAME_MUROS, sku: SKU_MUROS, qtd_un: murosPanels, qtd_m2: murosArea, preco_m2: PRECO_M2_MUROS, preco_total: murosCost });
       }
-      propostaItens.push({ item: lineNo++, local: "LAJE DE PISO", discriminacao: PRODUCT_NAME_PISO, qtd_un: pisoPanels, qtd_m2: pisoArea, preco_m2: PRECO_M2_PISO, preco_total: pisoCost });
-      propostaItens.push({ item: lineNo++, local: "LAJE COBERTA", discriminacao: PRODUCT_NAME_COBERTA, qtd_un: cobertaPanels, qtd_m2: cobertaArea, preco_m2: PRECO_M2_COBERTA, preco_total: cobertaCost });
+      propostaItens.push({ item: lineNo++, local: "LAJE DE PISO", discriminacao: PRODUCT_NAME_PISO, sku: SKU_PISO, qtd_un: pisoPanels, qtd_m2: pisoArea, preco_m2: PRECO_M2_PISO, preco_total: pisoCost });
+      propostaItens.push({ item: lineNo++, local: "LAJE COBERTA", discriminacao: PRODUCT_NAME_COBERTA, sku: SKU_COBERTA, qtd_un: cobertaPanels, qtd_m2: cobertaArea, preco_m2: PRECO_M2_COBERTA, preco_total: cobertaCost });
       const propostaPaginacao = { item: 1, discriminacao: "Projeto de Paginação", qtd_un: budget.resumo.total_geral_paineis, qtd_m2: totalAreaM2, preco_m2: PRECO_PAGINACAO_M2, preco_total: paginacaoCost };
 
       sendProgress(projectId, 6, "Integracao com Catalogo", "done", `5 categorias precificadas | Total: R$ ${totalCost.toFixed(2)}`);
@@ -1649,6 +1677,7 @@ export async function registerRoutes(
         projectDescription: projectDescription,
         proposta: {
           itens: propostaItens,
+          totais_por_sku: computeTotaisPorSku(propostaItens),
           total_paineis_un: budget.resumo.total_geral_paineis,
           total_area_m2: totalAreaM2,
           total_paineis_cost: totalPanelCost,
@@ -1822,35 +1851,55 @@ export async function registerRoutes(
       const prevProposta = (existingBudgetForPrices?.budgetData as any)?.proposta;
       const productExtDefault = allProducts.find((p) => p.sku === "LW-2P-090");
       const productIntDefault = allProducts.find((p) => p.sku === "LW-SP-090") || productExtDefault;
+      const productPisoDefault = allProducts.find((p) => p.category === "laje_piso") || productExtDefault;
+      const productCobertaDefault = allProducts.find((p) => p.category === "laje_coberta") || productExtDefault;
+      const productMurosDefault = allProducts.find((p) => p.category === "muros") || productIntDefault;
       const PRECO_M2_EXT = prevProposta?.preco_m2_ext ?? parseFloat(productExtDefault?.unitPrice ?? "275");
       const PRECO_M2_INT = prevProposta?.preco_m2_int ?? parseFloat(productIntDefault?.unitPrice ?? "180");
+      const PRECO_M2_PISO = parseFloat(productPisoDefault?.unitPrice ?? String(PRECO_M2_EXT));
+      const PRECO_M2_COBERTA = parseFloat(productCobertaDefault?.unitPrice ?? String(PRECO_M2_EXT));
+      const PRECO_M2_MUROS = parseFloat(productMurosDefault?.unitPrice ?? String(PRECO_M2_INT));
       const PRODUCT_NAME_EXT = prevProposta?.painel_ext ?? productExtDefault?.name ?? "PAINEL DE CONCRETO LEVE 3000X610X90MM 2P";
       const PRODUCT_NAME_INT = prevProposta?.painel_int ?? productIntDefault?.name ?? "PAINEL DE CONCRETO LEVE 3000X610X90MM SP";
+      const PRODUCT_NAME_PISO = productPisoDefault?.name ?? PRODUCT_NAME_EXT;
+      const PRODUCT_NAME_COBERTA = productCobertaDefault?.name ?? PRODUCT_NAME_EXT;
+      const PRODUCT_NAME_MUROS = productMurosDefault?.name ?? PRODUCT_NAME_INT;
       const PRECO_PAGINACAO_M2 = 11;
 
       const extPanels = budget.resumo.paredes_externas.quantidade_paineis;
       const intPanels = budget.resumo.paredes_internas.quantidade_paineis;
+      const murosPanels = budget.resumo.muros?.quantidade_paineis || 0;
       const pisoPanels = budget.resumo.laje_piso.quantidade_paineis;
       const cobertaPanels = budget.resumo.laje_coberta.quantidade_paineis;
       const extArea = Math.round(extPanels * 1.83 * 1000) / 1000;
       const intArea = Math.round(intPanels * 1.83 * 1000) / 1000;
+      const murosArea = Math.round(murosPanels * 1.83 * 1000) / 1000;
       const pisoArea = Math.round(pisoPanels * 1.83 * 1000) / 1000;
       const cobertaArea = Math.round(cobertaPanels * 1.83 * 1000) / 1000;
-      const totalAreaM2 = Math.round((extArea + intArea + pisoArea + cobertaArea) * 1000) / 1000;
+      const totalAreaM2 = Math.round((extArea + intArea + murosArea + pisoArea + cobertaArea) * 1000) / 1000;
       const extCost = Math.round(extArea * PRECO_M2_EXT * 100) / 100;
       const intCost = Math.round(intArea * PRECO_M2_INT * 100) / 100;
-      const pisoCost = Math.round(pisoArea * PRECO_M2_EXT * 100) / 100;
-      const cobertaCost = Math.round(cobertaArea * PRECO_M2_EXT * 100) / 100;
-      const totalPanelCost = extCost + intCost + pisoCost + cobertaCost;
+      const murosCost = Math.round(murosArea * PRECO_M2_MUROS * 100) / 100;
+      const pisoCost = Math.round(pisoArea * PRECO_M2_PISO * 100) / 100;
+      const cobertaCost = Math.round(cobertaArea * PRECO_M2_COBERTA * 100) / 100;
+      const totalPanelCost = extCost + intCost + murosCost + pisoCost + cobertaCost;
       const paginacaoCost = Math.round(totalAreaM2 * PRECO_PAGINACAO_M2 * 100) / 100;
       const totalCost = totalPanelCost + paginacaoCost;
 
-      const propostaItens = [
-        { item: 1, local: "PAREDES EXTERNAS", discriminacao: PRODUCT_NAME_EXT, qtd_un: extPanels, qtd_m2: extArea, preco_m2: PRECO_M2_EXT, preco_total: extCost },
-        { item: 2, local: "PAREDES INTERNAS", discriminacao: PRODUCT_NAME_INT, qtd_un: intPanels, qtd_m2: intArea, preco_m2: PRECO_M2_INT, preco_total: intCost },
-        { item: 3, local: "LAJE DE PISO", discriminacao: PRODUCT_NAME_EXT, qtd_un: pisoPanels, qtd_m2: pisoArea, preco_m2: PRECO_M2_EXT, preco_total: pisoCost },
-        { item: 4, local: "LAJE COBERTA", discriminacao: PRODUCT_NAME_EXT, qtd_un: cobertaPanels, qtd_m2: cobertaArea, preco_m2: PRECO_M2_EXT, preco_total: cobertaCost },
-      ];
+      const SKU_EXT_R = prevProposta?.itens?.[0]?.sku || productExtDefault?.sku || "LW-2P-090";
+      const SKU_INT_R = prevProposta?.itens?.[1]?.sku || productIntDefault?.sku || "LW-SP-090";
+      const SKU_MUROS_R = productMurosDefault?.sku || SKU_INT_R;
+      const SKU_PISO_R = productPisoDefault?.sku || SKU_EXT_R;
+      const SKU_COBERTA_R = productCobertaDefault?.sku || SKU_EXT_R;
+      const propostaItens: Array<{ item: number; local: string; discriminacao: string; sku: string; qtd_un: number; qtd_m2: number; preco_m2: number; preco_total: number }> = [];
+      let lineNoR = 1;
+      propostaItens.push({ item: lineNoR++, local: "PAREDES EXTERNAS", discriminacao: PRODUCT_NAME_EXT, sku: SKU_EXT_R, qtd_un: extPanels, qtd_m2: extArea, preco_m2: PRECO_M2_EXT, preco_total: extCost });
+      propostaItens.push({ item: lineNoR++, local: "PAREDES INTERNAS", discriminacao: PRODUCT_NAME_INT, sku: SKU_INT_R, qtd_un: intPanels, qtd_m2: intArea, preco_m2: PRECO_M2_INT, preco_total: intCost });
+      if (murosPanels > 0) {
+        propostaItens.push({ item: lineNoR++, local: "MUROS (DIVISA)", discriminacao: PRODUCT_NAME_MUROS, sku: SKU_MUROS_R, qtd_un: murosPanels, qtd_m2: murosArea, preco_m2: PRECO_M2_MUROS, preco_total: murosCost });
+      }
+      propostaItens.push({ item: lineNoR++, local: "LAJE DE PISO", discriminacao: PRODUCT_NAME_PISO, sku: SKU_PISO_R, qtd_un: pisoPanels, qtd_m2: pisoArea, preco_m2: PRECO_M2_PISO, preco_total: pisoCost });
+      propostaItens.push({ item: lineNoR++, local: "LAJE COBERTA", discriminacao: PRODUCT_NAME_COBERTA, sku: SKU_COBERTA_R, qtd_un: cobertaPanels, qtd_m2: cobertaArea, preco_m2: PRECO_M2_COBERTA, preco_total: cobertaCost });
       const propostaPaginacao = { item: 1, discriminacao: "Projeto de Paginação", qtd_un: budget.resumo.total_geral_paineis, qtd_m2: totalAreaM2, preco_m2: PRECO_PAGINACAO_M2, preco_total: paginacaoCost };
 
       const connQty = Math.ceil(legacy.totals.totalPanels * 4);
@@ -1886,6 +1935,7 @@ export async function registerRoutes(
         projectDescription: (existingBudgetForPrices?.budgetData as any)?.projectDescription || "",
         proposta: {
           itens: propostaItens,
+          totais_por_sku: computeTotaisPorSku(propostaItens),
           total_paineis_un: budget.resumo.total_geral_paineis,
           total_area_m2: totalAreaM2,
           total_paineis_cost: totalPanelCost,
@@ -2441,6 +2491,107 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[ANNOTATED-CONSOLIDADO] Erro:", error);
       res.status(500).json({ message: error?.message || "Erro ao consolidar imagens anotadas" });
+    }
+  });
+
+  // ===== User Management (admin only) =====
+
+  app.get("/api/users", requireAdmin, async (_req, res) => {
+    try {
+      const allUsers = await storage.getUsers();
+      const safeUsers = allUsers.map(u => ({
+        id: u.id,
+        username: u.username,
+        displayName: u.displayName,
+        role: u.role,
+        active: u.active,
+        storeName: u.storeName,
+        lastLoginAt: u.lastLoginAt,
+        createdAt: u.createdAt,
+        updatedAt: u.updatedAt,
+      }));
+      res.json(safeUsers);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Erro ao listar usuarios" });
+    }
+  });
+
+  app.post("/api/users", requireAdmin, async (req, res) => {
+    try {
+      const { username, password, displayName, role, storeName } = req.body;
+      if (!username || typeof username !== "string" || username.trim().length < 3) {
+        return res.status(400).json({ message: "Nome de usuario deve ter pelo menos 3 caracteres" });
+      }
+      if (!password || typeof password !== "string" || password.length < 6) {
+        return res.status(400).json({ message: "Senha deve ter pelo menos 6 caracteres" });
+      }
+      const existing = await storage.getUserByUsername(username.trim().toLowerCase());
+      if (existing) {
+        return res.status(409).json({ message: "Nome de usuario ja existe" });
+      }
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = await storage.createUser({
+        username: username.trim().toLowerCase(),
+        password: hashedPassword,
+        displayName: displayName?.trim() || username.trim(),
+        role: role === "admin" ? "admin" : "viewer",
+        active: 1,
+        storeName: storeName?.trim() || null,
+      });
+      res.status(201).json({
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        role: user.role,
+        active: user.active,
+        storeName: user.storeName,
+        createdAt: user.createdAt,
+      });
+    } catch (error: any) {
+      console.error("Erro ao criar usuario:", error);
+      res.status(500).json({ message: error?.message || "Erro ao criar usuario" });
+    }
+  });
+
+  app.put("/api/users/:id", requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      const { displayName, role, active, storeName, password } = req.body;
+      const normalizedActive = active !== undefined ? (active ? 1 : 0) : undefined;
+      const normalizedRole = role !== undefined ? (role === "admin" ? "admin" : "viewer") : undefined;
+      if (userId === req.user?.id && normalizedActive === 0) {
+        return res.status(400).json({ message: "Voce nao pode desativar sua propria conta" });
+      }
+      if (userId === req.user?.id && normalizedRole !== undefined && normalizedRole !== "admin") {
+        return res.status(400).json({ message: "Voce nao pode remover seu proprio acesso admin" });
+      }
+      const updateData: any = {};
+      if (displayName !== undefined) updateData.displayName = displayName?.trim() || null;
+      if (normalizedRole !== undefined) updateData.role = normalizedRole;
+      if (normalizedActive !== undefined) updateData.active = normalizedActive;
+      if (storeName !== undefined) updateData.storeName = storeName?.trim() || null;
+
+      const updated = await storage.updateUser(userId, updateData);
+      if (!updated) return res.status(404).json({ message: "Usuario nao encontrado" });
+
+      if (password && typeof password === "string" && password.length >= 6) {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        await storage.updateUserPassword(userId, hashedPassword);
+      }
+
+      res.json({
+        id: updated.id,
+        username: updated.username,
+        displayName: updated.displayName,
+        role: updated.role,
+        active: updated.active,
+        storeName: updated.storeName,
+        lastLoginAt: updated.lastLoginAt,
+        createdAt: updated.createdAt,
+      });
+    } catch (error: any) {
+      console.error("Erro ao atualizar usuario:", error);
+      res.status(500).json({ message: error?.message || "Erro ao atualizar usuario" });
     }
   });
 

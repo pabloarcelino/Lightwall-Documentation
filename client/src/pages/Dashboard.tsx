@@ -8,7 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Plus, FolderOpen, Calendar, CheckCircle, Settings, Trash2, BookOpen, Package, LogOut, User, Target, FlaskConical, TrendingUp, TrendingDown, BarChart3, ArrowRight } from "lucide-react";
+import { Plus, FolderOpen, Calendar, CheckCircle, Settings, Trash2, BookOpen, Package, LogOut, User, Target, FlaskConical, TrendingUp, TrendingDown, BarChart3, ArrowRight, Users } from "lucide-react";
 import { Link } from "wouter";
 import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
@@ -98,6 +98,14 @@ export default function Dashboard() {
                   Config
                 </Button>
               </Link>
+              {currentUser?.role === "admin" && (
+                <Link href="/usuarios">
+                  <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-[hsl(189,100%,42%)] dark:hover:text-[hsl(189,100%,50%)]" data-testid="button-usuarios">
+                    <Users className="h-4 w-4" />
+                    Usuarios
+                  </Button>
+                </Link>
+              )}
               <Link href="/new-project">
                 <Button size="sm" className="gap-2" data-testid="button-new-project">
                   <Plus className="h-4 w-4" />

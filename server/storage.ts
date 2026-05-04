@@ -8,6 +8,7 @@ import {
   budgets,
   settings,
   aiRuns,
+  users,
   type Product,
   type InsertProduct,
   type Project,
@@ -21,6 +22,8 @@ import {
   type Setting,
   type AiRun,
   type InsertAiRun,
+  type User,
+  type InsertUser,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -66,6 +69,15 @@ export interface IStorage {
   // ===== AI audit =====
   createAiRun(run: InsertAiRun): Promise<AiRun>;
   getAiRuns(projectId: number): Promise<AiRun[]>;
+
+  // ===== Users =====
+  getUsers(): Promise<User[]>;
+  getUser(id: number): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  updateUser(id: number, data: Partial<{ displayName: string; role: string; active: number; storeName: string | null }>): Promise<User | undefined>;
+  updateUserPassword(id: number, hashedPassword: string): Promise<void>;
+  updateUserLastLogin(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -291,6 +303,48 @@ export class DatabaseStorage implements IStorage {
     } else {
       await db.insert(settings).values({ key, value });
     }
+  }
+
+  async getUsers(): Promise<User[]> {
+    return db.select().from(users).orderBy(asc(users.username));
+  }
+
+  async getUser(id: number): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user;
+  }
+
+  async createUser(user: InsertUser): Promise<User> {
+    const [created] = await db.insert(users).values(user).returning();
+    return created;
+  }
+
+  async updateUser(id: number, data: Partial<{ displayName: string; role: string; active: number; storeName: string | null }>): Promise<User | undefined> {
+    const [updated] = await db
+      .update(users)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return updated;
+  }
+
+  async updateUserPassword(id: number, hashedPassword: string): Promise<void> {
+    await db
+      .update(users)
+      .set({ password: hashedPassword, updatedAt: new Date() })
+      .where(eq(users.id, id));
+  }
+
+  async updateUserLastLogin(id: number): Promise<void> {
+    await db
+      .update(users)
+      .set({ lastLoginAt: new Date() })
+      .where(eq(users.id, id));
   }
 }
 

@@ -62,7 +62,7 @@ All intermediate pipeline results are saved to `extracted_data` table for later 
 - `server/services/calculation/assumptions.ts` - Default assumptions (wall height 3m, door 0.8x2.1m, etc.)
 - `server/services/export/exportService.ts` - PDF/Excel/JSON export
 - `server/seed.ts` - Product catalog seed (LW-2P-090 at R$275/m2, PROJ-PAG at R$11/m2)
-- `client/src/App.tsx` - Frontend routes (Dashboard, NewProject, ProjectDetails, Settings, Metodologia)
+- `client/src/App.tsx` - Frontend routes (Dashboard, NewProject, ProjectDetails, Settings, Metodologia, Catalogo, Calibracao, Usuarios)
 - `client/src/components/Metodologia.tsx` - Reusable methodology section (process, calculations, assumptions, methods)
 - `client/src/pages/MetodologiaPage.tsx` - Standalone methodology page (/metodologia)
 - `client/src/pages/Catalogo.tsx` - Product catalog management page (/catalogo) with CRUD
@@ -70,6 +70,7 @@ All intermediate pipeline results are saved to `extracted_data` table for later 
 - `client/src/pages/ProjectDetails.tsx` - Project details with 7 tabs (Analise IA, Arquivos, Etapas, Quantitativos, Orcamento, Metodologia, Exportar), inline project info editing, product selector for processing
 - `client/src/pages/Settings.tsx` - API key configuration for Gemini and OpenAI (with reusable ApiKeyCard component), multi-model info card
 - `client/src/pages/Calibracao.tsx` - Calibration details page (/calibracao) with comparative table per test project
+- `client/src/pages/Usuarios.tsx` - Admin user management page (/usuarios) with user CRUD, store/origin tracking, role/status toggles
 
 ## Scope Pre-selection
 - **Pre-process scope checkboxes**: Before clicking "Processar Projeto", user can select which categories to include: paredes externas, paredes internas, laje de piso, laje coberta, cantos/conexões
@@ -90,7 +91,7 @@ All intermediate pipeline results are saved to `extracted_data` table for later 
 - **Arquivos**: Uploaded files with page classifications, delete per file, add new files, reprocess button
 - **Etapas**: Expandable cards for each pipeline step; Etapa 5 shows formatted stat cards + per-floor tables (not raw JSON)
 - **Quantitativos**: Editable walls/slabs/corners with enable/disable toggles and recalculate
-- **Orcamento**: Proposta comercial table (matching real Lightwall format), per-floor breakdown, complementary costs, API health/reliability card
+- **Orcamento**: Proposta comercial table (matching real Lightwall format), SKU totals summary table, per-floor breakdown, complementary costs, API health/reliability card
 - **Metodologia**: Detailed explanation of process, calculations, assumptions, methods, product specs, proposal format, validation, and limitations
 - **Exportar**: PDF/Excel/JSON export options
 
@@ -106,7 +107,8 @@ All intermediate pipeline results are saved to `extracted_data` table for later 
 ```
 budgetData = {
   proposta: {
-    itens: [{ item, local, discriminacao, qtd_un, qtd_m2, preco_m2, preco_total }],
+    itens: [{ item, local, discriminacao, sku, qtd_un, qtd_m2, preco_m2, preco_total }],
+    totais_por_sku: [{ sku, nome, qtd_un, qtd_m2, preco_total }],
     paginacao: { discriminacao, qtd_un, qtd_m2, preco_m2, preco_total },
     total_paineis_un, total_area_m2, total_paineis_cost, grandTotal, preco_m2
   },
@@ -153,15 +155,19 @@ budgetData = {
 ## Authentication
 - Login system with express-session + passport-local + connect-pg-simple
 - Session stored in PostgreSQL (`user_sessions` table, auto-created)
-- Users table: id, username, password (bcrypt hash), display_name, role (admin/viewer), active
+- Users table: id, username, password (bcrypt hash), display_name, role (admin/viewer), active, store_name, last_login_at
 - Default admin user seeded on first startup (password configurable via DEFAULT_ADMIN_PASSWORD env var)
 - Auth endpoints: POST /api/auth/login, POST /api/auth/logout, GET /api/auth/me
+- Admin user management: GET/POST /api/users, PUT /api/users/:id (all requireAdmin)
 - All /api routes protected by requireAuth middleware (except /api/auth/*)
 - Frontend AuthGate in App.tsx checks /api/auth/me; shows Login page if unauthenticated
 - Login page uses Lightwall glass design with brand identity
 - Logout button in Dashboard header clears session and redirects to login
 - Session fixation protection: session regenerated on login
-- Key files: server/auth.ts, client/src/pages/Login.tsx
+- Login tracks lastLoginAt timestamp per user
+- Admin user management page (/usuarios) with create/edit/activate/deactivate users, store/origin tracking
+- Self-protection: admins cannot deactivate themselves or remove their own admin role
+- Key files: server/auth.ts, client/src/pages/Login.tsx, client/src/pages/Usuarios.tsx
 
 ## Database
 - PostgreSQL with 8 tables: users, products (with panel_type), projects, project_files, extracted_data, budgets, settings, ai_runs + user_sessions (auto-managed)
