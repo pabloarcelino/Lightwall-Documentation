@@ -42,6 +42,8 @@ import {
   ZoomIn,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Maximize2,
   Pencil,
   Check,
@@ -157,6 +159,7 @@ export default function ProjectDetails() {
   const eventSourceRef = useRef<EventSource | null>(null);
   const [pipelineStartTime, setPipelineStartTime] = useState<number | null>(null);
   const [tickNow, setTickNow] = useState(Date.now());
+  const [alertsCollapsed, setAlertsCollapsed] = useState(false);
 
   const uploadFiles = useCallback(async (selected: File[]) => {
     if (!selected || selected.length === 0) return;
@@ -1846,26 +1849,58 @@ export default function ProjectDetails() {
           <TabsContent value="budget">
             {budget ? (
               <div className="space-y-6">
-                {budget.alerts && budget.alerts.length > 0 && (
-                  <Card className="border-orange-200 dark:border-orange-800">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <AlertTriangle className="h-5 w-5 text-orange-500" />
-                        Alertas e Inconsistencias
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-2">
-                        {budget.alerts.map((alert: any, idx: number) => (
-                          <div key={idx} data-testid={`alert-${idx}`} className={`p-3 rounded-lg border ${alert.level === "critical" ? "bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800" : alert.level === "warning" ? "bg-orange-50 border-orange-200 dark:bg-orange-900/20 dark:border-orange-800" : "bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800"}`}>
-                            <p className="text-sm font-medium mb-1">[{alert.level.toUpperCase()}]</p>
-                            <p className="text-sm">{alert.message}</p>
+                {budget.alerts && budget.alerts.length > 0 && (() => {
+                  const counts = budget.alerts.reduce((acc: Record<string, number>, a: any) => {
+                    acc[a.level] = (acc[a.level] || 0) + 1;
+                    return acc;
+                  }, {});
+                  return (
+                    <Card className="border-orange-200 dark:border-orange-800" data-testid="card-alerts">
+                      <CardHeader
+                        className="cursor-pointer select-none hover-elevate"
+                        onClick={() => setAlertsCollapsed(c => !c)}
+                        data-testid="button-toggle-alerts"
+                      >
+                        <CardTitle className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle className="h-5 w-5 text-orange-500" />
+                            Alertas e Inconsistencias
+                            <Badge variant="secondary" className="ml-1" data-testid="badge-alerts-count">
+                              {budget.alerts.length}
+                            </Badge>
+                            {counts.critical > 0 && (
+                              <Badge variant="destructive" className="text-xs">
+                                {counts.critical} critico(s)
+                              </Badge>
+                            )}
+                            {counts.warning > 0 && (
+                              <Badge variant="outline" className="text-xs border-orange-400 text-orange-600 dark:text-orange-400">
+                                {counts.warning} aviso(s)
+                              </Badge>
+                            )}
                           </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
+                          {alertsCollapsed ? (
+                            <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                          ) : (
+                            <ChevronUp className="h-5 w-5 text-muted-foreground" />
+                          )}
+                        </CardTitle>
+                      </CardHeader>
+                      {!alertsCollapsed && (
+                        <CardContent>
+                          <div className="space-y-2">
+                            {budget.alerts.map((alert: any, idx: number) => (
+                              <div key={idx} data-testid={`alert-${idx}`} className={`p-3 rounded-lg border ${alert.level === "critical" ? "bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800" : alert.level === "warning" ? "bg-orange-50 border-orange-200 dark:bg-orange-900/20 dark:border-orange-800" : "bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800"}`}>
+                                <p className="text-sm font-medium mb-1">[{alert.level.toUpperCase()}]</p>
+                                <p className="text-sm">{alert.message}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </CardContent>
+                      )}
+                    </Card>
+                  );
+                })()}
 
                 {budget.apiHealth && (() => {
                   const { reliability, metrics } = budget.apiHealth;
