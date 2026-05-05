@@ -413,24 +413,103 @@ function buildBoundingBox(segments: Segment[]): { minX: number; minY: number; ma
   return { minX, minY, maxX, maxY };
 }
 
+/**
+ * Segment-segment intersection test (proper crossing, no endpoint touching).
+ * Returns true if [p1,p2] crosses [p3,p4].
+ */
+function segmentsIntersect(
+  p1x: number, p1y: number, p2x: number, p2y: number,
+  p3x: number, p3y: number, p4x: number, p4y: number
+): boolean {
+  const d1x = p2x - p1x, d1y = p2y - p1y;
+  const d2x = p4x - p3x, d2y = p4y - p3y;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-9) return false; // parallel/colinear
+  const t = ((p3x - p1x) * d2y - (p3y - p1y) * d2x) / denom;
+  const u = ((p3x - p1x) * d1y - (p3y - p1y) * d1x) / denom;
+  return t > 0.001 && t < 0.999 && u > 0.001 && u < 0.999;
+}
+
+/**
+ * Topological wall classification by perpendicular ray-casting.
+ *
+ * For each wall, cast TWO rays perpendicular to its axis (opposite directions)
+ * from a point slightly offset from the wall midpoint. Count how many OTHER
+ * walls each ray crosses before reaching the bounding-box boundary.
+ *
+ * - If at least one ray reaches outside without crossing any wall → EXTERNA
+ *   (that side faces the exterior — garden, street, garage, etc.)
+ * - If both rays cross at least one wall → INTERNA
+ *   (rooms on both sides; the wall is enclosed by other walls)
+ *
+ * This is much more robust than bounding-box proximity because:
+ *  - Works for L-shaped buildings, garages, varandas, irregular footprints
+ *  - Internal walls near the bbox edge (e.g., narrow corridor along facade)
+ *    are correctly classified as INTERNA
+ *  - External walls in concave corners (e.g., back of an L) are correctly
+ *    classified as EXTERNA
+ */
 function classifyWalls(
   pairs: Array<{ a: Segment; b: Segment; thicknessM: number; lengthM: number }>,
-  segments: Segment[]
+  segments: Segment[],
+  scale: ScaleInfo
 ): Array<"externa" | "interna"> {
   if (pairs.length === 0) return [];
   const bbox = buildBoundingBox(segments);
-  const w = bbox.maxX - bbox.minX;
-  const h = bbox.maxY - bbox.minY;
-  const margin = Math.min(w, h) * 0.15;
+  const diag = Math.hypot(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY);
+  if (diag === 0) return pairs.map(() => "interna");
+
+  // Pre-compute centerline endpoints per pair (avg of pair's two parallel segments).
+  // Using centerline (vs raw a/b) makes the ray-cast cleaner: ignores wall thickness.
+  const centerlines = pairs.map(p => {
+    // Try to align b's endpoints with a's by projecting b onto a's direction
+    const ax = p.a.x2 - p.a.x1, ay = p.a.y2 - p.a.y1;
+    const lenA = Math.hypot(ax, ay) || 1;
+    const ux = ax / lenA, uy = ay / lenA;
+    // Project both b endpoints onto a's line; sort to align with a's direction
+    const t1 = (p.b.x1 - p.a.x1) * ux + (p.b.y1 - p.a.y1) * uy;
+    const t2 = (p.b.x2 - p.a.x1) * ux + (p.b.y2 - p.a.y1) * uy;
+    const bStart = t1 <= t2 ? { x: p.b.x1, y: p.b.y1 } : { x: p.b.x2, y: p.b.y2 };
+    const bEnd = t1 <= t2 ? { x: p.b.x2, y: p.b.y2 } : { x: p.b.x1, y: p.b.y1 };
+    return {
+      x1: (p.a.x1 + bStart.x) / 2,
+      y1: (p.a.y1 + bStart.y) / 2,
+      x2: (p.a.x2 + bEnd.x) / 2,
+      y2: (p.a.y2 + bEnd.y) / 2,
+    };
+  });
+
   const out: Array<"externa" | "interna"> = [];
-  for (const p of pairs) {
-    const cx = (p.a.x1 + p.a.x2 + p.b.x1 + p.b.x2) / 4;
-    const cy = (p.a.y1 + p.a.y2 + p.b.y1 + p.b.y2) / 4;
-    const isExternal =
-      cx - bbox.minX < margin ||
-      bbox.maxX - cx < margin ||
-      cy - bbox.minY < margin ||
-      bbox.maxY - cy < margin;
+  for (let i = 0; i < pairs.length; i++) {
+    const cl = centerlines[i];
+    const cx = (cl.x1 + cl.x2) / 2;
+    const cy = (cl.y1 + cl.y2) / 2;
+    const dx = cl.x2 - cl.x1, dy = cl.y2 - cl.y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len; // unit normal
+
+    // Offset start of each ray just past the wall's own face to avoid hitting itself.
+    // thicknessM is in meters; convert to PDF units via scale. Add a 1cm epsilon.
+    const thicknessUnits = pairs[i].thicknessM * scale.unitsPerMeter;
+    const epsilonUnits = 0.01 * scale.unitsPerMeter; // 1cm
+    const offset = (thicknessUnits / 2) + epsilonUnits;
+    const reach = diag * 1.5;
+    const startPosX = cx + nx * offset, startPosY = cy + ny * offset;
+    const endPosX = cx + nx * reach, endPosY = cy + ny * reach;
+    const startNegX = cx - nx * offset, startNegY = cy - ny * offset;
+    const endNegX = cx - nx * reach, endNegY = cy - ny * reach;
+
+    let crossingsPos = 0, crossingsNeg = 0;
+    for (let j = 0; j < centerlines.length; j++) {
+      if (j === i) continue;
+      const oc = centerlines[j];
+      if (segmentsIntersect(startPosX, startPosY, endPosX, endPosY, oc.x1, oc.y1, oc.x2, oc.y2)) crossingsPos++;
+      if (segmentsIntersect(startNegX, startNegY, endNegX, endNegY, oc.x1, oc.y1, oc.x2, oc.y2)) crossingsNeg++;
+      // Early exit: if both sides already have crossings, classification is fixed
+      if (crossingsPos > 0 && crossingsNeg > 0) break;
+    }
+
+    const isExternal = crossingsPos === 0 || crossingsNeg === 0;
     out.push(isExternal ? "externa" : "interna");
   }
   return out;
@@ -495,7 +574,7 @@ export async function extractFromVectorPdf(filePath: string, pavimentoByPage: Ma
       if (dropped > 0) {
         console.log(`[PDF-VECTOR] Pag ${pageNum}: dedup centerline removeu ${dropped} pares duplicados (${rawPairs.length} → ${pairs.length})`);
       }
-      const classes = classifyWalls(pairs, segments);
+      const classes = classifyWalls(pairs, segments, scale);
       let pIdx = 0;
       for (const p of pairs) {
         if (!isFinite(p.lengthM) || !isFinite(p.thicknessM) || p.lengthM <= 0 || p.thicknessM <= 0) continue;

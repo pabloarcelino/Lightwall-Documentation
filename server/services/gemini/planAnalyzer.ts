@@ -859,14 +859,20 @@ ${slabsList || "Nenhuma"}
 - EXTERNA: envoltoria da CASA, uma face toca exterior (jardim/rua), outra toca ambiente interno.
 - INTERNA: divisoria DENTRO da casa, ambas as faces tocam comodos internos.
 
+REGRA TOPOLOGICA: NUNCA existe parede "interna" FORA do poligono das externas.
+"Parede dentro de parede" e impossivel — interna esta DENTRO do contorno externo.
+
 VERIFICACAO:
 1. CLASSIFICACAO: ${intCount === 0 ? "*** CRITICO: 0 INTERNAS! Paredes que dividem comodos DENTRO da casa devem ser 'interna', nao 'externa'. ***" : ""} ${extCount === 0 ? "*** CRITICO: 0 EXTERNAS! O contorno da casa deve ser 'externa'. ***" : ""}
-   - Externas formam o poligono fechado da casa? Se uma "externa" tem ambientes dos dois lados → reclassifique como "interna".
-   - Alguma "interna" tem um lado voltado para jardim/exterior? → reclassifique como "externa".
+   - Trace o poligono fechado da casa. Cada parede no contorno = externa; cada parede DENTRO = interna.
+   - Se uma "externa" tem ambientes fechados dos dois lados → reclassifique como "interna".
+   - Se uma "interna" toca jardim/rua/exterior em um lado → reclassifique como "externa".
+   - Se uma "interna" esta FORA do poligono externo → e impossivel; reclassifique ou remova.
    - Muros estao FORA da projecao da casa? Se um "muro" faz parte do contorno da edificacao coberta → "externa".
 2. PAREDES FALTANTES? Ha paredes visiveis na imagem nao extraidas?
 3. ESQUADRIAS: ${totalEsq === 0 ? "*** 0 ESQUADRIAS! Procure arcos (portas) e tracos paralelos (janelas). ***" : `${totalEsq} encontradas — faltam?`}
-4. COMPRIMENTOS: As cotas batem?
+4. COMPRIMENTOS: Use as COTAS visiveis na planta (numeros com setas) para validar cada parede. Se a cota mostra 4.64m e voce extraiu 6.20m, corrija.
+5. CONTEXTO HOLISTICO: Olhe a edificacao como um todo. O numero de externas faz sentido para uma casa desse tamanho? Externas devem fechar um poligono continuo, sem "buracos" no contorno.
 
 Se TUDO correto: responda "APROVADO"
 Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs": [...], "corners": [...] }`;
@@ -950,9 +956,9 @@ MURO (classe "muro"):
 - IDs: M1, M2, M3...
 
 PAREDE EXTERNA (classe "externa"):
-- Envoltoria da edificacao: separa o INTERIOR da casa do EXTERIOR (jardim/rua).
+- Envoltoria da edificacao: separa o INTERIOR da casa do EXTERIOR (jardim/rua/garagem aberta/varanda aberta).
 - Forma o contorno fechado (poligono) da area construida coberta.
-- Criterio: uma face toca area EXTERNA (jardim, fundo) e a outra face toca um AMBIENTE INTERNO (sala, quarto, etc).
+- Criterio: uma face toca area EXTERNA (jardim, fundo, calcada) e a outra face toca um AMBIENTE INTERNO (sala, quarto, etc).
 - Concentra a maioria das janelas e portas de entrada/saida.
 - IDs: P1, P2, P3...
 
@@ -962,6 +968,18 @@ PAREDE INTERNA (classe "interna"):
 - Esta CONTIDA dentro do poligono formado pelas paredes externas.
 - Possui portas internas entre comodos.
 - IDs: P seguindo a sequencia apos externas.
+
+=== REGRA TOPOLOGICA ABSOLUTA (NAO VIOLAR) ===
+NUNCA pode existir uma parede "interna" FORA do poligono das paredes externas.
+Se voce esta prestes a marcar uma parede como "interna" mas ela esta no contorno
+da edificacao (uma face para o jardim/rua), ela e EXTERNA, nao interna.
+Se voce esta prestes a marcar uma parede como "externa" mas ela tem comodos
+fechados dos DOIS lados, ela e INTERNA, nao externa.
+"Parede dentro de parede" NAO existe — interna esta dentro do poligono externo.
+Antes de classificar qualquer parede:
+  1) Trace mentalmente o poligono fechado da casa (Etapa 3).
+  2) Para cada parede candidata, pergunte: "Esta parede pertence a esse poligono
+     (no contorno) ou esta dentro dele?". Contorno = externa. Dentro = interna.
 
 LAJE DE PISO (classe "piso" ou "radier"):
 - Area horizontal na base dos comodos = soma das areas internas fechadas por paredes.
@@ -981,19 +999,28 @@ Procure linhas nas BORDAS EXTREMAS do desenho, fora da casa. Se existirem, sao m
 Se nao houver linhas de muro visiveis, pule — nao invente muros.
 
 ETAPA 3 — TRACAR O POLIGONO DA ENVOLTORIA (paredes externas):
-Identifique o contorno fechado da area construida coberta. Cada segmento desse poligono e uma PAREDE EXTERNA.
+PRIMEIRO trace o contorno fechado da area construida coberta — siga visualmente as
+linhas mais externas das paredes da casa (NAO o muro do lote). Esse contorno deve
+ser um POLIGONO FECHADO contínuo. Cada segmento desse poligono e uma PAREDE EXTERNA.
 - Uma face toca o exterior (jardim, rua, garagem aberta).
 - A outra face toca um ambiente interno.
+- Se voce nao consegue fechar o poligono, voce esta perdendo paredes externas.
 
 ETAPA 4 — LISTAR PAREDES INTERNAS (divisorias):
 Todas as paredes DENTRO do poligono da Etapa 3 que separam comodos internos.
-- Ambos os lados tocam ambientes.
+- AMBOS os lados tocam ambientes (sem face para o exterior).
 - Se uma parede separa dois comodos, liste-a apenas UMA vez.
+- *** REGRA ABSOLUTA: nenhuma "interna" pode estar FORA do poligono externo. Se
+    estiver fora, ou voce errou a classificacao (e externa) ou ela nao existe. ***
 
-ETAPA 5 — COTAS E DIMENSOES:
+ETAPA 5 — COTAS E DIMENSOES (USAR SEMPRE QUE DISPONIVEIS):
 Para CADA parede (muro, externa, interna), leia a cota (dimensao) mais proxima:
+- Cotas sao numeros com setas/tracos perpendiculares indicando o comprimento real.
+- PRIORIDADE: se houver cota visivel para uma parede, USE-A. Nao estime visualmente.
 - Numeros > 10 (ex: 464, 350) estao em cm → divida por 100.
 - Numeros < 20 (ex: 4.64) ja estao em metros.
+- Cadeia de cotas: somar cotas parciais ao longo de uma face deve bater com a
+  cota total dessa face. Use isso para validar.
 
 ETAPA 6 — ESQUADRIAS:
 Para CADA parede, verifique portas (arcos no desenho) e janelas (tracos paralelos):
