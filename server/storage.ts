@@ -51,6 +51,7 @@ export interface IStorage {
   deleteProjectFile(fileId: number): Promise<void>;
 
   addExtractedData(data: InsertExtractedData): Promise<ExtractedData>;
+  addExtractedDataBatch(items: InsertExtractedData[]): Promise<number>;
   getExtractedData(projectId: number): Promise<ExtractedData[]>;
   getExtractedDataByType(projectId: number, elementType: string): Promise<ExtractedData | undefined>;
   updateExtractedDataByType(projectId: number, elementType: string, data: any): Promise<void>;
@@ -198,6 +199,38 @@ export class DatabaseStorage implements IStorage {
   async addExtractedData(data: InsertExtractedData): Promise<ExtractedData> {
     const [created] = await db.insert(extractedData).values(data).returning();
     return created;
+  }
+
+  async addExtractedDataBatch(items: InsertExtractedData[]): Promise<number> {
+    if (items.length === 0) return 0;
+    // Insert in chunks to avoid hitting parameter limits and to recover from
+    // transient connection drops (Neon serverless sometimes terminates idle
+    // connections mid-loop with code 57P01).
+    const CHUNK = 50;
+    const MAX_RETRIES = 3;
+    let inserted = 0;
+    for (let i = 0; i < items.length; i += CHUNK) {
+      const slice = items.slice(i, i + CHUNK);
+      let attempt = 0;
+      while (true) {
+        try {
+          await db.insert(extractedData).values(slice);
+          inserted += slice.length;
+          break;
+        } catch (err: any) {
+          const code = err?.code || err?.cause?.code;
+          const transient =
+            code === "57P01" || code === "ECONNRESET" || code === "ETIMEDOUT" ||
+            /terminating connection|connection terminated|Connection terminated/i.test(err?.message || "");
+          attempt++;
+          if (!transient || attempt >= MAX_RETRIES) throw err;
+          const backoff = 250 * Math.pow(2, attempt - 1);
+          console.warn(`[STORAGE] addExtractedDataBatch retry ${attempt}/${MAX_RETRIES} apos ${backoff}ms (code=${code || "?"})`);
+          await new Promise((r) => setTimeout(r, backoff));
+        }
+      }
+    }
+    return inserted;
   }
 
   async getExtractedData(projectId: number): Promise<ExtractedData[]> {

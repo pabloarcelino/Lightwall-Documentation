@@ -4,6 +4,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs/promises";
 import { storage } from "./storage";
+import type { InsertExtractedData } from "@shared/schema";
 import {
   classifyAndExtractTables,
   extractGeometryParallel,
@@ -1151,16 +1152,21 @@ export async function registerRoutes(
               return geo;
             };
 
-            // Helper: store geometry in DB
+            // Helper: store geometry in DB.
+            // Falhas transitorias do Postgres (Neon 57P01: "terminating connection
+            // due to administrator command") nao podem invalidar a etapa, pois a
+            // geometria ja esta em memoria em allGeometries e sera usada pela
+            // fusao multivista mais adiante. Se a persistencia falhar de vez,
+            // logamos e seguimos — o orcamento e calculado mesmo assim.
             const storeGeometry = async (geometry: GeometryResult) => {
-              for (const wall of geometry.walls) {
-                await storage.addExtractedData({ projectId, fileId: file.id, elementType: "parede", data: wall, hasAssumption: 0 });
-              }
-              for (const slab of geometry.slabs) {
-                await storage.addExtractedData({ projectId, fileId: file.id, elementType: "laje", data: slab, hasAssumption: 0 });
-              }
-              for (const corner of geometry.corners) {
-                await storage.addExtractedData({ projectId, fileId: file.id, elementType: "canto", data: corner, hasAssumption: 0 });
+              const items: InsertExtractedData[] = [];
+              for (const wall of geometry.walls) items.push({ projectId, fileId: file.id, elementType: "parede", data: wall, hasAssumption: 0 });
+              for (const slab of geometry.slabs) items.push({ projectId, fileId: file.id, elementType: "laje", data: slab, hasAssumption: 0 });
+              for (const corner of geometry.corners) items.push({ projectId, fileId: file.id, elementType: "canto", data: corner, hasAssumption: 0 });
+              try {
+                await storage.addExtractedDataBatch(items);
+              } catch (storeErr: any) {
+                console.warn(`[STORE] Falha ao persistir geometria de ${file.originalName} (${items.length} itens): ${storeErr?.message || storeErr}. Pipeline continua com dados em memoria.`);
               }
             };
 
