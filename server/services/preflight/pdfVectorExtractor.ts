@@ -333,6 +333,75 @@ function findParallelPairs(segments: Segment[], scale: ScaleInfo): Array<{ a: Se
   return pairs;
 }
 
+/**
+ * Deduplicate wall pairs sharing the same centerline.
+ *
+ * findParallelPairs is fooled by:
+ *  - Wall hatching/fill patterns drawn as parallel lines inside a single wall
+ *    (e.g. concrete/brick representation): a wall with 2 outer edges + N hatch
+ *    lines yields multiple "parallel pairs" all representing the same physical wall.
+ *  - PDF wall fills broken into many short parallel sub-segments.
+ *
+ * Two pairs are duplicates when their centerlines (midline between a and b)
+ * are nearly collinear (perp distance ≤ ~half a wall thickness) AND their spans
+ * overlap by ≥50% of the shorter pair. Longer pairs are kept (they better
+ * represent the real wall length).
+ */
+function deduplicateWallPairs(
+  pairs: Array<{ a: Segment; b: Segment; thicknessM: number; lengthM: number }>,
+  scale: ScaleInfo,
+): Array<{ a: Segment; b: Segment; thicknessM: number; lengthM: number }> {
+  if (pairs.length <= 1) return pairs;
+  const ANGLE_TOL = 5; // degrees
+  const COLLINEAR_PERP = (MIN_THICKNESS_M * 0.6) * scale.unitsPerMeter;
+  const OVERLAP_RATIO = 0.5;
+
+  const lines = pairs.map(p => {
+    const cx1 = (p.a.x1 + p.b.x1) / 2;
+    const cy1 = (p.a.y1 + p.b.y1) / 2;
+    const cx2 = (p.a.x2 + p.b.x2) / 2;
+    const cy2 = (p.a.y2 + p.b.y2) / 2;
+    const len = Math.hypot(cx2 - cx1, cy2 - cy1);
+    const ang = normalizeAngle((Math.atan2(cy2 - cy1, cx2 - cx1) * 180) / Math.PI);
+    return { x1: cx1, y1: cy1, x2: cx2, y2: cy2, length: len, angle: ang };
+  });
+
+  // Order: longest pairs first so they win as canonical.
+  const indices = pairs.map((_, i) => i).sort((i, j) => pairs[j].lengthM - pairs[i].lengthM);
+  const removed = new Set<number>();
+
+  for (const i of indices) {
+    if (removed.has(i)) continue;
+    const li = lines[i];
+    const dx = li.x2 - li.x1, dy = li.y2 - li.y1;
+    const lenI = Math.hypot(dx, dy);
+    if (lenI === 0) continue;
+    const ux = dx / lenI, uy = dy / lenI;
+    // Constant for line equation Ax + By + C = 0 with A=dy, B=-dx, C=x2*y1 - y2*x1
+    const lineConst = li.x2 * li.y1 - li.y2 * li.x1;
+    for (const j of indices) {
+      if (j === i || removed.has(j)) continue;
+      const lj = lines[j];
+      if (lj.length < 1e-3) { removed.add(j); continue; }
+      if (angleDiff(li.angle, lj.angle) > ANGLE_TOL) continue;
+      const d1 = Math.abs((dy * lj.x1 - dx * lj.y1 + lineConst) / lenI);
+      const d2 = Math.abs((dy * lj.x2 - dx * lj.y2 + lineConst) / lenI);
+      if (d1 > COLLINEAR_PERP || d2 > COLLINEAR_PERP) continue;
+      const t1 = (lj.x1 - li.x1) * ux + (lj.y1 - li.y1) * uy;
+      const t2 = (lj.x2 - li.x1) * ux + (lj.y2 - li.y1) * uy;
+      const tMin = Math.max(0, Math.min(t1, t2));
+      const tMax = Math.min(lenI, Math.max(t1, t2));
+      const overlap = Math.max(0, tMax - tMin);
+      const minSide = Math.min(li.length, lj.length);
+      if (minSide <= 0) continue;
+      if (overlap / minSide < OVERLAP_RATIO) continue;
+      removed.add(j);
+    }
+  }
+
+  return pairs.filter((_, i) => !removed.has(i));
+}
+
 function buildBoundingBox(segments: Segment[]): { minX: number; minY: number; maxX: number; maxY: number } {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const s of segments) {
@@ -420,7 +489,12 @@ export async function extractFromVectorPdf(filePath: string, pavimentoByPage: Ma
       const scale = detectScale(texts, segments);
       if (scale.source === "cota" || aggregatedScale.source === "default") aggregatedScale = scale;
 
-      const pairs = findParallelPairs(segments, scale);
+      const rawPairs = findParallelPairs(segments, scale);
+      const pairs = deduplicateWallPairs(rawPairs, scale);
+      const dropped = rawPairs.length - pairs.length;
+      if (dropped > 0) {
+        console.log(`[PDF-VECTOR] Pag ${pageNum}: dedup centerline removeu ${dropped} pares duplicados (${rawPairs.length} → ${pairs.length})`);
+      }
       const classes = classifyWalls(pairs, segments);
       let pIdx = 0;
       for (const p of pairs) {

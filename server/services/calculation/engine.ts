@@ -321,23 +321,98 @@ export function fusionMultiView(
   }
 
   const seenWalls = new Set<string>();
-  const deduplicatedWalls: ExtractedWall[] = [];
+  const sigDedupedWalls: ExtractedWall[] = [];
   for (const w of allWalls) {
     const sig = wallSignature(w);
     if (!seenWalls.has(sig)) {
       seenWalls.add(sig);
-      deduplicatedWalls.push(w);
+      sigDedupedWalls.push(w);
     }
   }
 
   const seenSlabs = new Set<string>();
-  const deduplicatedSlabs: ExtractedSlab[] = [];
+  const sigDedupedSlabs: ExtractedSlab[] = [];
   for (const s of allSlabs) {
     const sig = slabSignature(s);
     if (!seenSlabs.has(sig)) {
       seenSlabs.add(sig);
-      deduplicatedSlabs.push(s);
+      sigDedupedSlabs.push(s);
     }
+  }
+
+  // ===== Consolidacao por pagina dominante (apenas em caso de over-extraction) =====
+  // Quando o mesmo pavimento aparece em multiplas paginas (planta arquitetonica
+  // + cotada + humanizada + corte etc), a mesma estrutura e extraida N vezes com
+  // pequenas variacoes de medida que driblam a deduplicacao por assinatura acima
+  // (bucket de 5cm). Para cada (nivel, classe), se HOUVER suspeita de over-extraction
+  // (mais paredes que o limite plausivel), mantemos apenas a pagina dominante.
+  // Se a contagem for plausivel, preservamos tudo (cobre o caso de plantas legitimas
+  // divididas em multiplas paginas).
+  const PLAUSIBLE_MAX_WALLS_PER_NIVEL_CLASSE = 30; // residencial; tipos maiores ainda passam por dedup local
+  const wallsByNivelClasse = new Map<string, ExtractedWall[]>();
+  for (const w of sigDedupedWalls) {
+    const key = `${w.nivel}|${w.classe}`;
+    const arr = wallsByNivelClasse.get(key);
+    if (arr) arr.push(w); else wallsByNivelClasse.set(key, [w]);
+  }
+  const deduplicatedWalls: ExtractedWall[] = [];
+  for (const [key, group] of wallsByNivelClasse) {
+    if (group.length === 0) continue;
+    const pageCounts = new Map<number, number>();
+    for (const w of group) {
+      const p = typeof w.page_index === "number" ? w.page_index : -1;
+      pageCounts.set(p, (pageCounts.get(p) ?? 0) + 1);
+    }
+    // Sem multiplas paginas OU contagem plausivel → mantem tudo
+    if (pageCounts.size <= 1 || group.length <= PLAUSIBLE_MAX_WALLS_PER_NIVEL_CLASSE) {
+      deduplicatedWalls.push(...group);
+      continue;
+    }
+    // Trigger: > PLAUSIBLE_MAX paredes em multiplas paginas → suspeita de duplicacao multi-planta.
+    // Pagina dominante = a com mais contribuicoes; desempate pela maior soma de comprimento.
+    const ranked = [...pageCounts.keys()].map(pg => {
+      const items = group.filter(w => (typeof w.page_index === "number" ? w.page_index : -1) === pg);
+      const totalLen = items.reduce((a, w) => a + (w.comprimento_m || 0), 0);
+      return { pg, count: items.length, totalLen };
+    }).sort((a, b) => (b.count - a.count) || (b.totalLen - a.totalLen));
+    const dominantPage = ranked[0].pg;
+    const kept = group.filter(w => (typeof w.page_index === "number" ? w.page_index : -1) === dominantPage);
+    const dropped = group.length - kept.length;
+    console.log(`[FUSAO] paredes ${key}: ${group.length} > ${PLAUSIBLE_MAX_WALLS_PER_NIVEL_CLASSE} (over-extraction suspeita); ${pageCounts.size} pgs → mantendo ${kept.length} da pg dominante ${dominantPage} (descartadas ${dropped})`);
+    deduplicatedWalls.push(...kept);
+  }
+
+  // Lajes: dedup por (nivel, classe) APENAS quando areas sao similares (>=70% match
+  // = mesmas areas com leve jitter de extracao). Areas distintas no mesmo nivel/classe
+  // (ex: 2 lajes piso de comodos diferentes) sao preservadas.
+  const SLAB_AREA_SIMILARITY = 0.30; // diferenca relativa <= 30% → considera duplicata
+  const slabsByNivelClasse = new Map<string, ExtractedSlab[]>();
+  for (const s of sigDedupedSlabs) {
+    const key = `${s.nivel}|${s.classe}`;
+    const arr = slabsByNivelClasse.get(key);
+    if (arr) arr.push(s); else slabsByNivelClasse.set(key, [s]);
+  }
+  const deduplicatedSlabs: ExtractedSlab[] = [];
+  for (const [key, group] of slabsByNivelClasse) {
+    if (group.length === 0) continue;
+    if (group.length === 1) { deduplicatedSlabs.push(group[0]); continue; }
+    // Preferir registros com confianca mais alta (table > pdf_vector > inferred);
+    // entre confiancas iguais, preferir maior area (planta mais completa).
+    const sorted = [...group].sort((a, b) => (b.confidence - a.confidence) || (b.area_m2 - a.area_m2));
+    const kept: ExtractedSlab[] = [];
+    for (const s of sorted) {
+      const isDup = kept.some(k => {
+        const maxArea = Math.max(k.area_m2, s.area_m2);
+        if (maxArea <= 0) return false;
+        return Math.abs(k.area_m2 - s.area_m2) / maxArea <= SLAB_AREA_SIMILARITY;
+      });
+      if (!isDup) kept.push(s);
+    }
+    const dropped = group.length - kept.length;
+    if (dropped > 0) {
+      console.log(`[FUSAO] lajes ${key}: ${group.length} → ${kept.length} (descartadas ${dropped} duplicatas com area similar)`);
+    }
+    deduplicatedSlabs.push(...kept);
   }
 
   deduplicatedWalls.forEach((w, i) => { w.id = `P${i + 1}`; });
