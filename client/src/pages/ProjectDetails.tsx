@@ -1398,6 +1398,7 @@ export default function ProjectDetails() {
                         planta_cobertura: "Planta Cobertura",
                         corte: "Corte",
                         fachada: "Fachada",
+                        vista_3d: "Vista 3D",
                         tabela_quantitativo: "Tabela Quantitativo",
                         quadro_esquadrias: "Quadro Esquadrias",
                         detalhe_construtivo: "Detalhe",
@@ -1757,7 +1758,7 @@ export default function ProjectDetails() {
                       if (!groups.has(key)) groups.set(key, []);
                       groups.get(key)!.push(r);
                     }
-                    const orderedTypes = ["planta_cobertura", "corte", "fachada", "detalhe_construtivo", "quadro_esquadrias", "tabela_quantitativo"];
+                    const orderedTypes = ["planta_cobertura", "corte", "fachada", "vista_3d", "detalhe_construtivo", "quadro_esquadrias", "tabela_quantitativo"];
                     const orderedGroups = orderedTypes
                       .filter(t => groups.has(t))
                       .map(t => ({ type: t, label: groups.get(t)![0].pageTypeLabel, items: groups.get(t)! }));

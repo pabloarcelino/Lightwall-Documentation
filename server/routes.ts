@@ -143,6 +143,7 @@ const REFERENCE_PAGE_TYPES = new Set([
   "planta_cobertura",
   "corte",
   "fachada",
+  "vista_3d",
   "detalhe_construtivo",
   "quadro_esquadrias",
   "tabela_quantitativo",
@@ -153,6 +154,7 @@ function pageTypeLabel(pageType: string): string {
     case "planta_cobertura": return "Planta de Cobertura";
     case "corte": return "Corte";
     case "fachada": return "Fachada";
+    case "vista_3d": return "Vista 3D";
     case "detalhe_construtivo": return "Detalhe Construtivo";
     case "quadro_esquadrias": return "Quadro de Esquadrias";
     case "tabela_quantitativo": return "Tabela / Quantitativo";
@@ -1037,6 +1039,10 @@ export async function registerRoutes(
             c.classificacao === "fachada" ||
             c.classificacao === "detalhe_construtivo"
           );
+          const vista3dCount = classifications.filter(c => c.classificacao === "vista_3d").length;
+          if (vista3dCount > 0) {
+            console.log(`[ETAPA1] ${vista3dCount} pagina(s) classificada(s) como vista_3d — excluida(s) da extracao de paredes para evitar duplicacao com plantas baixas.`);
+          }
 
           if (hasGeometryPages || classifications.every(c => c.classificacao !== "irrelevante")) {
             const plantaPages = classifications.filter(c => c.classificacao === "planta_baixa");

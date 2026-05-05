@@ -337,17 +337,19 @@ PENSE PASSO A PASSO antes de classificar:
 3. Qual pavimento esta representado?
 
 Classificacoes possiveis:
-- "planta_baixa": vista superior de um pavimento com paredes, portas, janelas, cotas
-- "planta_cobertura": planta da cobertura
+- "planta_baixa": vista superior ORTOGONAL (2D puro) de um pavimento com paredes, portas, janelas, cotas. SEM perspectiva, SEM profundidade visual, SEM sombras 3D.
+- "planta_cobertura": planta da cobertura (vista superior ortogonal)
 - "corte": vista transversal/longitudinal mostrando alturas e pavimentos empilhados
 - "fachada": vista frontal/lateral do edificio (elevacao)
+- "vista_3d": qualquer representacao tridimensional — perspectiva, vista isometrica, axonometrica, render fotorrealistico, modelo 3D, vista aerea com volume. Tem profundidade, sombras, ou angulos nao-ortogonais.
 - "tabela_quantitativo": tabela com areas, comprimentos, quantidades
 - "quadro_esquadrias": tabela com dimensoes de portas e janelas (P1, J1, etc.)
 - "detalhe_construtivo": detalhes ampliados de paredes, lajes ou conexoes
 - "irrelevante": capa, indice, memorial descritivo puro, sem desenho tecnico
 
 REGRAS:
-- Na duvida entre planta_baixa e outro tipo, classificar como planta_baixa.
+- ATENCAO: vistas isometricas/axonometricas mostram paredes "vistas de cima" mas COM PROFUNDIDADE 3D — NUNCA classifique como planta_baixa. Use "vista_3d".
+- Planta_baixa e SEMPRE 2D puro, ortogonal, sem perspectiva. Se ve sombras de volume, paredes em angulo, ou cantos com profundidade → e vista_3d, nao planta_baixa.
 - So marcar irrelevante se NAO houver NENHUM elemento arquitetonico.
 - Se a pagina contiver TANTO um desenho quanto uma tabela, marque como o tipo do desenho E indique has_table=true.
 - Cortes mostram andares empilhados com linhas de piso e pe-direito. Fachadas mostram a aparencia externa.
@@ -487,17 +489,19 @@ PENSE PASSO A PASSO antes de classificar:
 3. Qual pavimento esta representado?
 
 Classificacoes possiveis:
-- "planta_baixa": vista superior de um pavimento com paredes, portas, janelas, cotas
-- "planta_cobertura": planta da cobertura
+- "planta_baixa": vista superior ORTOGONAL (2D puro) de um pavimento com paredes, portas, janelas, cotas. SEM perspectiva, SEM profundidade visual, SEM sombras 3D.
+- "planta_cobertura": planta da cobertura (vista superior ortogonal)
 - "corte": vista transversal/longitudinal mostrando alturas e pavimentos empilhados
 - "fachada": vista frontal/lateral do edificio (elevacao)
+- "vista_3d": qualquer representacao tridimensional — perspectiva, vista isometrica, axonometrica, render fotorrealistico, modelo 3D, vista aerea com volume. Tem profundidade, sombras, ou angulos nao-ortogonais.
 - "tabela_quantitativo": tabela com areas, comprimentos, quantidades
 - "quadro_esquadrias": tabela com dimensoes de portas e janelas (P1, J1, etc.)
 - "detalhe_construtivo": detalhes ampliados de paredes, lajes ou conexoes
 - "irrelevante": capa, indice, memorial descritivo puro, sem desenho tecnico
 
 REGRAS DE CLASSIFICACAO:
-- Na duvida entre planta_baixa e outro tipo, classificar como planta_baixa.
+- ATENCAO: vistas isometricas/axonometricas mostram paredes "vistas de cima" mas COM PROFUNDIDADE 3D — NUNCA classifique como planta_baixa. Use "vista_3d".
+- Planta_baixa e SEMPRE 2D puro, ortogonal, sem perspectiva. Se ve sombras de volume, paredes em angulo, ou cantos com profundidade → e vista_3d, nao planta_baixa.
 - So marcar irrelevante se NAO houver NENHUM elemento arquitetonico.
 - Se a pagina contiver TANTO um desenho quanto uma tabela, marque como o tipo do desenho E indique has_table=true.
 - Cortes mostram andares empilhados com linhas de piso e pe-direito. Fachadas mostram a aparencia externa.
@@ -536,7 +540,7 @@ Responda com seu raciocinio entre <RACIOCINIO> e </RACIOCINIO>, e depois APENAS 
     const { recordJsonParseRetry } = await import("./client");
     recordJsonParseRetry();
     const retryPrompt = `Analise esta pagina de projeto arquitetonico. Responda SOMENTE com JSON valido, SEM texto antes ou depois:
-{"classificacao":{"page_index":${page.pageIndex},"classificacao":"planta_baixa|planta_cobertura|corte|fachada|tabela_quantitativo|quadro_esquadrias|detalhe_construtivo|irrelevante","pavimento":"Terreo|Superior|Subsolo|Coberta","has_table":false,"has_scale":false},"tabelas":{"paredes_de_tabela":[],"esquadrias_de_tabela":[],"areas_de_tabela":[]}}`;
+{"classificacao":{"page_index":${page.pageIndex},"classificacao":"planta_baixa|planta_cobertura|corte|fachada|vista_3d|tabela_quantitativo|quadro_esquadrias|detalhe_construtivo|irrelevante","pavimento":"Terreo|Superior|Subsolo|Coberta","has_table":false,"has_scale":false},"tabelas":{"paredes_de_tabela":[],"esquadrias_de_tabela":[],"areas_de_tabela":[]}}`;
     const retryText = await callGeminiFlash(page.base64, page.mimeType, retryPrompt, 4096);
     console.log(`[ETAPA1+2] Pag ${page.pageIndex} retry: ${retryText.substring(0, 300)}`);
     parsed = tryParseResponse(retryText);
@@ -692,11 +696,23 @@ export async function extractGeometryParallel(
     });
 
     if (plantaPages.length === 0 && pages.length > 0) {
-      const nonIrrelevant = pages.filter((page) => {
+      // Fallback restrito: NUNCA usar vista_3d, corte, fachada, detalhe ou tabela como
+      // planta — extracao de paredes a partir de vistas 3D/perspectiva causa duplicacao.
+      const onlyPlantaCandidates = pages.filter((page) => {
         const cls = classMap.get(page.pageIndex);
-        return !cls || cls.classificacao !== "irrelevante";
+        if (!cls) return true;
+        return cls.classificacao !== "irrelevante" &&
+               cls.classificacao !== "vista_3d" &&
+               cls.classificacao !== "corte" &&
+               cls.classificacao !== "fachada" &&
+               cls.classificacao !== "tabela_quantitativo" &&
+               cls.classificacao !== "quadro_esquadrias" &&
+               cls.classificacao !== "detalhe_construtivo";
       });
-      if (nonIrrelevant.length > 0) plantaPages.push(...nonIrrelevant);
+      if (onlyPlantaCandidates.length > 0) {
+        console.log(`[ETAPA3] Fallback restrito: ${onlyPlantaCandidates.length} pagina(s) sem classificacao explicita usadas como planta (3D/cortes/fachadas/detalhes excluidos)`);
+        plantaPages.push(...onlyPlantaCandidates);
+      }
     }
 
     if (plantaPages.length === 0) {
