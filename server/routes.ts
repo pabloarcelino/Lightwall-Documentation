@@ -743,8 +743,13 @@ export async function registerRoutes(
       else if (ext === "tif" || ext === "tiff") contentType = "image/tiff";
       else if (ext === "ifc") contentType = "application/octet-stream";
 
+      const stat = await fs.stat(filePath);
       res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Disposition", `inline; filename="${targetFile.originalName}"`);
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(targetFile.originalName || 'arquivo')}"`);
+      res.setHeader("Content-Length", String(stat.size));
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.setHeader("ETag", `"${targetFile.id}-${stat.size}-${stat.mtimeMs}"`);
       const data = await fs.readFile(filePath);
       res.send(data);
     } catch (error) {

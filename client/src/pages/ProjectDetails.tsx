@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
+import { useDropzone } from "react-dropzone";
 import {
   Card,
   CardContent,
@@ -156,6 +157,48 @@ export default function ProjectDetails() {
   const eventSourceRef = useRef<EventSource | null>(null);
   const [pipelineStartTime, setPipelineStartTime] = useState<number | null>(null);
   const [tickNow, setTickNow] = useState(Date.now());
+
+  const uploadFiles = useCallback(async (selected: File[]) => {
+    if (!selected || selected.length === 0) return;
+    const allowed = /\.(pdf|png|jpe?g|webp|bmp|tiff?|ifc)$/i;
+    const valid = selected.filter(f => allowed.test(f.name));
+    if (valid.length === 0) {
+      toast({ title: "Formato não suportado", description: "Use PDF, PNG, JPG, WEBP, BMP, TIFF ou IFC.", variant: "destructive" });
+      return;
+    }
+    const formData = new FormData();
+    for (const f of valid) formData.append("files", f);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/upload`, { method: "POST", body: formData });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({} as any));
+        throw new Error(errBody?.message || `Erro no upload (HTTP ${res.status})`);
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      toast({ title: `${valid.length} arquivo(s) adicionado(s)` });
+    } catch (err: any) {
+      toast({
+        title: "Erro no upload",
+        description: err?.message || "Falha desconhecida ao enviar arquivo.",
+        variant: "destructive",
+      });
+    }
+  }, [projectId, queryClient, toast]);
+
+  const { getRootProps: getFilesRootProps, getInputProps: getFilesInputProps, isDragActive: isFilesDragActive } = useDropzone({
+    accept: {
+      "application/pdf": [".pdf"],
+      "image/png": [".png"],
+      "image/jpeg": [".jpg", ".jpeg"],
+      "image/webp": [".webp"],
+      "image/bmp": [".bmp"],
+      "image/tiff": [".tif", ".tiff"],
+      "application/octet-stream": [".ifc"],
+    },
+    noClick: true,
+    noKeyboard: true,
+    onDrop: (accepted) => uploadFiles(accepted),
+  });
 
   const toggleExpanded = (id: number) => {
     setExpandedSteps(prev => {
@@ -1190,17 +1233,18 @@ export default function ProjectDetails() {
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle>Arquivos do Projeto</CardTitle>
-                    <CardDescription>Clique em um arquivo para visualizar em tela cheia</CardDescription>
+                    <CardDescription>Arraste arquivos aqui ou clique para adicionar. Clique em um arquivo para visualizar em tela cheia.</CardDescription>
                   </div>
                   <div className="flex gap-2">
-                    <label htmlFor="file-upload-input">
-                      <Button variant="outline" size="sm" asChild data-testid="button-add-files">
-                        <span className="cursor-pointer">
-                          <Upload className="h-4 w-4 mr-2" />
-                          Adicionar Arquivos
-                        </span>
-                      </Button>
-                    </label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      data-testid="button-add-files"
+                      onClick={() => document.getElementById("file-upload-input")?.click()}
+                    >
+                      <Upload className="h-4 w-4 mr-2" />
+                      Adicionar Arquivos
+                    </Button>
                     <input
                       id="file-upload-input"
                       type="file"
@@ -1211,28 +1255,7 @@ export default function ProjectDetails() {
                       onChange={async (e) => {
                         const selectedFiles = e.target.files;
                         if (!selectedFiles || selectedFiles.length === 0) return;
-                        const formData = new FormData();
-                        for (let i = 0; i < selectedFiles.length; i++) {
-                          formData.append("files", selectedFiles[i]);
-                        }
-                        try {
-                          const res = await fetch(`/api/projects/${projectId}/upload`, {
-                            method: "POST",
-                            body: formData,
-                          });
-                          if (!res.ok) {
-                            const errBody = await res.json().catch(() => ({} as any));
-                            throw new Error(errBody?.message || `Erro no upload (HTTP ${res.status})`);
-                          }
-                          queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-                          toast({ title: `${selectedFiles.length} arquivo(s) adicionado(s)` });
-                        } catch (err: any) {
-                          toast({
-                            title: "Erro no upload",
-                            description: err?.message || "Falha desconhecida ao enviar arquivo.",
-                            variant: "destructive",
-                          });
-                        }
+                        await uploadFiles(Array.from(selectedFiles));
                         e.target.value = "";
                       }}
                     />
@@ -1335,15 +1358,31 @@ export default function ProjectDetails() {
                 </div>
               )}
               <CardContent>
+                <div
+                  {...getFilesRootProps()}
+                  data-testid="dropzone-project-files"
+                  className={`relative rounded-lg transition-colors ${
+                    isFilesDragActive ? "ring-2 ring-primary bg-primary/5" : ""
+                  }`}
+                >
+                  <input {...getFilesInputProps()} />
+                  {isFilesDragActive && (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-primary/10 backdrop-blur-sm rounded-lg pointer-events-none">
+                      <div className="flex flex-col items-center gap-2 text-primary">
+                        <Upload className="h-10 w-10" />
+                        <p className="text-sm font-semibold">Solte os arquivos aqui</p>
+                      </div>
+                    </div>
+                  )}
                 {!files || files.length === 0 ? (
-                  <div className="text-center py-12 border-2 border-dashed rounded-lg" data-testid="text-no-files">
+                  <div
+                    className="text-center py-12 border-2 border-dashed rounded-lg cursor-pointer hover:border-primary/50 transition-colors"
+                    data-testid="text-no-files"
+                    onClick={() => document.getElementById("file-upload-input")?.click()}
+                  >
                     <Upload className="h-10 w-10 mx-auto text-slate-400 mb-3" />
-                    <p className="text-slate-500 mb-2">Nenhum arquivo enviado</p>
-                    <label htmlFor="file-upload-input">
-                      <Button variant="outline" size="sm" asChild>
-                        <span className="cursor-pointer">Selecionar Arquivos</span>
-                      </Button>
-                    </label>
+                    <p className="text-slate-500 mb-2">Arraste arquivos aqui ou clique para selecionar</p>
+                    <p className="text-xs text-slate-400">PDF, PNG, JPG, WEBP, BMP, TIFF, IFC</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1431,6 +1470,7 @@ export default function ProjectDetails() {
                     })}
                   </div>
                 )}
+                </div>
               </CardContent>
             </Card>
 
@@ -1494,9 +1534,11 @@ export default function ProjectDetails() {
                             data-testid="img-fullview"
                           />
                         ) : isPdf ? (
-                          <PdfViewer
-                            url={fileUrl}
-                            className="w-full h-full"
+                          <iframe
+                            key={viewingFile.id}
+                            src={fileUrl}
+                            title={viewingFile.originalName}
+                            className="w-full h-full border-0 bg-white"
                             data-testid="pdf-fullview"
                           />
                         ) : (
