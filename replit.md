@@ -44,6 +44,8 @@ Web app for parametric budgeting of Lightwall concrete panels with AI-powered in
 - **Topological Wall Classification**: Uses a ray-casting method for precise external/internal wall classification, robust to complex architectural shapes.
 - **Client Identifier System**: SHA-256 file fingerprinting and optional client email for duplicate project detection and enhanced data management.
 - **Calibration System**: Integrated module for tracking budget accuracy against real costs, providing insights into model performance and deviations.
+- **Vector Extraction Scale Gate**: PDF vector extractor only emits walls when page-level scale comes from confirmed cota text (`scale.source === "cota"`). Pages with fallback scale are skipped to avoid inflating the budget with furniture/hatches misclassified as walls.
+- **Sanity Caps in Auto-Slabs**: `estimateFloorArea` and the coberta mirror fallback bail out when the inferred per-floor area exceeds `SANE_FLOOR_AREA_MAX_M2` (800 m²) — prevents absurd auto-generated slabs (e.g. 16k m²) when wall perimeter is over-extracted.
 
 ## Product
 

@@ -1178,12 +1178,22 @@ export async function registerRoutes(
                 const pavMap = new Map<number, string>();
                 for (const pc of plantaPages) pavMap.set(pc.page_index, pc.pavimento || "Terreo");
                 const vec = await extractFromVectorPdf(path.resolve(file.filePath), pavMap, peDireito);
-                if (vec.geometry.walls.length > 0 || vec.geometry.slabs.length > 0) {
+                // GATE: quando a escala e fallback (cotas com alta dispersao ou
+                // sem cotas confiaveis), os comprimentos reais das paredes sao
+                // palpite e o vetorizador inunda o orcamento com paredes
+                // fantasmas (incluindo moveis e hatches). Nesses casos
+                // descartamos a geometria vetorial e confiamos so na IA.
+                const scaleIsReliable = vec.scale.source === "cota";
+                if (!scaleIsReliable && vec.geometry.walls.length > 0) {
+                  console.warn(`[PDF-VECTOR] ${file.originalName}: escala nao confiavel (${vec.scale.source}/${vec.scale.detail}) — descartando ${vec.geometry.walls.length} paredes vetoriais para evitar superestimacao`);
+                }
+                if (scaleIsReliable && (vec.geometry.walls.length > 0 || vec.geometry.slabs.length > 0)) {
                   allGeometries.push(vec.geometry);
                   await storeGeometry(vec.geometry);
                 }
+                const scaleNote = scaleIsReliable ? "" : " — escala nao confiavel, paredes descartadas";
                 sendProgress(projectId, 2.5, "Extracao Vetorial Nativa", "done",
-                  `${vec.candidateWallCount} paredes em ${vec.pagesProcessed} plantas (${vec.segmentCount} segmentos, escala: ${vec.scale.detail})`);
+                  `${vec.candidateWallCount} paredes em ${vec.pagesProcessed} plantas (${vec.segmentCount} segmentos, escala: ${vec.scale.detail})${scaleNote}`);
                 console.log(`[PDF-VECTOR] ${file.originalName}: ${vec.candidateWallCount} paredes (escala ${vec.scale.source})`);
                 for (const n of vec.notes.slice(0, 5)) console.log(`[PDF-VECTOR]   - ${n}`);
               } catch (vErr: any) {

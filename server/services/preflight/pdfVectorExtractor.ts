@@ -16,10 +16,15 @@ interface ScaleInfo {
   detail: string;
 }
 
-const MIN_WALL_LENGTH_M = 0.30;
+// Faixas tipicas de paredes residenciais Lightwall. Valores anteriores eram
+// mais permissivos (0.30m / 0.06–0.40m) e capturavam moveis (balcao, cama,
+// pia, mesa) e elementos sanitarios como "paredes". Apertando aqui reduzimos
+// drasticamente falsos positivos sem perder paredes reais (Lightwall padrao
+// e 0.09m de espessura, paredes de alvenaria ~0.15–0.25m).
+const MIN_WALL_LENGTH_M = 0.50;
 const MAX_WALL_LENGTH_M = 30.0;
-const MIN_THICKNESS_M = 0.06;
-const MAX_THICKNESS_M = 0.40;
+const MIN_THICKNESS_M = 0.08;
+const MAX_THICKNESS_M = 0.30;
 const PARALLEL_TOLERANCE_DEG = 3;
 const COLLINEAR_DIST_TOLERANCE = 0.005;
 const COTA_REGEX = /^(\d+[.,]?\d*)\s*(m|cm|mm)?$/i;
@@ -567,6 +572,15 @@ export async function extractFromVectorPdf(filePath: string, pavimentoByPage: Ma
       }
       const scale = detectScale(texts, segments);
       if (scale.source === "cota" || aggregatedScale.source === "default") aggregatedScale = scale;
+
+      // GATE POR PAGINA: sem cotas confiaveis, os comprimentos sao palpite e
+      // pares paralelos viram principalmente moveis/hatches/cotas. Pulamos
+      // a pagina inteira em vez de poluir o orcamento com paredes fantasmas.
+      if (scale.source !== "cota") {
+        notes.push(`Pag ${pageNum}: escala nao confiavel (${scale.detail}) — pulando extracao vetorial`);
+        console.log(`[PDF-VECTOR] Pag ${pageNum} pav ${pavimento}: ${segments.length} segs — pulado (escala: ${scale.detail})`);
+        continue;
+      }
 
       const rawPairs = findParallelPairs(segments, scale);
       const pairs = deduplicateWallPairs(rawPairs, scale);

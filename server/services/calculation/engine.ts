@@ -444,16 +444,31 @@ export function fusionMultiView(
   const bottomFloor = sortedFloors[0];
   const topFloor = sortedFloors[sortedFloors.length - 1];
 
+  // Limite de sanidade: residencial tipico tem ate ~600 m² por pavimento.
+  // Acima disso, quase certamente o perimetro foi inflado por
+  // duplicacao/over-extraction de paredes — nao auto-gerar laje absurda.
+  const SANE_FLOOR_AREA_MAX_M2 = 800;
+
   function estimateFloorArea(floorName: string): number {
     const extWalls = deduplicatedWalls.filter(w => w.nivel === floorName && w.classe === "externa");
     if (extWalls.length > 0) {
       const totalPerimeter = extWalls.reduce((sum, w) => sum + w.comprimento_m, 0);
-      return Math.round(Math.pow(totalPerimeter / 4, 2) * 100) / 100;
+      const est = Math.pow(totalPerimeter / 4, 2);
+      if (est > SANE_FLOOR_AREA_MAX_M2) {
+        console.log(`[FUSAO] estimateFloorArea(${floorName}): estimativa ${est.toFixed(0)} m² > ${SANE_FLOOR_AREA_MAX_M2} (insano, perimetro ${totalPerimeter.toFixed(0)}m provavelmente inflado) — bail out`);
+        return 0;
+      }
+      return Math.round(est * 100) / 100;
     }
     const allFloorWalls = deduplicatedWalls.filter(w => w.nivel === floorName);
     if (allFloorWalls.length > 0) {
       const totalPerimeter = allFloorWalls.reduce((sum, w) => sum + w.comprimento_m, 0);
-      return Math.round(Math.pow(totalPerimeter / 4, 2) * 100) / 100;
+      const est = Math.pow(totalPerimeter / 4, 2);
+      if (est > SANE_FLOOR_AREA_MAX_M2) {
+        console.log(`[FUSAO] estimateFloorArea(${floorName}): estimativa ${est.toFixed(0)} m² > ${SANE_FLOOR_AREA_MAX_M2} (insano) — bail out`);
+        return 0;
+      }
+      return Math.round(est * 100) / 100;
     }
     return 0;
   }
@@ -526,6 +541,11 @@ export function fusionMultiView(
       const hasCoberta = deduplicatedSlabs.some(s => s.nivel === floorName && s.classe === "coberta");
       if (!hasCoberta) {
         const aiDetectedAnyCoberta = allSlabs.some(s => s.classe === "coberta");
+        // Espelhamento de piso: residencias com laje plana frequentemente nao
+        // tem a coberta marcada explicitamente na planta. Se HA piso detectado
+        // no pavimento superior e confianca razoavel, espelhamos area do piso
+        // como coberta. Continua sendo "auto", o usuario pode editar/desligar.
+        const topPiso = deduplicatedSlabs.find(s => s.nivel === floorName && (s.classe === "piso" || s.classe === "radier"));
         if (aiDetectedAnyCoberta) {
           const area = getBestArea(floorName);
           if (area > 0) {
@@ -539,8 +559,18 @@ export function fusionMultiView(
             });
             console.log(`[FUSAO] Auto-gerada laje coberta para ${floorName}: ${area} m²`);
           }
+        } else if (topPiso && topPiso.area_m2 > 0 && topPiso.area_m2 <= SANE_FLOOR_AREA_MAX_M2) {
+          deduplicatedSlabs.push({
+            id: `L_auto`,
+            nivel: floorName,
+            classe: "coberta",
+            area_m2: topPiso.area_m2,
+            measurement_source: "inferred_coberta_from_piso",
+            confidence: 0.4,
+          });
+          console.log(`[FUSAO] Auto-gerada laje coberta para ${floorName} espelhando o piso: ${topPiso.area_m2} m² (IA nao detectou coberta; assumindo laje plana)`);
         } else {
-          console.log(`[FUSAO] Nao auto-gerando laje coberta para ${floorName}: IA nao detectou laje coberta (possivel telhado em telha)`);
+          console.log(`[FUSAO] Nao auto-gerando laje coberta para ${floorName}: IA nao detectou e sem piso para espelhar (possivel telhado em telha)`);
         }
       }
     }
