@@ -1212,7 +1212,8 @@ export async function registerRoutes(
 
             } else {
               // GEMINI-ONLY or OPENAI-ONLY
-              sendProgress(projectId, 3, "Extracao Geometrica", "running", `Analisando geometria de ${file.originalName} (Gemini-only)...`);
+              const providerLabel = providerForRun === "openai" ? "OpenAI" : "Gemini";
+              sendProgress(projectId, 3, "Extracao Geometrica", "running", `Analisando geometria de ${file.originalName} (${providerLabel})...`);
               sendProgress(projectId, 3.5, "Verificacao IA", "running", `Verificando extracao de ${file.originalName}...`);
               const geometry = await runGeminiPipeline();
               allGeometries.push(geometry);
@@ -1768,15 +1769,23 @@ export async function registerRoutes(
         },
       };
 
-      await storage.createBudget({
-        projectId,
-        budgetData,
-        totalArea: String(legacy.totals.totalWallArea + legacy.totals.totalSlabArea),
-        totalCost: String(totalCost),
-        status: "completed",
-      });
+      console.log(`[PERSIST] createBudget: totalArea=${legacy.totals.totalWallArea + legacy.totals.totalSlabArea}, totalCost=${totalCost}`);
+      try {
+        await storage.createBudget({
+          projectId,
+          budgetData,
+          totalArea: String(legacy.totals.totalWallArea + legacy.totals.totalSlabArea),
+          totalCost: String(totalCost),
+          status: "completed",
+        });
+        console.log(`[PERSIST] createBudget OK`);
+      } catch (persistErr: any) {
+        console.error(`[PERSIST] createBudget FALHOU:`, persistErr?.message, persistErr?.stack);
+        throw persistErr;
+      }
 
       await storage.updateProjectStatus(projectId, "completed");
+      console.log(`[PERSIST] updateProjectStatus(completed) OK`);
       if (detectedBuildingType) {
         await storage.addExtractedData({
           projectId, fileId: null, elementType: "building_type_detection",
@@ -1813,6 +1822,7 @@ export async function registerRoutes(
         ? "Tempo limite excedido na API. Tente novamente."
         : `Erro ao processar projeto: ${errMsg.substring(0, 150)}`;
       console.error("Erro ao processar projeto:", error);
+      console.error("Stack:", error?.stack);
       sendProgress(projectId, 0, "Erro", "error", userMsg);
       pipelineStartTimes.delete(projectId);
       await storage.updateProjectStatus(projectId, "error");

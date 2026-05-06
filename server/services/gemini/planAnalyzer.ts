@@ -740,7 +740,9 @@ export async function extractGeometryParallel(
     const allCorners: ExtractedCorner[] = [];
     const failedPages: number[] = [];
 
-    console.log(`[ETAPA3] Extraindo ${floorGroups.size} pavimento(s) em PARALELO com Flash (${plantaPages.length} paginas + ${cortePages.slice(0, 2).length} cortes)`);
+    const { getActiveProvider: _gapEtapa3 } = await import("../ai/provider");
+    const _providerLabelEtapa3 = _gapEtapa3() === "openai" ? "OpenAI" : "Gemini Flash";
+    console.log(`[ETAPA3] Extraindo ${floorGroups.size} pavimento(s) em PARALELO com ${_providerLabelEtapa3} (${plantaPages.length} paginas + ${cortePages.slice(0, 2).length} cortes)`);
 
     // Extract all floors in parallel using Flash for speed
     const floorEntries = Array.from(floorGroups.entries());
@@ -759,7 +761,7 @@ export async function extractGeometryParallel(
         const prompt = buildGeometryPrompt([pav], buildingType, peDireito);
         parts.push({ text: prompt });
 
-        console.log(`[ETAPA3] Pavimento "${pav}": ${floorPages.length} pagina(s), Flash thinking=4096`);
+        console.log(`[ETAPA3] Pavimento "${pav}": ${floorPages.length} pagina(s) via ${_providerLabelEtapa3}`);
         const text = await callGeminiFlashMultiPart(parts, 16384, 0.1, 4096);
         console.log(`[ETAPA3] "${pav}" resposta: ${text.substring(0, 400)}`);
 
