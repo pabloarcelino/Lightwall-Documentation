@@ -783,15 +783,29 @@ export async function registerRoutes(
   app.get("/api/projects/:id/progress", (req, res) => {
     const projectId = parseInt(String(req.params.id));
     res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
+    // Initial comment so the client EventSource opens immediately and any
+    // intermediary proxy starts forwarding bytes.
+    try { res.write(": connected\n\n"); } catch {}
 
     const clients = progressClients.get(projectId) || [];
     clients.push(res);
     progressClients.set(projectId, clients);
 
+    // Heartbeat: SSE comment line every 15s. Long pipeline steps (e.g.
+    // ETAPA 3 OpenAI extraction) can be silent for minutes; without a
+    // heartbeat the Replit/CDN proxy closes the idle connection and the
+    // browser stops receiving any further progress events even though the
+    // backend is still processing.
+    const heartbeat = setInterval(() => {
+      try { res.write(`: ping ${Date.now()}\n\n`); } catch {}
+    }, 15000);
+
     req.on("close", () => {
+      clearInterval(heartbeat);
       const remaining = (progressClients.get(projectId) || []).filter(c => c !== res);
       if (remaining.length === 0) progressClients.delete(projectId);
       else progressClients.set(projectId, remaining);
@@ -1666,26 +1680,93 @@ export async function registerRoutes(
           const labelByMode = annotationSource === "ia"
             ? "Imagem Anotada (auto-gerada)"
             : "Vistas de Referencia";
-          await storage.addExtractedData({
-            projectId, fileId: sourceFileId, elementType: "etapa3_annotated_plan",
-            data: {
-              etapa: 4.5,
-              label: labelByMode,
-              image: annotatedImages[0]?.image,
-              images: annotatedImages,
-              referenceImages,
-              summary: summaryAll,
-              generatedAt: new Date().toISOString(),
-              source: annotationSource,
-            },
-            hasAssumption: 0,
-          });
-          const annotatedKB = annotatedImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
-          const refKB = referenceImages.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
-          const parts: string[] = [];
-          if (annotatedImages.length > 0) parts.push(`${annotatedImages.length} planta(s) anotada(s) (${annotatedKB}KB)`);
-          if (referenceImages.length > 0) parts.push(`${referenceImages.length} vista(s) de referencia (${refKB}KB)`);
-          sendProgress(projectId, 7.5, "Imagem Anotada", "done", parts.join(" + ") || "Nenhuma imagem gerada");
+
+          // Compress every image before persisting. Raw PNG base64 from PDFs
+          // and OpenAI image edits can be 3-8MB each; storing several of
+          // them as a single JSONB row triggers Neon serverless to abort
+          // with code 08P01 ("Authentication timed out"). Re-encode to JPEG
+          // ~1600px wide, quality 75 — perfectly fine for a UI preview.
+          const sharp = (await import("sharp")).default;
+          // Returns { dataUrl, mimeType } so the caller knows what was actually
+          // produced — important for reference images that may be PDFs (kept
+          // as-is) and need the right viewer on the frontend.
+          const compressDataUrl = async (
+            dataUrl: string,
+          ): Promise<{ dataUrl: string; mimeType: string }> => {
+            const m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
+            const origMime = m?.[1] || "image/png";
+            // PDFs are not raster images — leave untouched so PdfViewer keeps working.
+            if (origMime === "application/pdf") return { dataUrl, mimeType: origMime };
+            if (!m) return { dataUrl, mimeType: origMime };
+            try {
+              const buf = Buffer.from(m[2], "base64");
+              const out = await sharp(buf)
+                .resize(1600, 1600, { fit: "inside", withoutEnlargement: true })
+                .jpeg({ quality: 75, mozjpeg: true })
+                .toBuffer();
+              return {
+                dataUrl: `data:image/jpeg;base64,${out.toString("base64")}`,
+                mimeType: "image/jpeg",
+              };
+            } catch (cErr: any) {
+              console.warn(`[ETAPA 4.5] Falha ao comprimir imagem (mime=${origMime}): ${cErr?.message}`);
+              return { dataUrl, mimeType: origMime };
+            }
+          };
+          const compressedAnnotated = await Promise.all(
+            annotatedImages.map(async (img) => {
+              const c = await compressDataUrl(img.image);
+              return { ...img, image: c.dataUrl };
+            }),
+          );
+          const compressedReference = await Promise.all(
+            referenceImages.map(async (img) => {
+              const c = await compressDataUrl(img.image);
+              return { ...img, image: c.dataUrl, mimeType: c.mimeType };
+            }),
+          );
+
+          const annotatedKB = compressedAnnotated.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
+          const refKB = compressedReference.reduce((s, img) => s + Math.round(img.image.length / 1024), 0);
+          const totalKB = annotatedKB + refKB;
+          console.log(`[ETAPA 4.5] Payload comprimido: ${totalKB}KB (annotated=${annotatedKB}KB, ref=${refKB}KB)`);
+
+          // Hard safety cap. JSONB inserts approaching ~10MB still risk a
+          // Neon timeout; if we somehow exceed that even after compression,
+          // drop reference images first, then drop the secondary annotated
+          // images keeping only the cover.
+          const MAX_PAYLOAD_KB = 8 * 1024;
+          let finalAnnotated = compressedAnnotated;
+          let finalReference = compressedReference;
+          if (totalKB > MAX_PAYLOAD_KB) {
+            console.warn(`[ETAPA 4.5] Payload ${totalKB}KB > ${MAX_PAYLOAD_KB}KB; reduzindo`);
+            finalReference = [];
+            if (finalAnnotated.length > 1) finalAnnotated = [finalAnnotated[0]];
+          }
+
+          try {
+            await storage.addExtractedData({
+              projectId, fileId: sourceFileId, elementType: "etapa3_annotated_plan",
+              data: {
+                etapa: 4.5,
+                label: labelByMode,
+                image: finalAnnotated[0]?.image,
+                images: finalAnnotated,
+                referenceImages: finalReference,
+                summary: summaryAll,
+                generatedAt: new Date().toISOString(),
+                source: annotationSource,
+              },
+              hasAssumption: 0,
+            });
+            const parts: string[] = [];
+            if (finalAnnotated.length > 0) parts.push(`${finalAnnotated.length} planta(s) anotada(s) (${annotatedKB}KB)`);
+            if (finalReference.length > 0) parts.push(`${finalReference.length} vista(s) de referencia (${refKB}KB)`);
+            sendProgress(projectId, 7.5, "Imagem Anotada", "done", parts.join(" + ") || "Nenhuma imagem gerada");
+          } catch (storeErr: any) {
+            console.error(`[ETAPA 4.5] Falha ao persistir imagens: ${storeErr?.message}`);
+            sendProgress(projectId, 7.5, "Imagem Anotada", "done", `Imagens geradas mas nao persistidas (${storeErr?.message?.substring(0, 80) || "erro DB"})`);
+          }
         } else {
           sendProgress(projectId, 7.5, "Imagem Anotada", "done", "Nenhum arquivo de planta encontrado para anotacao");
         }

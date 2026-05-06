@@ -157,6 +157,7 @@ export default function ProjectDetails() {
   const [highlightedWallId, setHighlightedWallId] = useState<string | null>(null);
   const [liveWalls, setLiveWalls] = useState<any[] | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const sseRetryRef = useRef<number>(0);
   const [pipelineStartTime, setPipelineStartTime] = useState<number | null>(null);
   const [tickNow, setTickNow] = useState(Date.now());
   const [alertsCollapsed, setAlertsCollapsed] = useState(false);
@@ -270,23 +271,27 @@ export default function ProjectDetails() {
     return () => clearInterval(interval);
   }, [isProcessing]);
 
-  const startSSE = () => {
+  const startSSE = (isReconnect = false) => {
     if (eventSourceRef.current) eventSourceRef.current.close();
 
-    const now = Date.now();
-    const initSteps: PipelineStep[] = STEP_CONFIG.map(s => ({
-      step: s.step,
-      label: s.label,
-      status: "pending" as const,
-      parentStep: s.parentStep,
-      displayNum: s.displayNum,
-    }));
-    setPipelineSteps(initSteps);
-    setPipelineStartTime(now);
-    setTickNow(now);
+    if (!isReconnect) {
+      const now = Date.now();
+      const initSteps: PipelineStep[] = STEP_CONFIG.map(s => ({
+        step: s.step,
+        label: s.label,
+        status: "pending" as const,
+        parentStep: s.parentStep,
+        displayNum: s.displayNum,
+      }));
+      setPipelineSteps(initSteps);
+      setPipelineStartTime(now);
+      setTickNow(now);
+      sseRetryRef.current = 0;
+    }
 
     const es = new EventSource(`/api/projects/${projectId}/progress`);
     eventSourceRef.current = es;
+    es.onopen = () => { sseRetryRef.current = 0; };
 
     es.onmessage = (event) => {
       try {
@@ -333,8 +338,28 @@ export default function ProjectDetails() {
     };
 
     es.onerror = () => {
-      es.close();
-      setIsProcessing(false);
+      // Do NOT close + stop processing on transient SSE errors. Long
+      // pipeline steps can briefly drop the connection through proxies.
+      // EventSource auto-reconnects unless we close it. Only treat the
+      // connection as truly dead if the browser reports CLOSED state.
+      if (es.readyState === EventSource.CLOSED) {
+        // Bounded reconnect: max 5 attempts with exponential backoff
+        // (1.5s, 3s, 6s, 12s, 24s). Stops if the user is no longer
+        // processing or another SSE has taken over the ref.
+        const MAX_RETRIES = 5;
+        if (sseRetryRef.current >= MAX_RETRIES) {
+          console.warn(`[SSE] Limite de tentativas (${MAX_RETRIES}) atingido — desistindo`);
+          setIsProcessing(false);
+          return;
+        }
+        const attempt = sseRetryRef.current + 1;
+        const backoff = 1500 * Math.pow(2, attempt - 1);
+        sseRetryRef.current = attempt;
+        setTimeout(() => {
+          if (eventSourceRef.current !== es) return;
+          try { startSSE(true); } catch {}
+        }, backoff);
+      }
     };
   };
 
