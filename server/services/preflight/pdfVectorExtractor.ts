@@ -27,7 +27,12 @@ const MIN_THICKNESS_M = 0.08;
 const MAX_THICKNESS_M = 0.30;
 const PARALLEL_TOLERANCE_DEG = 3;
 const COLLINEAR_DIST_TOLERANCE = 0.005;
-const COTA_REGEX = /^(\d+[.,]?\d*)\s*(m|cm|mm)?$/i;
+// Regex robusta de cotas: tolera sinal opcional (+/-), apostrofo decimal,
+// separadores , ou ., unidade opcional, e cotas como "464" (cm) ou "4,64".
+// Aceita "1.20", "1,20", "1.20m", "120cm", "+1.20", "1.20 ".
+const COTA_REGEX = /^[+\-]?(\d{1,4}(?:[.,]\d{1,3})?)\s*(m|cm|mm)?$/i;
+// Cotas adicionais com formato "L=1.20" ou "1,20m" embutidas em texto livre.
+const COTA_INLINE_REGEX = /(?:^|[\s=:])([+\-]?\d{1,4}(?:[.,]\d{1,3})?)\s*(m|cm|mm)?(?:\s|$)/i;
 
 function dist(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(bx - ax, by - ay);
@@ -216,21 +221,94 @@ async function extractPageData(page: any): Promise<{ segments: Segment[]; texts:
   return { segments, texts, viewport };
 }
 
+/**
+ * Parse a single textual token into a candidate cota (real-world meters).
+ * Handles: "5.20", "5,20", "5.20m", "120cm", "+1.20", and bare integers like
+ * "464" (treated as cm when ≥ 30 to cover plotted dimensions).
+ */
+function parseCotaToken(raw: string): number | null {
+  const m = raw.trim().match(COTA_REGEX);
+  if (!m) return null;
+  let v = parseFloat(m[1].replace(",", "."));
+  const unit = (m[2] || "").toLowerCase();
+  if (!isFinite(v) || v <= 0) return null;
+  if (unit === "cm") v /= 100;
+  else if (unit === "mm") v /= 1000;
+  else if (!unit) {
+    // Sem unidade: aceitar APENAS se tem ponto/virgula decimal (e.g. "5.20",
+    // "5,20") ou for inteiro pequeno em metros plausiveis (3..15). Inteiros
+    // grandes sem unidade sao texto qualquer (ex: cota de nivel "+0.15"
+    // aparece como "0.15"; codigos como "2024", "101" nao devem virar cm).
+    const hasDecimal = /[.,]/.test(m[1]);
+    if (!hasDecimal) {
+      // Sem decimal — so aceita inteiros pequenos plausiveis em metros.
+      if (!Number.isInteger(v) || v < 3 || v > 15) return null;
+    }
+  }
+  if (v < 0.20 || v > 50) return null;
+  return v;
+}
+
+function parseInlineCota(raw: string): number | null {
+  // Reconstroi o token "valor + unidade" a partir dos grupos capturados.
+  const m = raw.match(COTA_INLINE_REGEX);
+  if (!m) return null;
+  return parseCotaToken(`${m[1]}${m[2] || ""}`);
+}
+
+function collectCotaCandidates(texts: RawTextItem[]): Array<{ value: number; cx: number; cy: number }> {
+  const out: Array<{ value: number; cx: number; cy: number }> = [];
+  for (const t of texts) {
+    const cx = t.x + t.width / 2;
+    const cy = t.y;
+    // Try the whole string first (most cotas are isolated tokens).
+    const direct = parseCotaToken(t.str);
+    if (direct !== null) {
+      out.push({ value: direct, cx, cy });
+      continue;
+    }
+    // Fallback: scan for inline numbers (handles "L=1.20", "1.20m total", etc.)
+    const parsed = parseInlineCota(t.str);
+    if (parsed !== null) out.push({ value: parsed, cx, cy });
+  }
+  return out;
+}
+
+/**
+ * 1D clustering of ratios. Groups values within ±tol of a center and returns
+ * the densest cluster's median + size. Much more robust than a single median
+ * when there are 2+ scale modes (e.g. cotas em cm misturadas com cotas em m).
+ */
+function clusterRatios(ratios: number[], tol: number): { center: number; size: number } | null {
+  if (ratios.length === 0) return null;
+  const sorted = [...ratios].sort((a, b) => a - b);
+  let bestSize = 0;
+  let bestCenter = sorted[0];
+  for (let i = 0; i < sorted.length; i++) {
+    const lo = sorted[i] * (1 - tol);
+    const hi = sorted[i] * (1 + tol);
+    let j = i;
+    while (j < sorted.length && sorted[j] <= hi) j++;
+    const cluster = sorted.slice(i, j).filter((r) => r >= lo);
+    if (cluster.length > bestSize) {
+      bestSize = cluster.length;
+      bestCenter = cluster[Math.floor(cluster.length / 2)];
+    }
+  }
+  return { center: bestCenter, size: bestSize };
+}
+
 function detectScale(texts: RawTextItem[], segments: Segment[]): ScaleInfo {
   // Default: PDF user units = points (1 inch = 72 pt). Architectural drawings in mm at 1:50 scale usually have ~14.17 pt = 1m. 
   // Heuristic: find textual cota (e.g. "5.20") near a segment; ratio = real_meters / segment_length_pt.
-  const cotaCandidates: Array<{ value: number; cx: number; cy: number }> = [];
-  for (const t of texts) {
-    const m = t.str.trim().match(COTA_REGEX);
-    if (!m) continue;
-    let v = parseFloat(m[1].replace(",", "."));
-    const unit = (m[2] || "").toLowerCase();
-    if (!isFinite(v) || v <= 0) continue;
-    if (unit === "cm") v /= 100;
-    else if (unit === "mm") v /= 1000;
-    if (v < 0.20 || v > 50) continue;
-    cotaCandidates.push({ value: v, cx: t.x + t.width / 2, cy: t.y });
+  const cotaCandidates = collectCotaCandidates(texts);
+
+  // Distance threshold scales with page size (cotas ficam mais longe em folhas A1/A0).
+  let pageDiag = 0;
+  for (const s of segments) {
+    pageDiag = Math.max(pageDiag, dist(s.x1, s.y1, s.x2, s.y2));
   }
+  const proximityThreshold = Math.max(30, pageDiag * 0.04);
 
   const ratios: number[] = [];
   for (const c of cotaCandidates) {
@@ -239,36 +317,42 @@ function detectScale(texts: RawTextItem[], segments: Segment[]): ScaleInfo {
       const d = pointToSegmentDistance(c.cx, c.cy, s.x1, s.y1, s.x2, s.y2);
       if (!best || d < best.d) best = { d, len: s.length };
     }
-    if (best && best.d < 30 && best.len > 5) {
+    if (best && best.d < proximityThreshold && best.len > 5) {
       ratios.push(best.len / c.value);
     }
   }
 
   if (ratios.length >= 3) {
+    // Cluster with ±15% tolerance — tighter than the +/-25% median band, so
+    // outliers (cota associated to wrong segment) cannot drag the center.
+    const cluster = clusterRatios(ratios, 0.15);
+    if (cluster && cluster.size >= 3 && cluster.size / ratios.length >= 0.4) {
+      return {
+        unitsPerMeter: cluster.center,
+        source: "cota",
+        detail: `${cluster.size}/${ratios.length} cotas no cluster dominante (centro ${cluster.center.toFixed(2)} pt/m)`,
+      };
+    }
+    // Fallback: keep the previous +/-25% median band as a less strict path.
     ratios.sort((a, b) => a - b);
     const mid = ratios[Math.floor(ratios.length / 2)];
-    // Dispersion gate: keep only ratios within +/-25% of the median; require >=60% to agree.
-    // High dispersion = cota text was bound to the wrong segment, fall back to default scale.
-    const tol = 0.25;
-    const inBand = ratios.filter((r) => r >= mid * (1 - tol) && r <= mid * (1 + tol));
-    const agreement = inBand.length / ratios.length;
-    if (agreement >= 0.6) {
+    const inBand = ratios.filter((r) => r >= mid * 0.75 && r <= mid * 1.25);
+    if (inBand.length / ratios.length >= 0.55) {
       const robustMid = inBand[Math.floor(inBand.length / 2)];
       return {
         unitsPerMeter: robustMid,
         source: "cota",
-        detail: `${inBand.length}/${ratios.length} cotas concordam (mediana ${robustMid.toFixed(2)} pt/m, dispersao ${(100 - agreement * 100).toFixed(0)}%)`,
+        detail: `${inBand.length}/${ratios.length} cotas concordam (mediana ${robustMid.toFixed(2)} pt/m)`,
       };
     }
-    // High dispersion → conservative fallback
     return {
       unitsPerMeter: 14.17,
       source: "default",
-      detail: `cotas com alta dispersao (${(100 - agreement * 100).toFixed(0)}%), fallback 1:50 (14.17 pt/m)`,
+      detail: `cotas dispersas (cluster=${cluster?.size ?? 0}/${ratios.length}), fallback 1:50 (14.17 pt/m)`,
     };
   }
 
-  return { unitsPerMeter: 14.17, source: "default", detail: "fallback 1:50 (14.17 pt/m)" };
+  return { unitsPerMeter: 14.17, source: "default", detail: `fallback 1:50 (14.17 pt/m, ${ratios.length} cotas)` };
 }
 
 /** Project both endpoints of segment B onto segment A's direction, return [tMin, tMax] in [0,lenA] units. */

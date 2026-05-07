@@ -189,26 +189,103 @@ export function fusionMultiView(
     }
 
     if (tableData.areas_de_tabela.length > 0) {
-      const areasByNivel = new Map<string, number>();
+      // Distinguir explicitamente entre area_total (autoritativa para piso),
+      // area_coberta (autoritativa para coberta) e soma de comodos (referencia,
+      // usada apenas como teto/fallback).
+      const totalsByNivel = new Map<string, number>();
+      const cobertaByNivel = new Map<string, number>();
+      const sumsByNivel = new Map<string, number>();
       for (const at of tableData.areas_de_tabela) {
         const atArea = num(at.area_m2, 0);
-        if (at.tipo === "area_total") {
-          areasByNivel.set(at.nivel, atArea);
+        if (atArea <= 0) continue;
+        if (at.tipo === "area_coberta") {
+          cobertaByNivel.set(at.nivel, Math.max(cobertaByNivel.get(at.nivel) || 0, atArea));
+          // area_coberta tambem participa do cap de piso (e>= area piso)
+          totalsByNivel.set(at.nivel, Math.max(totalsByNivel.get(at.nivel) || 0, atArea));
+        } else if (at.tipo === "area_total") {
+          // Use o maior area_total reportado (caso haja duplicatas em multiplas paginas)
+          totalsByNivel.set(at.nivel, Math.max(totalsByNivel.get(at.nivel) || 0, atArea));
         } else {
-          const current = areasByNivel.get(at.nivel) || 0;
-          areasByNivel.set(at.nivel, current + atArea);
+          sumsByNivel.set(at.nivel, (sumsByNivel.get(at.nivel) || 0) + atArea);
         }
       }
 
-      for (const [nivel, tableArea] of areasByNivel) {
+      // Autoritativo para laje COBERTA: area_coberta da tabela vira ground-truth.
+      for (const [nivel, area] of cobertaByNivel) {
+        const existingCoberta = allSlabs.find(s => s.nivel === nivel && s.classe === "coberta");
+        if (existingCoberta) {
+          if (existingCoberta.measurement_source !== "table_area_total") {
+            console.log(`[FUSAO] Corrigindo area laje coberta ${nivel}: ${existingCoberta.area_m2} → ${area} (table_area_coberta)`);
+            existingCoberta.area_m2 = area;
+            existingCoberta.measurement_source = "table_area_total";
+            existingCoberta.confidence = 0.98;
+          }
+        } else {
+          allSlabs.push({
+            id: `LCT_${nivel}`,
+            nivel,
+            classe: "coberta",
+            area_m2: area,
+            measurement_source: "table_area_total",
+            confidence: 0.98,
+          });
+          console.log(`[FUSAO] Laje coberta ${nivel} criada a partir do quadro de areas: ${area} m²`);
+        }
+      }
+
+      // Para cada nivel, escolher a referencia de area mais confiavel.
+      // Prioridade: area_total da tabela > soma_comodos > nada.
+      const referenceByNivel = new Map<string, { area: number; source: "table_area_total" | "table_sum_rooms" }>();
+      for (const [nivel, total] of totalsByNivel) {
+        referenceByNivel.set(nivel, { area: total, source: "table_area_total" });
+      }
+      for (const [nivel, sum] of sumsByNivel) {
+        if (!referenceByNivel.has(nivel)) {
+          referenceByNivel.set(nivel, { area: sum, source: "table_sum_rooms" });
+        }
+      }
+
+      for (const [nivel, ref] of referenceByNivel) {
         const existingSlab = allSlabs.find(s => s.nivel === nivel && (s.classe === "piso" || s.classe === "radier"));
         if (existingSlab) {
-          if (existingSlab.measurement_source !== "table" && Math.abs(existingSlab.area_m2 - tableArea) / tableArea > 0.15) {
-            console.log(`[FUSAO] Corrigindo area laje ${nivel}: ${existingSlab.area_m2} → ${tableArea} (tabela)`);
-            existingSlab.area_m2 = tableArea;
-            existingSlab.measurement_source = "table";
-            existingSlab.confidence = 0.95;
+          // area_total da tabela e GROUND-TRUTH: sempre adota (não depende de
+          // desvio mínimo). Soma de comodos so substitui se a IA estiver muito
+          // longe (>15%) — pode haver paredes/circulacao nao contada nos comodos.
+          const shouldOverride = ref.source === "table_area_total"
+            || (existingSlab.area_m2 > 0 && Math.abs(existingSlab.area_m2 - ref.area) / ref.area > 0.15)
+            || existingSlab.area_m2 <= 0;
+          if (shouldOverride && existingSlab.measurement_source !== "table") {
+            console.log(`[FUSAO] Corrigindo area laje ${nivel}: ${existingSlab.area_m2} → ${ref.area} (${ref.source})`);
+            existingSlab.area_m2 = ref.area;
+            existingSlab.measurement_source = ref.source;
+            existingSlab.confidence = ref.source === "table_area_total" ? 0.98 : 0.85;
           }
+        } else if (ref.source === "table_area_total") {
+          // Nem IA nem vetor detectaram laje desse nivel mas a tabela diz que
+          // existe — criar a laje a partir da tabela (alta confianca).
+          allSlabs.push({
+            id: `LT_${nivel}`,
+            nivel,
+            classe: "piso",
+            area_m2: ref.area,
+            measurement_source: "table_area_total",
+            confidence: 0.98,
+          });
+          console.log(`[FUSAO] Laje piso ${nivel} criada a partir do quadro de areas: ${ref.area} m²`);
+        }
+      }
+
+      // Cap absoluto: nenhuma laje pode ultrapassar area_total da tabela em mais de 5%.
+      for (const slab of allSlabs) {
+        const total = totalsByNivel.get(slab.nivel);
+        if (!total) continue;
+        if (slab.classe !== "piso" && slab.classe !== "radier" && slab.classe !== "coberta") continue;
+        const cap = total * 1.05;
+        if (slab.area_m2 > cap && slab.measurement_source !== "table_area_total") {
+          console.log(`[FUSAO] Cap por area_total tabela ${slab.nivel}: laje ${slab.classe} ${slab.area_m2} → ${total} (limite ${cap.toFixed(1)})`);
+          slab.area_m2 = total;
+          slab.measurement_source = `${slab.measurement_source}_capped_by_table`;
+          slab.confidence = Math.max(slab.confidence, 0.9);
         }
       }
     }
@@ -609,6 +686,54 @@ export function fusionMultiView(
   }
 
   deduplicatedSlabs.forEach((s, i) => { s.id = `L${i + 1}`; });
+
+  // ===== AUDITORIA DE PERIMETRO (cross-validation entre fontes) =====
+  // Para cada nivel, comparar o perimetro externo somado das fontes disponiveis
+  // (vetor PDF, IA Gemini/OpenAI, tabela). Discrepancias >50% indicam que uma
+  // das fontes esta inflada (provavel duplicacao) ou subdimensionada (escala
+  // errada). Marcamos needs_review nas paredes mais distantes da mediana e
+  // logamos o resumo para diagnostico.
+  try {
+    const perByNivelBySource = new Map<string, Map<string, number>>();
+    for (const w of deduplicatedWalls) {
+      if (w.classe !== "externa") continue;
+      const src = w.measurement_source?.startsWith("pdf_vector") ? "vector"
+        : w.measurement_source?.startsWith("table") ? "table"
+        : w.measurement_source === "ai_vision_takeoff" ? "openai"
+        : "ai";
+      const niv = perByNivelBySource.get(w.nivel) || new Map<string, number>();
+      niv.set(src, (niv.get(src) || 0) + (w.comprimento_m || 0));
+      perByNivelBySource.set(w.nivel, niv);
+    }
+    for (const [nivel, perBySrc] of perByNivelBySource) {
+      const entries = Array.from(perBySrc.entries()).filter(([, v]) => v > 0);
+      if (entries.length < 2) continue;
+      const values = entries.map(([, v]) => v).sort((a, b) => a - b);
+      const median = values[Math.floor(values.length / 2)];
+      const maxDev = entries.reduce((acc, [src, v]) => {
+        const dev = Math.abs(v - median) / median;
+        return dev > acc.dev ? { src, v, dev } : acc;
+      }, { src: "", v: 0, dev: 0 });
+      console.log(`[FUSAO] Auditoria perimetro externo ${nivel}: ${entries.map(([s, v]) => `${s}=${v.toFixed(1)}m`).join(", ")} (mediana ${median.toFixed(1)}m)`);
+      if (maxDev.dev > 0.5) {
+        console.warn(`[FUSAO] Perimetro discrepante em ${nivel}: fonte ${maxDev.src} = ${maxDev.v.toFixed(1)}m vs mediana ${median.toFixed(1)}m (${(maxDev.dev * 100).toFixed(0)}% desvio) — marcando paredes para revisao`);
+        const flagSrcPrefix = maxDev.src === "vector" ? "pdf_vector" : maxDev.src === "table" ? "table" : maxDev.src === "openai" ? "ai_vision_takeoff" : "";
+        for (const w of deduplicatedWalls) {
+          if (w.nivel !== nivel || w.classe !== "externa") continue;
+          const isFlaggedSource = flagSrcPrefix
+            ? w.measurement_source?.startsWith(flagSrcPrefix)
+            : (!w.measurement_source?.startsWith("pdf_vector") && !w.measurement_source?.startsWith("table") && w.measurement_source !== "ai_vision_takeoff");
+          if (!isFlaggedSource) continue;
+          if (w.needs_review) continue;
+          w.needs_review = true;
+          w.review_reason = `Perimetro externo da fonte ${maxDev.src} diverge da mediana entre fontes (${(maxDev.dev * 100).toFixed(0)}% desvio em ${nivel})`;
+          w.confidence = Math.min(w.confidence, 0.55);
+        }
+      }
+    }
+  } catch (auditErr: any) {
+    console.warn(`[FUSAO] Auditoria de perimetro falhou: ${auditErr?.message || auditErr}`);
+  }
 
   return { walls: deduplicatedWalls, slabs: deduplicatedSlabs, corners: allCorners };
 }

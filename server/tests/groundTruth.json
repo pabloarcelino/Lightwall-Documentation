@@ -1,0 +1,21 @@
+{
+  "$schema": "Ground-truth de m² por categoria para regressão de acurácia. Use os PDFs em attached_assets/ como entrada.",
+  "patricia_coelho": {
+    "fingerprint_hint": "Projeto_-_Patricia_Coelho_1778150063500.pdf",
+    "ground_truth_m2": {
+      "paredes_externas": 384.30,
+      "paredes_internas": 128.10,
+      "muros": 0,
+      "laje_piso": 201.30,
+      "laje_coberta": 219.60
+    },
+    "total_m2": 933.30,
+    "fonte": "Proposta_-_Patricia_Coelho_1778150063500.pdf"
+  },
+  "ana_cristine": {
+    "fingerprint_hint": "Projeto_-_Ana_Cristine_1778150130987.pdf",
+    "ground_truth_m2": null,
+    "fonte": "Proposta_-_Ana_Cristine_1778150130986.pdf",
+    "obs": "Preencher executando 'Salvar quantitativos reais' apos rodar o pipeline e validar manualmente"
+  }
+}

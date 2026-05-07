@@ -8,6 +8,7 @@ Web app for parametric budgeting of Lightwall concrete panels with AI-powered in
 - `npm run db:push`: Applies the Drizzle database schema migrations.
 - `npm run db:seed`: Populates the product catalog.
 - `npm run validate`: Validates system configuration.
+- `npx tsx server/tests/accuracy.ts [fixture]`: Runs the quantitative accuracy regression suite against fixtures defined in `server/tests/groundTruth.json`. Reads persisted budgets from the DB (no AI calls) and reports per-category and weighted-average accuracy vs. ground truth. Pass a substring (e.g. `patricia`) to filter.
 
 **Environment Variables:**
 - `DEFAULT_ADMIN_PASSWORD`: Sets the password for the default admin user on first startup.
@@ -46,6 +47,9 @@ Web app for parametric budgeting of Lightwall concrete panels with AI-powered in
 - **Calibration System**: Integrated module for tracking budget accuracy against real costs, providing insights into model performance and deviations.
 - **Vector Extraction Scale Gate**: PDF vector extractor only emits walls when page-level scale comes from confirmed cota text (`scale.source === "cota"`). Pages with fallback scale are skipped to avoid inflating the budget with furniture/hatches misclassified as walls.
 - **Sanity Caps in Auto-Slabs**: `estimateFloorArea` and the coberta mirror fallback bail out when the inferred per-floor area exceeds `SANE_FLOOR_AREA_MAX_M2` (800 m²) — prevents absurd auto-generated slabs (e.g. 16k m²) when wall perimeter is over-extracted.
+- **Quadro de áreas autoritativo**: `area_total` extraído da tabela vira ground-truth para a área da laje do nivel correspondente: cria a laje quando ausente, sobrescreve quando presente, e impõe um cap absoluto de +5% sobre `area_total` em todas as lajes daquele nivel (`*_capped_by_table`). `tipo: "area_coberta"` recebe o mesmo tratamento. Soma de comodos é fallback de menor confiança.
+- **Detecção de escala vetorial robusta**: `detectScale` em `pdfVectorExtractor.ts` usa regex tolerante (cm/m/mm, separadores `,`/`.`, sinal opcional, inteiros como cm), agrupa razões em clusters 1D ±15% e adota o cluster denso dominante. O limiar de proximidade cota↔segmento escala com a diagonal da página (suporta A1/A0). Páginas sem cota confiável continuam a pular o vetor.
+- **Auditoria cross-source de perímetro**: ao final de `fusionMultiView`, o perímetro externo somado por nivel é comparado entre as fontes presentes (vetor PDF, IA, OpenAI Vision, tabela). Quando uma fonte diverge >50% da mediana, todas as paredes daquela fonte ganham `needs_review=true` com `review_reason` indicando o desvio, e a confiança é cortada para ≤0.55. Fica visível no UI como badge "revisar".
 
 ## Product
 
