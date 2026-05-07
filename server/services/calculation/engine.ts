@@ -32,6 +32,8 @@ export interface SlabItem {
   quantidade_paineis: number;
   is_radier: boolean;
   observacao?: string;
+  measurement_source: string;
+  confidence: number;
 }
 
 export interface FloorGroup {
@@ -793,6 +795,8 @@ function calculateSlabPanels(slab: ExtractedSlab): SlabItem {
     quantidade_paineis: qtd,
     is_radier: isRadier,
     observacao: isRadier ? "Radier excluido do calculo (piso terreo)" : undefined,
+    measurement_source: slab.measurement_source,
+    confidence: slab.confidence,
   };
 }
 
@@ -820,25 +824,35 @@ export function calculateBudget(
     const cobertaSlabs = floorSlabs.filter(s => s.classe === "coberta").map(calculateSlabPanels);
     const totalCorners = floorCorners.reduce((sum, c) => sum + c.qtd_cantos, 0);
 
-    const dominantSource = (items: { measurement_source: string; comprimento_m?: number; area_m2?: number }[]) => {
+    const dominantSourceWalls = (items: WallItem[]): string => {
       const counts = new Map<string, number>();
       for (const it of items) {
-        const w = (it.comprimento_m ?? it.area_m2 ?? 1) || 1;
+        const w = it.comprimento_m || 1;
         counts.set(it.measurement_source, (counts.get(it.measurement_source) || 0) + w);
       }
       let best = ""; let bestW = -1;
       for (const [k, w] of counts) { if (w > bestW) { best = k; bestW = w; } }
       return best;
     };
-    const reviewCount = (items: { needs_review?: boolean }[]) => items.filter(i => i.needs_review).length;
+    const dominantSourceSlabs = (items: SlabItem[]): string => {
+      const counts = new Map<string, number>();
+      for (const it of items) {
+        const w = it.area_m2 || 1;
+        counts.set(it.measurement_source, (counts.get(it.measurement_source) || 0) + w);
+      }
+      let best = ""; let bestW = -1;
+      for (const [k, w] of counts) { if (w > bestW) { best = k; bestW = w; } }
+      return best;
+    };
+    const reviewCountWalls = (items: WallItem[]) => items.filter(i => i.needs_review).length;
 
     const extGroup = {
       comprimento_total_m: Math.round(extWalls.reduce((s, w) => s + w.comprimento_m, 0) * 100) / 100,
       area_bruta_m2: Math.round(extWalls.reduce((s, w) => s + w.area_bruta_m2, 0) * 100) / 100,
       area_liquida_m2: Math.round(extWalls.reduce((s, w) => s + w.area_liquida_m2, 0) * 100) / 100,
       quantidade_paineis: extWalls.reduce((s, w) => s + w.quantidade_paineis, 0),
-      measurement_source_dominant: dominantSource(extWalls as any),
-      needs_review_count: reviewCount(extWalls as any),
+      measurement_source_dominant: dominantSourceWalls(extWalls),
+      needs_review_count: reviewCountWalls(extWalls),
       itens: extWalls,
     };
 
@@ -847,8 +861,8 @@ export function calculateBudget(
       area_bruta_m2: Math.round(intWalls.reduce((s, w) => s + w.area_bruta_m2, 0) * 100) / 100,
       area_liquida_m2: Math.round(intWalls.reduce((s, w) => s + w.area_liquida_m2, 0) * 100) / 100,
       quantidade_paineis: intWalls.reduce((s, w) => s + w.quantidade_paineis, 0),
-      measurement_source_dominant: dominantSource(intWalls as any),
-      needs_review_count: reviewCount(intWalls as any),
+      measurement_source_dominant: dominantSourceWalls(intWalls),
+      needs_review_count: reviewCountWalls(intWalls),
       itens: intWalls,
     };
 
@@ -856,8 +870,8 @@ export function calculateBudget(
       comprimento_total_m: Math.round(muroWalls.reduce((s, w) => s + w.comprimento_m, 0) * 100) / 100,
       area_bruta_m2: Math.round(muroWalls.reduce((s, w) => s + w.area_bruta_m2, 0) * 100) / 100,
       quantidade_paineis: muroWalls.reduce((s, w) => s + w.quantidade_paineis, 0),
-      measurement_source_dominant: dominantSource(muroWalls as any),
-      needs_review_count: reviewCount(muroWalls as any),
+      measurement_source_dominant: dominantSourceWalls(muroWalls),
+      needs_review_count: reviewCountWalls(muroWalls),
       itens: muroWalls,
     };
 
@@ -879,12 +893,12 @@ export function calculateBudget(
         quantidade_paineis: pisoPanels,
         is_radier: hasRadier,
         observacao: hasRadier ? `Radier presente (${Math.round(radierArea * 100) / 100} m²) - excluido do calculo de paineis` : "",
-        measurement_source_dominant: dominantSource(pisoSlabs as any),
+        measurement_source_dominant: dominantSourceSlabs(pisoSlabs),
       },
       laje_coberta: {
         area_m2: Math.round(cobertaArea * 100) / 100,
         quantidade_paineis: cobertaPanels,
-        measurement_source_dominant: dominantSource(cobertaSlabs as any),
+        measurement_source_dominant: dominantSourceSlabs(cobertaSlabs),
       },
       cantos: { quantidade: totalCorners },
     });
