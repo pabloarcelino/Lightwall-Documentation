@@ -235,14 +235,23 @@ function parseCotaToken(raw: string): number | null {
   if (unit === "cm") v /= 100;
   else if (unit === "mm") v /= 1000;
   else if (!unit) {
-    // Sem unidade: aceitar APENAS se tem ponto/virgula decimal (e.g. "5.20",
-    // "5,20") ou for inteiro pequeno em metros plausiveis (3..15). Inteiros
-    // grandes sem unidade sao texto qualquer (ex: cota de nivel "+0.15"
-    // aparece como "0.15"; codigos como "2024", "101" nao devem virar cm).
+    // Sem unidade — heuristica de duas faixas:
+    //  (a) decimal presente OU inteiro pequeno 3..15  → metros (cotas tipicas)
+    //  (b) inteiro 30..1500 sem decimal              → cm (cotas plotadas em
+    //      mm/cm em plantas: ex "350" = 3,50m, "464" = 4,64m). Limite superior
+    //      1500 cm = 15 m exclui codigos como "2024" (ano) e numeros grandes.
+    //      Faixa <30 e excluida porque facilmente vira ruido (numeracao,
+    //      texto de cota de nivel "+0.15" ja vira 0.15 com decimal acima).
     const hasDecimal = /[.,]/.test(m[1]);
     if (!hasDecimal) {
-      // Sem decimal — so aceita inteiros pequenos plausiveis em metros.
-      if (!Number.isInteger(v) || v < 3 || v > 15) return null;
+      if (!Number.isInteger(v)) return null;
+      if (v >= 3 && v <= 15) {
+        // metros — manter como esta
+      } else if (v >= 30 && v <= 1500) {
+        v /= 100; // cm -> m
+      } else {
+        return null;
+      }
     }
   }
   if (v < 0.20 || v > 50) return null;

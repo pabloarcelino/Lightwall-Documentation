@@ -99,6 +99,34 @@ const STEP_CONFIG: Array<{ step: number; label: string; parentStep?: number; dis
   { step: 8, label: "Descricao do Projeto", displayNum: 8 },
 ];
 
+function SourceBadge({ src, reviewCount, testid }: { src?: string; reviewCount?: number; testid?: string }) {
+  if (!src) return null;
+  const cls = src.startsWith("table")
+    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
+    : src.startsWith("pdf_vector")
+    ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+    : src === "ai_vision_takeoff"
+    ? "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200"
+    : src.startsWith("inferred")
+    ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+    : "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200";
+  const shortLabel = src.startsWith("table") ? "tabela"
+    : src.startsWith("pdf_vector") ? "vetor PDF"
+    : src === "ai_vision_takeoff" ? "OpenAI"
+    : src.startsWith("inferred") ? "inferido"
+    : src.startsWith("ai") ? "IA" : src;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1" data-testid={testid}>
+      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`} title={`fonte: ${src}`}>{shortLabel}</span>
+      {reviewCount && reviewCount > 0 ? (
+        <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200" title="Paredes marcadas para revisao manual">
+          {reviewCount} revisar
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function formatElapsed(ms: number): string {
   if (ms < 1000) return "<1s";
   const totalSecs = Math.floor(ms / 1000);
@@ -2207,32 +2235,37 @@ export default function ProjectDetails() {
                           <div key={idx} className="border rounded-lg p-4" data-testid={`floor-${idx}`}>
                             <h4 className="font-semibold text-lg mb-3">{pav.nome}</h4>
                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 text-sm">
-                              <div className="bg-slate-50 dark:bg-slate-800 rounded p-3">
+                              <div className="bg-slate-50 dark:bg-slate-800 rounded p-3" data-testid={`floor-${idx}-ext`}>
                                 <p className="text-slate-500 text-xs mb-1">Paredes Externas</p>
                                 <p className="font-bold">{pav.paredes_externas.quantidade_paineis} paineis</p>
                                 <p className="text-xs text-slate-400">{pav.paredes_externas.comprimento_total_m}m | {pav.paredes_externas.area_liquida_m2}m2 liq.</p>
+                                <SourceBadge src={pav.paredes_externas.measurement_source_dominant} reviewCount={pav.paredes_externas.needs_review_count} testid={`badge-ext-${idx}`} />
                               </div>
-                              <div className="bg-slate-50 dark:bg-slate-800 rounded p-3">
+                              <div className="bg-slate-50 dark:bg-slate-800 rounded p-3" data-testid={`floor-${idx}-int`}>
                                 <p className="text-slate-500 text-xs mb-1">Paredes Internas</p>
                                 <p className="font-bold">{pav.paredes_internas.quantidade_paineis} paineis</p>
                                 <p className="text-xs text-slate-400">{pav.paredes_internas.comprimento_total_m}m | {pav.paredes_internas.area_liquida_m2}m2 liq.</p>
+                                <SourceBadge src={pav.paredes_internas.measurement_source_dominant} reviewCount={pav.paredes_internas.needs_review_count} testid={`badge-int-${idx}`} />
                               </div>
                               {pav.muros && pav.muros.comprimento_total_m > 0 && (
                                 <div className="bg-purple-50 dark:bg-purple-950/30 rounded p-3" data-testid={`floor-${idx}-muros`}>
                                   <p className="text-purple-600 dark:text-purple-300 text-xs mb-1">Muros (divisa)</p>
                                   <p className="font-bold">{pav.muros.quantidade_paineis} paineis</p>
                                   <p className="text-xs text-slate-400">{pav.muros.comprimento_total_m}m | {pav.muros.area_bruta_m2}m2</p>
+                                  <SourceBadge src={pav.muros.measurement_source_dominant} reviewCount={pav.muros.needs_review_count} testid={`badge-muros-${idx}`} />
                                 </div>
                               )}
-                              <div className="bg-slate-50 dark:bg-slate-800 rounded p-3">
+                              <div className="bg-slate-50 dark:bg-slate-800 rounded p-3" data-testid={`floor-${idx}-piso`}>
                                 <p className="text-slate-500 text-xs mb-1">Laje Piso</p>
                                 <p className="font-bold">{pav.laje_piso.quantidade_paineis} paineis</p>
                                 <p className="text-xs text-slate-400">{pav.laje_piso.area_m2}m2{pav.laje_piso.is_radier ? " (radier)" : ""}</p>
+                                <SourceBadge src={pav.laje_piso.measurement_source_dominant} testid={`badge-piso-${idx}`} />
                               </div>
-                              <div className="bg-slate-50 dark:bg-slate-800 rounded p-3">
+                              <div className="bg-slate-50 dark:bg-slate-800 rounded p-3" data-testid={`floor-${idx}-coberta`}>
                                 <p className="text-slate-500 text-xs mb-1">Laje Coberta</p>
                                 <p className="font-bold">{pav.laje_coberta.quantidade_paineis} paineis</p>
                                 <p className="text-xs text-slate-400">{pav.laje_coberta.area_m2}m2</p>
+                                <SourceBadge src={pav.laje_coberta.measurement_source_dominant} testid={`badge-coberta-${idx}`} />
                               </div>
                             </div>
                           </div>

@@ -1,5 +1,11 @@
 {
-  "$schema": "Ground-truth de m² por categoria para regressão de acurácia. Use os PDFs em attached_assets/ como entrada.",
+  "$schema": "Ground-truth de m² por categoria para regressão de acurácia. Use os PDFs em attached_assets/ como entrada. Apenas 2 fixtures estão disponíveis no repo hoje (Patricia, Ana). Adicione novas fixtures aqui à medida que os outros 2 projetos de referência forem importados — a suite passa a cobri-las automaticamente.",
+  "$meta": {
+    "meta_overall_pct": 85,
+    "meta_per_category_pct": 70,
+    "fixtures_disponiveis": 2,
+    "fixtures_alvo": 4
+  },
   "patricia_coelho": {
     "fingerprint_hint": "Projeto_-_Patricia_Coelho_1778150063500.pdf",
     "ground_truth_m2": {
@@ -16,6 +22,6 @@
     "fingerprint_hint": "Projeto_-_Ana_Cristine_1778150130987.pdf",
     "ground_truth_m2": null,
     "fonte": "Proposta_-_Ana_Cristine_1778150130986.pdf",
-    "obs": "Preencher executando 'Salvar quantitativos reais' apos rodar o pipeline e validar manualmente"
+    "obs": "Preencher executando 'Salvar quantitativos reais' apos rodar o pipeline e validar manualmente. Sem GT, esta fixture conta como SKIP e nao bloqueia a regressao — mas tambem nao a satisfaz isoladamente."
   }
 }

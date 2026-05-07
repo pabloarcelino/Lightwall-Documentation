@@ -36,11 +36,11 @@ export interface SlabItem {
 
 export interface FloorGroup {
   nome: string;
-  paredes_externas: { comprimento_total_m: number; area_bruta_m2: number; area_liquida_m2: number; quantidade_paineis: number; itens: WallItem[] };
-  paredes_internas: { comprimento_total_m: number; area_bruta_m2: number; area_liquida_m2: number; quantidade_paineis: number; itens: WallItem[] };
-  muros: { comprimento_total_m: number; area_bruta_m2: number; quantidade_paineis: number; itens: WallItem[] };
-  laje_piso: { area_m2: number; quantidade_paineis: number; is_radier: boolean; observacao: string };
-  laje_coberta: { area_m2: number; quantidade_paineis: number };
+  paredes_externas: { comprimento_total_m: number; area_bruta_m2: number; area_liquida_m2: number; quantidade_paineis: number; measurement_source_dominant?: string; needs_review_count?: number; itens: WallItem[] };
+  paredes_internas: { comprimento_total_m: number; area_bruta_m2: number; area_liquida_m2: number; quantidade_paineis: number; measurement_source_dominant?: string; needs_review_count?: number; itens: WallItem[] };
+  muros: { comprimento_total_m: number; area_bruta_m2: number; quantidade_paineis: number; measurement_source_dominant?: string; needs_review_count?: number; itens: WallItem[] };
+  laje_piso: { area_m2: number; quantidade_paineis: number; is_radier: boolean; observacao: string; measurement_source_dominant?: string };
+  laje_coberta: { area_m2: number; quantidade_paineis: number; measurement_source_dominant?: string };
   cantos: { quantidade: number };
 }
 
@@ -715,9 +715,25 @@ export function fusionMultiView(
         return dev > acc.dev ? { src, v, dev } : acc;
       }, { src: "", v: 0, dev: 0 });
       console.log(`[FUSAO] Auditoria perimetro externo ${nivel}: ${entries.map(([s, v]) => `${s}=${v.toFixed(1)}m`).join(", ")} (mediana ${median.toFixed(1)}m)`);
-      if (maxDev.dev > 0.5) {
-        console.warn(`[FUSAO] Perimetro discrepante em ${nivel}: fonte ${maxDev.src} = ${maxDev.v.toFixed(1)}m vs mediana ${median.toFixed(1)}m (${(maxDev.dev * 100).toFixed(0)}% desvio) — marcando paredes para revisao`);
-        const flagSrcPrefix = maxDev.src === "vector" ? "pdf_vector" : maxDev.src === "table" ? "table" : maxDev.src === "openai" ? "ai_vision_takeoff" : "";
+      // Politica de arbitragem deterministica:
+      //  - Se houver fonte "vector" (vetor PDF com escala cota-confirmada) ou
+      //    "table" (quadro de areas), elas sao a referencia de verdade. Demais
+      //    fontes que divergirem >50% da referencia ganham needs_review.
+      //  - Senao, usa-se a mediana entre as fontes presentes como referencia.
+      const truthSrc = entries.find(([s]) => s === "vector")?.[0]
+        || entries.find(([s]) => s === "table")?.[0]
+        || null;
+      const referenceValue = truthSrc
+        ? entries.find(([s]) => s === truthSrc)![1]
+        : median;
+      const referenceLabel = truthSrc || "mediana";
+      // Marca TODAS as fontes (nao so a mais distante) que excederem o limiar.
+      for (const [src, v] of entries) {
+        if (src === truthSrc) continue;
+        const dev = Math.abs(v - referenceValue) / referenceValue;
+        if (dev <= 0.5) continue;
+        console.warn(`[FUSAO] Perimetro discrepante em ${nivel}: fonte ${src} = ${v.toFixed(1)}m vs ${referenceLabel} ${referenceValue.toFixed(1)}m (${(dev * 100).toFixed(0)}% desvio) — marcando paredes para revisao`);
+        const flagSrcPrefix = src === "vector" ? "pdf_vector" : src === "table" ? "table" : src === "openai" ? "ai_vision_takeoff" : "";
         for (const w of deduplicatedWalls) {
           if (w.nivel !== nivel || w.classe !== "externa") continue;
           const isFlaggedSource = flagSrcPrefix
@@ -726,7 +742,7 @@ export function fusionMultiView(
           if (!isFlaggedSource) continue;
           if (w.needs_review) continue;
           w.needs_review = true;
-          w.review_reason = `Perimetro externo da fonte ${maxDev.src} diverge da mediana entre fontes (${(maxDev.dev * 100).toFixed(0)}% desvio em ${nivel})`;
+          w.review_reason = `Perimetro externo da fonte ${src} diverge da referencia ${referenceLabel} (${(dev * 100).toFixed(0)}% desvio em ${nivel})`;
           w.confidence = Math.min(w.confidence, 0.55);
         }
       }
@@ -804,11 +820,25 @@ export function calculateBudget(
     const cobertaSlabs = floorSlabs.filter(s => s.classe === "coberta").map(calculateSlabPanels);
     const totalCorners = floorCorners.reduce((sum, c) => sum + c.qtd_cantos, 0);
 
+    const dominantSource = (items: { measurement_source: string; comprimento_m?: number; area_m2?: number }[]) => {
+      const counts = new Map<string, number>();
+      for (const it of items) {
+        const w = (it.comprimento_m ?? it.area_m2 ?? 1) || 1;
+        counts.set(it.measurement_source, (counts.get(it.measurement_source) || 0) + w);
+      }
+      let best = ""; let bestW = -1;
+      for (const [k, w] of counts) { if (w > bestW) { best = k; bestW = w; } }
+      return best;
+    };
+    const reviewCount = (items: { needs_review?: boolean }[]) => items.filter(i => i.needs_review).length;
+
     const extGroup = {
       comprimento_total_m: Math.round(extWalls.reduce((s, w) => s + w.comprimento_m, 0) * 100) / 100,
       area_bruta_m2: Math.round(extWalls.reduce((s, w) => s + w.area_bruta_m2, 0) * 100) / 100,
       area_liquida_m2: Math.round(extWalls.reduce((s, w) => s + w.area_liquida_m2, 0) * 100) / 100,
       quantidade_paineis: extWalls.reduce((s, w) => s + w.quantidade_paineis, 0),
+      measurement_source_dominant: dominantSource(extWalls as any),
+      needs_review_count: reviewCount(extWalls as any),
       itens: extWalls,
     };
 
@@ -817,6 +847,8 @@ export function calculateBudget(
       area_bruta_m2: Math.round(intWalls.reduce((s, w) => s + w.area_bruta_m2, 0) * 100) / 100,
       area_liquida_m2: Math.round(intWalls.reduce((s, w) => s + w.area_liquida_m2, 0) * 100) / 100,
       quantidade_paineis: intWalls.reduce((s, w) => s + w.quantidade_paineis, 0),
+      measurement_source_dominant: dominantSource(intWalls as any),
+      needs_review_count: reviewCount(intWalls as any),
       itens: intWalls,
     };
 
@@ -824,6 +856,8 @@ export function calculateBudget(
       comprimento_total_m: Math.round(muroWalls.reduce((s, w) => s + w.comprimento_m, 0) * 100) / 100,
       area_bruta_m2: Math.round(muroWalls.reduce((s, w) => s + w.area_bruta_m2, 0) * 100) / 100,
       quantidade_paineis: muroWalls.reduce((s, w) => s + w.quantidade_paineis, 0),
+      measurement_source_dominant: dominantSource(muroWalls as any),
+      needs_review_count: reviewCount(muroWalls as any),
       itens: muroWalls,
     };
 
@@ -845,10 +879,12 @@ export function calculateBudget(
         quantidade_paineis: pisoPanels,
         is_radier: hasRadier,
         observacao: hasRadier ? `Radier presente (${Math.round(radierArea * 100) / 100} m²) - excluido do calculo de paineis` : "",
+        measurement_source_dominant: dominantSource(pisoSlabs as any),
       },
       laje_coberta: {
         area_m2: Math.round(cobertaArea * 100) / 100,
         quantidade_paineis: cobertaPanels,
+        measurement_source_dominant: dominantSource(cobertaSlabs as any),
       },
       cantos: { quantidade: totalCorners },
     });
