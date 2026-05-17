@@ -11,6 +11,82 @@ import { Link } from "wouter";
 import { LightwallDots } from "@/components/LightwallLogo";
 import { PageHeader } from "@/components/PageHeader";
 
+function WallThicknessCard() {
+  const { toast } = useToast();
+  const [valueMm, setValueMm] = useState("");
+
+  const { data, isLoading } = useQuery<{ valueM: number; defaultM: number }>({
+    queryKey: ["/api/settings/wall-thickness-max"],
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async (mm: number) => {
+      const res = await apiRequest("POST", "/api/settings/wall-thickness-max", { valueM: mm / 1000 });
+      return res.json();
+    },
+    onSuccess: (d: any) => {
+      const mm = Math.round((d.valueM || 0) * 1000);
+      toast({ title: "Espessura maxima salva", description: `Paredes acima de ${mm}mm serao ignoradas (provavel mobiliario)` });
+      setValueMm("");
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/wall-thickness-max"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const currentMm = data ? Math.round(data.valueM * 1000) : Math.round((data?.defaultM || 0.12) * 1000);
+  const defaultMm = data ? Math.round(data.defaultM * 1000) : 120;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Espessura maxima de parede</CardTitle>
+        <CardDescription>
+          Elementos com espessura acima deste valor sao tratados como mobiliario, hachuras ou outros, e nao
+          entram no orcamento. O padrao e <code>{defaultMm}mm</code> (espessura maxima do painel 2P).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="text-sm text-muted-foreground">
+          Valor atual: <span className="font-mono font-semibold text-foreground" data-testid="text-wall-thickness-current">{currentMm}mm</span>
+          {isLoading && " (carregando...)"}
+        </div>
+        <div className="flex gap-2 items-center">
+          <Input
+            type="number"
+            min={10}
+            max={2000}
+            step={5}
+            placeholder={String(currentMm)}
+            value={valueMm}
+            onChange={(e) => setValueMm(e.target.value)}
+            data-testid="input-wall-thickness-max"
+          />
+          <span className="text-sm text-muted-foreground">mm</span>
+          <Button
+            onClick={() => {
+              const n = parseFloat(valueMm);
+              if (!Number.isFinite(n) || n <= 0) {
+                toast({ title: "Valor invalido", description: "Informe um numero em milimetros (ex: 120)", variant: "destructive" });
+                return;
+              }
+              saveMutation.mutate(n);
+            }}
+            disabled={!valueMm.trim() || saveMutation.isPending}
+            data-testid="button-save-wall-thickness"
+          >
+            {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvar"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Aplicado durante o reprocessamento de projetos. Reprocesse projetos existentes para aplicar a nova regra.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 function OpenAIModelCard() {
   const { toast } = useToast();
   const [model, setModel] = useState("");
@@ -329,6 +405,8 @@ export default function Settings() {
         />
 
         <OpenAIModelCard />
+
+        <WallThicknessCard />
 
         <Card className="border-blue-200 dark:border-blue-800">
           <CardHeader className="pb-3">

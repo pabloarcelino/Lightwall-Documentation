@@ -398,6 +398,8 @@ const upload = multer({
   },
 });
 
+const DEFAULT_MAX_WALL_THICKNESS_M = 0.12;
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express,
@@ -572,6 +574,33 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Erro ao salvar modelo OpenAI:", error);
       res.status(500).json({ message: "Erro ao salvar modelo" });
+    }
+  });
+
+  app.get("/api/settings/wall-thickness-max", async (_req, res) => {
+    try {
+      const raw = await storage.getSetting("wall_thickness_max_m");
+      const value = raw ? parseFloat(raw) : DEFAULT_MAX_WALL_THICKNESS_M;
+      const effective = Number.isFinite(value) && value > 0 ? value : DEFAULT_MAX_WALL_THICKNESS_M;
+      res.json({ valueM: effective, defaultM: DEFAULT_MAX_WALL_THICKNESS_M });
+    } catch (error) {
+      console.error("Erro ao buscar espessura maxima:", error);
+      res.status(500).json({ message: "Erro ao buscar configuracao" });
+    }
+  });
+
+  app.post("/api/settings/wall-thickness-max", async (req, res) => {
+    try {
+      const { valueM } = req.body;
+      const n = typeof valueM === "number" ? valueM : parseFloat(valueM);
+      if (!Number.isFinite(n) || n <= 0 || n > 2) {
+        return res.status(400).json({ message: "Valor invalido (use metros, ex: 0.12 para 120mm; max 2m)" });
+      }
+      await storage.setSetting("wall_thickness_max_m", String(n));
+      res.json({ success: true, valueM: n });
+    } catch (error) {
+      console.error("Erro ao salvar espessura maxima:", error);
+      res.status(500).json({ message: "Erro ao salvar configuracao" });
     }
   });
 
@@ -1253,6 +1282,19 @@ export async function registerRoutes(
       const hasTableData = mergedTableData.paredes_de_tabela.length > 0 || mergedTableData.esquadrias_de_tabela.length > 0;
       const fused = fusionMultiView(allGeometries, hasTableData ? mergedTableData : null, effectiveBuildingType());
       sendProgress(projectId, 4, "Fusao Multivista", "done", `${fused.walls.length} paredes, ${fused.slabs.length} lajes, ${fused.corners.length} cantos (apos deduplicacao)`);
+
+      const maxThickRaw = await storage.getSetting("wall_thickness_max_m");
+      const maxThickParsed = maxThickRaw ? parseFloat(maxThickRaw) : DEFAULT_MAX_WALL_THICKNESS_M;
+      const maxThickness = Number.isFinite(maxThickParsed) && maxThickParsed > 0 ? maxThickParsed : DEFAULT_MAX_WALL_THICKNESS_M;
+      const beforeCount = fused.walls.length;
+      const removedThick = fused.walls.filter(w => (w.espessura_m || 0) > maxThickness);
+      fused.walls = fused.walls.filter(w => (w.espessura_m || 0) <= maxThickness);
+      if (removedThick.length > 0) {
+        const thickMm = Math.round(maxThickness * 1000);
+        const sample = removedThick.slice(0, 5).map(w => `${Math.round((w.espessura_m || 0) * 1000)}mm`).join(", ");
+        console.log(`[WALL_FILTER] Removidas ${removedThick.length}/${beforeCount} paredes acima de ${thickMm}mm (provavel mobiliario/hatch). Amostra: ${sample}`);
+        sendProgress(projectId, 4, "Fusao Multivista", "done", `${fused.walls.length} paredes apos filtro de espessura (${removedThick.length} acima de ${thickMm}mm removidas como mobiliario), ${fused.slabs.length} lajes`);
+      }
 
       // ===== Geometric validators (plausibility filters) =====
       sendProgress(projectId, 4.5, "Validacao Geometrica", "running", "Removendo geometria implausivel...");
