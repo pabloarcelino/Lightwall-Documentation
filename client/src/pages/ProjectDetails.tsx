@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import {
   Select,
   SelectContent,
@@ -390,6 +391,19 @@ export default function ProjectDetails() {
       }
     };
   };
+
+  const updateProjectMutation = useMutation({
+    mutationFn: async (patch: { discountPanelPct?: number; freightCost?: number; biomassCost?: number }) => {
+      const res = await apiRequest("PUT", `/api/projects/${projectId}`, patch);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Erro ao salvar", description: error.message, variant: "destructive" });
+    },
+  });
 
   const processMutation = useMutation({
     mutationFn: async () => {
@@ -2193,12 +2207,97 @@ export default function ProjectDetails() {
                         </div>
                       )}
 
-                      <div className="mt-6 flex justify-between items-center py-4 px-6 bg-primary/5 rounded-lg">
-                        <span className="text-lg font-bold">VALOR TOTAL DA PROPOSTA</span>
-                        <span className="text-2xl font-bold text-primary" data-testid="text-grand-total">
-                          R$ {(budget.proposta.grandTotal || budget.costs?.grandTotal || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                        </span>
-                      </div>
+                      {(() => {
+                        const panelCost = Number(budget.proposta.total_paineis_cost || 0);
+                        const paginacaoCost = Number(budget.proposta.paginacao?.preco_total || 0);
+                        const discountPct = Math.min(25, Math.max(0, Number(project.discountPanelPct || 0)));
+                        const freight = Math.max(0, Number(project.freightCost || 0));
+                        const biomass = Math.max(0, Number(project.biomassCost || 0));
+                        const discountValue = panelCost * (discountPct / 100);
+                        const panelsAfter = panelCost - discountValue;
+                        const finalTotal = panelsAfter + paginacaoCost + freight + biomass;
+                        const fmt = (n: number) => n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                        return (
+                          <div key={`adjustments-${project.id}`} className="mt-6 space-y-3">
+                            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
+                              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">Ajustes Finais</h3>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <div className="space-y-1">
+                                  <Label htmlFor="discount-input" className="text-xs">Desconto sobre paineis (max 25%)</Label>
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      id="discount-input"
+                                      type="number"
+                                      min={0}
+                                      max={25}
+                                      step={0.5}
+                                      defaultValue={discountPct}
+                                      onBlur={(e) => {
+                                        const v = Math.min(25, Math.max(0, parseFloat(e.target.value) || 0));
+                                        if (v !== discountPct) updateProjectMutation.mutate({ discountPanelPct: v });
+                                      }}
+                                      data-testid="input-discount-panel"
+                                    />
+                                    <span className="text-sm text-muted-foreground">%</span>
+                                  </div>
+                                </div>
+                                <div className="space-y-1">
+                                  <Label htmlFor="freight-input" className="text-xs">Frete estimado (R$)</Label>
+                                  <Input
+                                    id="freight-input"
+                                    type="number"
+                                    min={0}
+                                    step={100}
+                                    defaultValue={freight}
+                                    onBlur={(e) => {
+                                      const v = Math.max(0, parseFloat(e.target.value) || 0);
+                                      if (v !== freight) updateProjectMutation.mutate({ freightCost: v });
+                                    }}
+                                    data-testid="input-freight"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label htmlFor="biomass-input" className="text-xs">Biomassa estimada (R$)</Label>
+                                  <Input
+                                    id="biomass-input"
+                                    type="number"
+                                    min={0}
+                                    step={100}
+                                    defaultValue={biomass}
+                                    onBlur={(e) => {
+                                      const v = Math.max(0, parseFloat(e.target.value) || 0);
+                                      if (v !== biomass) updateProjectMutation.mutate({ biomassCost: v });
+                                    }}
+                                    data-testid="input-biomass"
+                                  />
+                                </div>
+                              </div>
+                              <p className="text-xs text-muted-foreground">O desconto incide apenas sobre o valor de paineis. Paginacao, frete e biomassa nao recebem desconto.</p>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4 space-y-2 text-sm">
+                              <div className="flex justify-between"><span>Subtotal paineis</span><span className="font-mono" data-testid="text-subtotal-panels">R$ {fmt(panelCost)}</span></div>
+                              {discountPct > 0 && (
+                                <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
+                                  <span>Desconto ({discountPct.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%)</span>
+                                  <span className="font-mono" data-testid="text-discount-value">- R$ {fmt(discountValue)}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between"><span>Paineis com desconto</span><span className="font-mono" data-testid="text-panels-after-discount">R$ {fmt(panelsAfter)}</span></div>
+                              {paginacaoCost > 0 && (<div className="flex justify-between"><span>Projeto de paginacao</span><span className="font-mono">R$ {fmt(paginacaoCost)}</span></div>)}
+                              {freight > 0 && (<div className="flex justify-between"><span>Frete</span><span className="font-mono">R$ {fmt(freight)}</span></div>)}
+                              {biomass > 0 && (<div className="flex justify-between"><span>Biomassa</span><span className="font-mono">R$ {fmt(biomass)}</span></div>)}
+                            </div>
+
+                            <div className="flex justify-between items-center py-4 px-6 bg-primary/5 rounded-lg">
+                              <span className="text-lg font-bold">VALOR TOTAL DA PROPOSTA</span>
+                              <span className="text-2xl font-bold text-primary" data-testid="text-grand-total">
+                                R$ {fmt(finalTotal)}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </CardContent>
                   </Card>
                 ) : budget.costs && (

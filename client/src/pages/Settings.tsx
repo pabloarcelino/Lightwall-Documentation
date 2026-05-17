@@ -35,7 +35,7 @@ function WallThicknessCard() {
     },
   });
 
-  const currentMm = data ? Math.round(data.valueM * 1000) : Math.round((data?.defaultM || 0.12) * 1000);
+  const currentMm = data ? Math.round(data.valueM * 1000) : 120;
   const defaultMm = data ? Math.round(data.defaultM * 1000) : 120;
 
   return (

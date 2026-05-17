@@ -37,7 +37,7 @@ export interface IStorage {
   createProject(project: InsertProject): Promise<Project>;
   getProjects(): Promise<Project[]>;
   getProject(id: number): Promise<Project | undefined>;
-  updateProject(id: number, data: Partial<{ name: string; clientName: string; clientEmail: string; description: string; projectType: string; buildingType: string | null; fileFingerprint: string; realCost: string | null; realAreaExt: string | null; realAreaInt: string | null; realAreaPiso: string | null; realAreaCoberta: string | null }>): Promise<Project | undefined>;
+  updateProject(id: number, data: Partial<{ name: string; clientName: string; clientEmail: string; description: string; projectType: string; buildingType: string | null; fileFingerprint: string; realCost: string | null; realAreaExt: string | null; realAreaInt: string | null; realAreaPiso: string | null; realAreaCoberta: string | null; realAreaMuros: string | null; discountPanelPct: string; freightCost: string; biomassCost: string }>): Promise<Project | undefined>;
   updateProjectStatus(id: number, status: string): Promise<Project | undefined>;
 
   addProjectFile(file: InsertProjectFile): Promise<ProjectFile>;
@@ -60,6 +60,7 @@ export interface IStorage {
 
   createBudget(budget: InsertBudget): Promise<Budget>;
   getBudget(projectId: number): Promise<Budget | undefined>;
+  updateBudgetTotalCost(projectId: number, totalCost: string): Promise<void>;
   deleteBudget(projectId: number): Promise<void>;
 
   deleteProject(id: number): Promise<void>;
@@ -286,6 +287,10 @@ export class DatabaseStorage implements IStorage {
 
   async deleteBudget(projectId: number): Promise<void> {
     await db.delete(budgets).where(eq(budgets.projectId, projectId));
+  }
+
+  async updateBudgetTotalCost(projectId: number, totalCost: string): Promise<void> {
+    await db.update(budgets).set({ totalCost }).where(eq(budgets.projectId, projectId));
   }
 
   async getAllBudgetsWithProjects(): Promise<Array<{ budget: Budget; project: Project }>> {

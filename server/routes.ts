@@ -1958,7 +1958,7 @@ export async function registerRoutes(
   app.put("/api/projects/:id", async (req, res) => {
     try {
       const projectId = parseInt(String(req.params.id));
-      const { name, clientName, description, projectType, buildingType, realCost, realAreaExt, realAreaInt, realAreaMuros, realAreaPiso, realAreaCoberta, status } = req.body;
+      const { name, clientName, description, projectType, buildingType, realCost, realAreaExt, realAreaInt, realAreaMuros, realAreaPiso, realAreaCoberta, status, discountPanelPct, freightCost, biomassCost } = req.body;
       const validBuildingTypes = ["residencial", "comercial", "institucional", "industrial", "outro"];
       const updateData: any = {};
       if (name !== undefined) updateData.name = name;
@@ -1975,8 +1975,43 @@ export async function registerRoutes(
       if (realAreaMuros !== undefined) updateData.realAreaMuros = realAreaMuros;
       if (realAreaPiso !== undefined) updateData.realAreaPiso = realAreaPiso;
       if (realAreaCoberta !== undefined) updateData.realAreaCoberta = realAreaCoberta;
+      if (discountPanelPct !== undefined) {
+        const n = typeof discountPanelPct === "number" ? discountPanelPct : parseFloat(discountPanelPct);
+        if (!Number.isFinite(n) || n < 0 || n > 25) {
+          return res.status(400).json({ message: "Desconto invalido (0 a 25%)" });
+        }
+        updateData.discountPanelPct = String(n);
+      }
+      if (freightCost !== undefined) {
+        const n = typeof freightCost === "number" ? freightCost : parseFloat(freightCost);
+        if (!Number.isFinite(n) || n < 0) return res.status(400).json({ message: "Frete invalido" });
+        updateData.freightCost = String(n);
+      }
+      if (biomassCost !== undefined) {
+        const n = typeof biomassCost === "number" ? biomassCost : parseFloat(biomassCost);
+        if (!Number.isFinite(n) || n < 0) return res.status(400).json({ message: "Biomassa invalida" });
+        updateData.biomassCost = String(n);
+      }
       const updated = await storage.updateProject(projectId, updateData);
       if (!updated) return res.status(404).json({ message: "Projeto nao encontrado" });
+
+      if (discountPanelPct !== undefined || freightCost !== undefined || biomassCost !== undefined) {
+        try {
+          const existingBudget = await storage.getBudget(projectId);
+          if (existingBudget) {
+            const bd = existingBudget.budgetData as any;
+            const panelCost = Number(bd?.proposta?.total_paineis_cost || 0);
+            const paginacaoCost = Number(bd?.proposta?.paginacao?.preco_total || 0);
+            const disc = Math.min(25, Math.max(0, parseFloat(String(updated.discountPanelPct || "0")) || 0));
+            const fr = Math.max(0, parseFloat(String(updated.freightCost || "0")) || 0);
+            const bm = Math.max(0, parseFloat(String(updated.biomassCost || "0")) || 0);
+            const finalTotal = panelCost * (1 - disc / 100) + paginacaoCost + fr + bm;
+            await storage.updateBudgetTotalCost(projectId, String(finalTotal.toFixed(2)));
+          }
+        } catch (e) {
+          console.warn("[BUDGET_RECOMPUTE] Falha ao atualizar totalCost:", e);
+        }
+      }
       if (buildingType !== undefined) {
         const existing = await storage.getExtractedDataByType(projectId, "building_type_detection");
         if (existing) {

@@ -60,6 +60,9 @@ export const projects = pgTable("projects", {
   realAreaPiso: decimal("real_area_piso", { precision: 10, scale: 2 }),
   realAreaMuros: decimal("real_area_muros", { precision: 10, scale: 2 }),
   realAreaCoberta: decimal("real_area_coberta", { precision: 10, scale: 2 }),
+  discountPanelPct: decimal("discount_panel_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+  freightCost: decimal("freight_cost", { precision: 15, scale: 2 }).notNull().default("0"),
+  biomassCost: decimal("biomass_cost", { precision: 15, scale: 2 }).notNull().default("0"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
