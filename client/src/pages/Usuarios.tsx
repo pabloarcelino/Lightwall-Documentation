@@ -22,8 +22,18 @@ interface UserRow {
   role: string;
   active: number;
   storeName: string | null;
+  pricingProfileId: number | null;
   lastLoginAt: string | null;
   createdAt: string;
+}
+
+interface PricingProfileRow {
+  id: number;
+  code: string;
+  label: string;
+  region: string | null;
+  isDefault: number;
+  active: number;
 }
 
 export default function Usuarios() {
@@ -39,6 +49,7 @@ export default function Usuarios() {
   const [formRole, setFormRole] = useState("viewer");
   const [formStoreName, setFormStoreName] = useState("");
   const [formActive, setFormActive] = useState(true);
+  const [formPricingProfileId, setFormPricingProfileId] = useState<string>("none");
 
   const { data: currentUser } = useQuery<{ role: string } | null>({
     queryKey: ["/api/auth/me"],
@@ -49,6 +60,17 @@ export default function Usuarios() {
     queryKey: ["/api/users"],
     enabled: currentUser?.role === "admin",
   });
+
+  const { data: profiles } = useQuery<PricingProfileRow[]>({
+    queryKey: ["/api/pricing-profiles"],
+    enabled: currentUser?.role === "admin",
+  });
+
+  const profileLabel = (id: number | null) => {
+    if (!id || !profiles) return "—";
+    const p = profiles.find(x => x.id === id);
+    return p ? `${p.code}` : "—";
+  };
 
   if (currentUser && currentUser.role !== "admin") {
     return (
@@ -109,6 +131,7 @@ export default function Usuarios() {
     setFormRole("viewer");
     setFormStoreName("");
     setFormActive(true);
+    setFormPricingProfileId("none");
     setDialogOpen(true);
   }
 
@@ -120,6 +143,7 @@ export default function Usuarios() {
     setFormRole(user.role);
     setFormStoreName(user.storeName || "");
     setFormActive(user.active === 1);
+    setFormPricingProfileId(user.pricingProfileId ? String(user.pricingProfileId) : "none");
     setDialogOpen(true);
   }
 
@@ -129,12 +153,14 @@ export default function Usuarios() {
   }
 
   function handleSubmit() {
+    const profileVal = formPricingProfileId === "none" ? null : Number(formPricingProfileId);
     if (editingUser) {
       const data: any = {
         displayName: formDisplayName,
         role: formRole,
         active: formActive ? 1 : 0,
         storeName: formStoreName || null,
+        pricingProfileId: profileVal,
       };
       if (formPassword.length > 0) data.password = formPassword;
       updateMutation.mutate({ id: editingUser.id, data });
@@ -145,6 +171,7 @@ export default function Usuarios() {
         displayName: formDisplayName || formUsername,
         role: formRole,
         storeName: formStoreName || null,
+        pricingProfileId: profileVal,
       });
     }
   }
@@ -165,6 +192,11 @@ export default function Usuarios() {
         <div className="flex items-center justify-between">
           <LightwallBrand />
           <div className="flex gap-2">
+            <Link href="/tabelas-preco">
+              <Button variant="outline" size="sm" className="gap-2" data-testid="button-go-pricing-tables">
+                Tabelas de Preço
+              </Button>
+            </Link>
             <Link href="/">
               <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back-dashboard">
                 <ArrowLeft className="h-4 w-4" />
@@ -241,6 +273,7 @@ export default function Usuarios() {
                       <th className="text-left p-3 font-semibold">NOME</th>
                       <th className="text-left p-3 font-semibold">LOJA / ORIGEM</th>
                       <th className="text-center p-3 font-semibold">PERFIL</th>
+                      <th className="text-center p-3 font-semibold">TABELA</th>
                       <th className="text-center p-3 font-semibold">STATUS</th>
                       <th className="text-left p-3 font-semibold">ULTIMO LOGIN</th>
                       <th className="text-right p-3 font-semibold">ACOES</th>
@@ -266,6 +299,13 @@ export default function Usuarios() {
                             <Badge variant="default" className="gap-1"><Shield className="h-3 w-3" />Admin</Badge>
                           ) : (
                             <Badge variant="secondary" className="gap-1"><Eye className="h-3 w-3" />Viewer</Badge>
+                          )}
+                        </td>
+                        <td className="p-3 text-center" data-testid={`text-profile-${user.id}`}>
+                          {user.pricingProfileId ? (
+                            <Badge variant="outline" className="font-mono text-xs">{profileLabel(user.pricingProfileId)}</Badge>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">—</span>
                           )}
                         </td>
                         <td className="p-3 text-center">
@@ -369,6 +409,23 @@ export default function Usuarios() {
                     <SelectItem value="admin">Admin (acesso total)</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              <div>
+                <Label>Tabela de preços (perfil comercial)</Label>
+                <Select value={formPricingProfileId} onValueChange={setFormPricingProfileId}>
+                  <SelectTrigger data-testid="select-pricing-profile">
+                    <SelectValue placeholder="Selecione uma tabela" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— Nenhuma (usa tabela padrão) —</SelectItem>
+                    {profiles?.filter(p => p.active === 1).map(p => (
+                      <SelectItem key={p.id} value={String(p.id)}>
+                        {p.code} — {p.label}{p.region ? ` (${p.region})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">Define qual lista de preços será usada nos orçamentos deste usuário.</p>
               </div>
               {editingUser && (
                 <div className="flex items-center gap-2">

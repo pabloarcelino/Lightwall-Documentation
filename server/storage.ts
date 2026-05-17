@@ -9,6 +9,8 @@ import {
   settings,
   aiRuns,
   users,
+  pricingProfiles,
+  profilePrices,
   type Product,
   type InsertProduct,
   type Project,
@@ -24,6 +26,10 @@ import {
   type InsertAiRun,
   type User,
   type InsertUser,
+  type PricingProfile,
+  type InsertPricingProfile,
+  type ProfilePrice,
+  type InsertProfilePrice,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -37,7 +43,7 @@ export interface IStorage {
   createProject(project: InsertProject): Promise<Project>;
   getProjects(): Promise<Project[]>;
   getProject(id: number): Promise<Project | undefined>;
-  updateProject(id: number, data: Partial<{ name: string; clientName: string; clientEmail: string; description: string; projectType: string; buildingType: string | null; fileFingerprint: string; realCost: string | null; realAreaExt: string | null; realAreaInt: string | null; realAreaPiso: string | null; realAreaCoberta: string | null; realAreaMuros: string | null; discountPanelPct: string; freightCost: string; biomassCost: string }>): Promise<Project | undefined>;
+  updateProject(id: number, data: Partial<{ name: string; clientName: string; clientEmail: string; description: string; projectType: string; buildingType: string | null; fileFingerprint: string; realCost: string | null; realAreaExt: string | null; realAreaInt: string | null; realAreaPiso: string | null; realAreaCoberta: string | null; realAreaMuros: string | null; discountPanelPct: string; freightCost: string; biomassCost: string; pricingProfileId: number | null }>): Promise<Project | undefined>;
   updateProjectStatus(id: number, status: string): Promise<Project | undefined>;
 
   addProjectFile(file: InsertProjectFile): Promise<ProjectFile>;
@@ -77,9 +83,21 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
-  updateUser(id: number, data: Partial<{ displayName: string; role: string; active: number; storeName: string | null }>): Promise<User | undefined>;
+  updateUser(id: number, data: Partial<{ displayName: string; role: string; active: number; storeName: string | null; pricingProfileId: number | null }>): Promise<User | undefined>;
   updateUserPassword(id: number, hashedPassword: string): Promise<void>;
   updateUserLastLogin(id: number): Promise<void>;
+
+  // ===== Pricing Profiles =====
+  getPricingProfiles(): Promise<PricingProfile[]>;
+  getPricingProfile(id: number): Promise<PricingProfile | undefined>;
+  getDefaultPricingProfile(): Promise<PricingProfile | undefined>;
+  createPricingProfile(p: InsertPricingProfile): Promise<PricingProfile>;
+  updatePricingProfile(id: number, data: Partial<InsertPricingProfile>): Promise<PricingProfile | undefined>;
+  deletePricingProfile(id: number): Promise<void>;
+  getProfilePrices(profileId: number): Promise<ProfilePrice[]>;
+  getProfilePrice(profileId: number, sku: string): Promise<ProfilePrice | undefined>;
+  upsertProfilePrice(profileId: number, sku: string, unitPrice: string): Promise<ProfilePrice>;
+  deleteProfilePrice(profileId: number, sku: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -362,7 +380,7 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updateUser(id: number, data: Partial<{ displayName: string; role: string; active: number; storeName: string | null }>): Promise<User | undefined> {
+  async updateUser(id: number, data: Partial<{ displayName: string; role: string; active: number; storeName: string | null; pricingProfileId: number | null }>): Promise<User | undefined> {
     const [updated] = await db
       .update(users)
       .set({ ...data, updatedAt: new Date() })
@@ -383,6 +401,49 @@ export class DatabaseStorage implements IStorage {
       .update(users)
       .set({ lastLoginAt: new Date() })
       .where(eq(users.id, id));
+  }
+
+  // ===== Pricing Profiles =====
+  async getPricingProfiles(): Promise<PricingProfile[]> {
+    return db.select().from(pricingProfiles).orderBy(asc(pricingProfiles.code));
+  }
+  async getPricingProfile(id: number): Promise<PricingProfile | undefined> {
+    const [p] = await db.select().from(pricingProfiles).where(eq(pricingProfiles.id, id));
+    return p;
+  }
+  async getDefaultPricingProfile(): Promise<PricingProfile | undefined> {
+    const [p] = await db.select().from(pricingProfiles).where(eq(pricingProfiles.isDefault, 1));
+    return p;
+  }
+  async createPricingProfile(p: InsertPricingProfile): Promise<PricingProfile> {
+    const [created] = await db.insert(pricingProfiles).values(p).returning();
+    return created;
+  }
+  async updatePricingProfile(id: number, data: Partial<InsertPricingProfile>): Promise<PricingProfile | undefined> {
+    const [updated] = await db.update(pricingProfiles).set({ ...data, updatedAt: new Date() }).where(eq(pricingProfiles.id, id)).returning();
+    return updated;
+  }
+  async deletePricingProfile(id: number): Promise<void> {
+    await db.delete(pricingProfiles).where(eq(pricingProfiles.id, id));
+  }
+  async getProfilePrices(profileId: number): Promise<ProfilePrice[]> {
+    return db.select().from(profilePrices).where(eq(profilePrices.profileId, profileId)).orderBy(asc(profilePrices.sku));
+  }
+  async getProfilePrice(profileId: number, sku: string): Promise<ProfilePrice | undefined> {
+    const [pp] = await db.select().from(profilePrices).where(and(eq(profilePrices.profileId, profileId), eq(profilePrices.sku, sku)));
+    return pp;
+  }
+  async upsertProfilePrice(profileId: number, sku: string, unitPrice: string): Promise<ProfilePrice> {
+    const existing = await this.getProfilePrice(profileId, sku);
+    if (existing) {
+      const [updated] = await db.update(profilePrices).set({ unitPrice, updatedAt: new Date() }).where(eq(profilePrices.id, existing.id)).returning();
+      return updated;
+    }
+    const [created] = await db.insert(profilePrices).values({ profileId, sku, unitPrice }).returning();
+    return created;
+  }
+  async deleteProfilePrice(profileId: number, sku: string): Promise<void> {
+    await db.delete(profilePrices).where(and(eq(profilePrices.profileId, profileId), eq(profilePrices.sku, sku)));
   }
 }
 

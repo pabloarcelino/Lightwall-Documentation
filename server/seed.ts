@@ -5,7 +5,17 @@
  */
 
 import { db } from './db';
-import { products } from '@shared/schema';
+import { products, pricingProfiles, profilePrices } from '@shared/schema';
+import { eq } from 'drizzle-orm';
+
+const initialProfiles = [
+  { code: 'LW', label: 'Lightwall (Tabela Oficial)', region: null as string | null, isDefault: 1, active: 1 },
+  { code: 'LM-SUDESTE', label: 'Leroy Merlin — Sudeste', region: 'Sudeste', isDefault: 0, active: 1 },
+  { code: 'LM-SUL', label: 'Leroy Merlin — Sul', region: 'Sul', isDefault: 0, active: 1 },
+  { code: 'LM-NORDESTE', label: 'Leroy Merlin — Nordeste', region: 'Nordeste', isDefault: 0, active: 1 },
+  { code: 'LM-CENTRO-OESTE', label: 'Leroy Merlin — Centro-Oeste', region: 'Centro-Oeste', isDefault: 0, active: 1 },
+  { code: 'LM-NORTE', label: 'Leroy Merlin — Norte', region: 'Norte', isDefault: 0, active: 1 },
+];
 
 const lightwallProducts = [
   { sku: 'LW-2P-090', name: 'PAINEL DE CONCRETO LEVE 3000X610X90MM 2P', category: 'painel', panelType: '2P', thickness: 90, unitPrice: '275.00', unit: 'm²', description: 'Painel padrao 2P 90mm' },
@@ -54,6 +64,34 @@ async function seed() {
     }
 
     console.log(`\nSeed concluido! ${inserted} produtos cadastrados\n`);
+
+    console.log('Garantindo perfis de preco...');
+    let lwProfileId: number | null = null;
+    for (const p of initialProfiles) {
+      const [existingP] = await db.select().from(pricingProfiles).where(eq(pricingProfiles.code, p.code));
+      let profile = existingP;
+      if (!profile) {
+        const [created] = await db.insert(pricingProfiles).values(p).returning();
+        profile = created;
+        console.log(`   + perfil criado: ${p.code} — ${p.label}`);
+      }
+      if (p.code === 'LW') lwProfileId = profile.id;
+    }
+
+    if (lwProfileId !== null) {
+      console.log(`Espelhando precos no perfil LW (id=${lwProfileId})...`);
+      const allProducts = await db.select().from(products);
+      const existingPp = await db.select().from(profilePrices).where(eq(profilePrices.profileId, lwProfileId));
+      const existingSkus = new Set(existingPp.map((r) => r.sku));
+      let mirrored = 0;
+      for (const prod of allProducts) {
+        if (!existingSkus.has(prod.sku)) {
+          await db.insert(profilePrices).values({ profileId: lwProfileId, sku: prod.sku, unitPrice: prod.unitPrice });
+          mirrored++;
+        }
+      }
+      console.log(`   ${mirrored} precos espelhados no perfil LW\n`);
+    }
   } catch (error) {
     console.error('\nErro durante seed:', error);
     process.exit(1);

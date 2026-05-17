@@ -12,6 +12,7 @@ import MetodologiaPage from "@/pages/MetodologiaPage";
 import Catalogo from "@/pages/Catalogo";
 import Calibracao from "@/pages/Calibracao";
 import Usuarios from "@/pages/Usuarios";
+import TabelasPreco from "@/pages/TabelasPreco";
 import GuiaExterno from "@/pages/GuiaExterno";
 import Login from "@/pages/Login";
 import { Loader2 } from "lucide-react";
@@ -27,6 +28,7 @@ function Router() {
       <Route path="/catalogo" component={Catalogo} />
       <Route path="/calibracao" component={Calibracao} />
       <Route path="/usuarios" component={Usuarios} />
+      <Route path="/tabelas-preco" component={TabelasPreco} />
       <Route path="/guia" component={GuiaExterno} />
       <Route component={NotFound} />
     </Switch>

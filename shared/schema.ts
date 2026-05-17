@@ -22,8 +22,30 @@ export const users = pgTable("users", {
   role: varchar("role", { length: 50 }).notNull().default("viewer"),
   active: integer("active").notNull().default(1),
   storeName: varchar("store_name", { length: 255 }),
+  pricingProfileId: integer("pricing_profile_id").references((): any => pricingProfiles.id, { onDelete: "set null" }),
   lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const pricingProfiles = pgTable("pricing_profiles", {
+  id: serial("id").primaryKey(),
+  code: varchar("code", { length: 50 }).notNull().unique(),
+  label: varchar("label", { length: 255 }).notNull(),
+  region: varchar("region", { length: 100 }),
+  isDefault: integer("is_default").notNull().default(0),
+  active: integer("active").notNull().default(1),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const profilePrices = pgTable("profile_prices", {
+  id: serial("id").primaryKey(),
+  profileId: integer("profile_id")
+    .notNull()
+    .references(() => pricingProfiles.id, { onDelete: "cascade" }),
+  sku: varchar("sku", { length: 50 }).notNull(),
+  unitPrice: decimal("unit_price", { precision: 10, scale: 2 }).notNull(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -63,6 +85,7 @@ export const projects = pgTable("projects", {
   discountPanelPct: decimal("discount_panel_pct", { precision: 5, scale: 2 }).notNull().default("0"),
   freightCost: decimal("freight_cost", { precision: 15, scale: 2 }).notNull().default("0"),
   biomassCost: decimal("biomass_cost", { precision: 15, scale: 2 }).notNull().default("0"),
+  pricingProfileId: integer("pricing_profile_id").references((): any => pricingProfiles.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -212,6 +235,21 @@ export type InsertBudget = z.infer<typeof insertBudgetSchema>;
 
 export type AiRun = typeof aiRuns.$inferSelect;
 export type InsertAiRun = z.infer<typeof insertAiRunSchema>;
+
+export const insertPricingProfileSchema = createInsertSchema(pricingProfiles).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type PricingProfile = typeof pricingProfiles.$inferSelect;
+export type InsertPricingProfile = z.infer<typeof insertPricingProfileSchema>;
+
+export const insertProfilePriceSchema = createInsertSchema(profilePrices).omit({
+  id: true,
+  updatedAt: true,
+});
+export type ProfilePrice = typeof profilePrices.$inferSelect;
+export type InsertProfilePrice = z.infer<typeof insertProfilePriceSchema>;
 
 // ===== Strict structured-output schema for OpenAI Responses API =====
 // Mirror of the JSON Schema used in the Responses call for runtime validation.

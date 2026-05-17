@@ -66,6 +66,28 @@ const progressClients = new Map<number, Response[]>();
 
 const PANEL_AREA_M2 = 1.83;
 
+/**
+ * Aplica os precos do perfil ao catalogo de produtos.
+ * Cria copia dos produtos sobrescrevendo `unitPrice` quando o SKU
+ * tem entrada em `profile_prices`. Produtos sem override mantem o
+ * preco do catalogo (fallback).
+ */
+async function applyProfilePrices<T extends { sku: string; unitPrice: string }>(
+  products: T[],
+  profileId: number | null | undefined,
+): Promise<T[]> {
+  if (!profileId) return products;
+  try {
+    const overrides = await storage.getProfilePrices(profileId);
+    if (overrides.length === 0) return products;
+    const map = new Map(overrides.map(o => [o.sku, o.unitPrice]));
+    return products.map(p => map.has(p.sku) ? { ...p, unitPrice: map.get(p.sku)! } : p);
+  } catch (e) {
+    console.warn("[PROFILE_PRICES] Falha ao aplicar perfil", profileId, e);
+    return products;
+  }
+}
+
 function computeTotaisPorSku(itens: Array<{ discriminacao: string; sku?: string; qtd_un: number; qtd_m2: number; preco_total: number }>) {
   const map = new Map<string, { sku: string; nome: string; qtd_m2: number; preco_total: number }>();
   for (const item of itens) {
@@ -672,11 +694,26 @@ export async function registerRoutes(
 
   app.post("/api/projects", async (req, res) => {
     try {
-      const { name, clientName, clientEmail, description, buildingType } = req.body;
+      const { name, clientName, clientEmail, description, buildingType, pricingProfileId } = req.body;
       if (!name) {
         return res.status(400).json({ message: "Nome do projeto é obrigatório" });
       }
       const validTypes = ["residencial", "comercial", "institucional", "industrial", "outro"];
+
+      // Resolução de perfil: usuário → default. Apenas admin pode forçar via body.
+      let resolvedProfileId: number | null = null;
+      if (req.user?.id) {
+        const u = await storage.getUser(req.user.id);
+        resolvedProfileId = u?.pricingProfileId ?? null;
+      }
+      if (typeof pricingProfileId === "number" && req.user?.role === "admin") {
+        resolvedProfileId = pricingProfileId;
+      }
+      if (resolvedProfileId === null) {
+        const def = await storage.getDefaultPricingProfile();
+        resolvedProfileId = def?.id ?? null;
+      }
+
       const project = await storage.createProject({
         name,
         clientName: clientName || null,
@@ -684,11 +721,102 @@ export async function registerRoutes(
         description: description || null,
         buildingType: buildingType && validTypes.includes(buildingType) ? buildingType : null,
         status: "draft",
+        pricingProfileId: resolvedProfileId,
       });
       res.json(project);
     } catch (error) {
       console.error("Erro ao criar projeto:", error);
       res.status(500).json({ message: "Erro ao criar projeto" });
+    }
+  });
+
+  // ===== Pricing Profiles (admin only — pricing tables are sensitive) =====
+  app.get("/api/pricing-profiles", requireAdmin, async (_req, res) => {
+    try {
+      const list = await storage.getPricingProfiles();
+      res.json(list);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Erro ao listar perfis" });
+    }
+  });
+
+  app.post("/api/pricing-profiles", requireAdmin, async (req, res) => {
+    try {
+      const { code, label, region, isDefault, active } = req.body;
+      if (!code || !label) return res.status(400).json({ message: "Code e label sao obrigatorios" });
+      const created = await storage.createPricingProfile({
+        code: String(code).trim().toUpperCase(),
+        label: String(label).trim(),
+        region: region ? String(region).trim() : null,
+        isDefault: isDefault ? 1 : 0,
+        active: active === 0 ? 0 : 1,
+      });
+      res.status(201).json(created);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Erro ao criar perfil" });
+    }
+  });
+
+  app.put("/api/pricing-profiles/:id", requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const { code, label, region, isDefault, active } = req.body;
+      const data: any = {};
+      if (code !== undefined) data.code = String(code).trim().toUpperCase();
+      if (label !== undefined) data.label = String(label).trim();
+      if (region !== undefined) data.region = region ? String(region).trim() : null;
+      if (isDefault !== undefined) data.isDefault = isDefault ? 1 : 0;
+      if (active !== undefined) data.active = active ? 1 : 0;
+      const updated = await storage.updatePricingProfile(id, data);
+      if (!updated) return res.status(404).json({ message: "Perfil nao encontrado" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Erro ao atualizar perfil" });
+    }
+  });
+
+  app.delete("/api/pricing-profiles/:id", requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      await storage.deletePricingProfile(id);
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Erro ao remover perfil" });
+    }
+  });
+
+  app.get("/api/pricing-profiles/:id/prices", requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const prices = await storage.getProfilePrices(id);
+      res.json(prices);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Erro ao listar precos" });
+    }
+  });
+
+  app.put("/api/pricing-profiles/:id/prices/:sku", requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const sku = String(req.params.sku);
+      const { unitPrice } = req.body;
+      const n = typeof unitPrice === "number" ? unitPrice : parseFloat(unitPrice);
+      if (!Number.isFinite(n) || n < 0) return res.status(400).json({ message: "Preco invalido" });
+      const saved = await storage.upsertProfilePrice(id, sku, String(n.toFixed(2)));
+      res.json(saved);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Erro ao salvar preco" });
+    }
+  });
+
+  app.delete("/api/pricing-profiles/:id/prices/:sku", requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      const sku = String(req.params.sku);
+      await storage.deleteProfilePrice(id, sku);
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Erro ao remover preco" });
     }
   });
 
@@ -1382,7 +1510,12 @@ export async function registerRoutes(
       sendProgress(projectId, 5, "Calculo de Quantitativos", "done", `${budget.resumo.total_geral_paineis} paineis total | Pavimentos: ${pavNames} | 2P=${budget.consolidado_por_tipo[0]?.quantidade_total_paineis}`);
 
       sendProgress(projectId, 6, "Integracao com Catalogo", "running", "Calculando custos no formato de proposta Lightwall...");
-      const allProducts = await storage.getProducts();
+      const projectForPricing = await storage.getProject(projectId);
+      const rawProducts = await storage.getProducts();
+      const allProducts = await applyProfilePrices(rawProducts, projectForPricing?.pricingProfileId);
+      if (projectForPricing?.pricingProfileId) {
+        console.log(`[ETAPA6] Aplicando perfil de preco id=${projectForPricing.pricingProfileId}`);
+      }
       const findPanel = (id: number | null) => id ? allProducts.find((p) => p.id === id && p.category === "painel") : null;
       const default2P = allProducts.find((p) => p.sku === "LW-2P-090") || null;
       const defaultSP = allProducts.find((p) => p.sku === "LW-SP-090") || default2P;
@@ -2078,7 +2211,9 @@ export async function registerRoutes(
       const legacy = budgetToLegacy(budget);
       const alerts = inconsistenciasToAlerts(budget.inconsistencias);
 
-      const allProducts = await storage.getProducts();
+      const projectForRecalcPricing = await storage.getProject(projectId);
+      const rawProductsR = await storage.getProducts();
+      const allProducts = await applyProfilePrices(rawProductsR, projectForRecalcPricing?.pricingProfileId);
       const existingBudgetForPrices = await storage.getBudget(projectId);
       const prevProposta = (existingBudgetForPrices?.budgetData as any)?.proposta;
       const productExtDefault = allProducts.find((p) => p.sku === "LW-2P-090");
@@ -2738,6 +2873,7 @@ export async function registerRoutes(
         role: u.role,
         active: u.active,
         storeName: u.storeName,
+        pricingProfileId: u.pricingProfileId,
         lastLoginAt: u.lastLoginAt,
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
@@ -2762,6 +2898,7 @@ export async function registerRoutes(
         return res.status(409).json({ message: "Nome de usuario ja existe" });
       }
       const hashedPassword = await bcrypt.hash(password, 10);
+      const { pricingProfileId } = req.body;
       const user = await storage.createUser({
         username: username.trim().toLowerCase(),
         password: hashedPassword,
@@ -2769,6 +2906,7 @@ export async function registerRoutes(
         role: role === "admin" ? "admin" : "viewer",
         active: 1,
         storeName: storeName?.trim() || null,
+        pricingProfileId: typeof pricingProfileId === "number" ? pricingProfileId : null,
       });
       res.status(201).json({
         id: user.id,
@@ -2788,7 +2926,7 @@ export async function registerRoutes(
   app.put("/api/users/:id", requireAdmin, async (req, res) => {
     try {
       const userId = parseInt(String(req.params.id));
-      const { displayName, role, active, storeName, password } = req.body;
+      const { displayName, role, active, storeName, password, pricingProfileId } = req.body;
       const normalizedActive = active !== undefined ? (active ? 1 : 0) : undefined;
       const normalizedRole = role !== undefined ? (role === "admin" ? "admin" : "viewer") : undefined;
       if (userId === req.user?.id && normalizedActive === 0) {
@@ -2802,6 +2940,7 @@ export async function registerRoutes(
       if (normalizedRole !== undefined) updateData.role = normalizedRole;
       if (normalizedActive !== undefined) updateData.active = normalizedActive;
       if (storeName !== undefined) updateData.storeName = storeName?.trim() || null;
+      if (pricingProfileId !== undefined) updateData.pricingProfileId = pricingProfileId === null || pricingProfileId === "" ? null : Number(pricingProfileId);
 
       const updated = await storage.updateUser(userId, updateData);
       if (!updated) return res.status(404).json({ message: "Usuario nao encontrado" });
