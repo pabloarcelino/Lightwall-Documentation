@@ -1445,7 +1445,8 @@ export default function ProjectDetails() {
                     {files.map((file: any) => {
                       const isImage = file.fileType === "image" || /\.(png|jpe?g)$/i.test(file.originalName || "");
                       const isPdf = file.fileType === "pdf" || /\.pdf$/i.test(file.originalName || "");
-                      const fileUrl = `/api/files/${file.id}/content`;
+                      const cacheBust = project?.updatedAt ? `?v=${new Date(project.updatedAt).getTime()}` : "";
+                      const fileUrl = `/api/files/${file.id}/content${cacheBust}`;
                       const pageTypeLabel: Record<string, string> = {
                         planta_baixa: "Planta Baixa",
                         planta_cobertura: "Planta Cobertura",
@@ -1459,7 +1460,7 @@ export default function ProjectDetails() {
                       };
                       return (
                         <Card
-                          key={file.id}
+                          key={`${file.id}-${project?.updatedAt || ""}`}
                           data-testid={`card-file-${file.id}`}
                           className="cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all group relative"
                           onClick={() => setViewingFile(file)}
@@ -1537,7 +1538,8 @@ export default function ProjectDetails() {
                 {viewingFile && (() => {
                   const isImage = viewingFile.fileType === "image" || /\.(png|jpe?g)$/i.test(viewingFile.originalName || "");
                   const isPdf = viewingFile.fileType === "pdf" || /\.pdf$/i.test(viewingFile.originalName || "");
-                  const fileUrl = `/api/files/${viewingFile.id}/content`;
+                  const cacheBust = project?.updatedAt ? `?v=${new Date(project.updatedAt).getTime()}` : "";
+                  const fileUrl = `/api/files/${viewingFile.id}/content${cacheBust}`;
                   const fileIndex = files?.findIndex((f: any) => f.id === viewingFile.id) ?? -1;
                   const canPrev = fileIndex > 0;
                   const canNext = files && fileIndex < files.length - 1;
