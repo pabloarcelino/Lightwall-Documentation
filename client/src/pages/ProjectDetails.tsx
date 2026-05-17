@@ -1827,9 +1827,12 @@ export default function ProjectDetails() {
                       groups.get(key)!.push(r);
                     }
                     const orderedTypes = ["planta_cobertura", "corte", "fachada", "vista_3d", "detalhe_construtivo", "quadro_esquadrias", "tabela_quantitativo"];
-                    const orderedGroups = orderedTypes
-                      .filter(t => groups.has(t))
-                      .map(t => ({ type: t, label: groups.get(t)![0].pageTypeLabel, items: groups.get(t)! }));
+                    const seen = new Set<string>();
+                    const orderedGroups = [
+                      ...orderedTypes.filter(t => groups.has(t)).map(t => { seen.add(t); return t; }),
+                      ...Array.from(groups.keys()).filter(t => !seen.has(t)),
+                    ].map(t => ({ type: t, label: groups.get(t)![0].pageTypeLabel, items: groups.get(t)! }));
+                    if (orderedGroups.length === 0) return null;
 
                     return (
                       <Card data-testid="card-reference-views">
