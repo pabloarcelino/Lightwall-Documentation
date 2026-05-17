@@ -1593,11 +1593,10 @@ export default function ProjectDetails() {
                             data-testid="img-fullview"
                           />
                         ) : isPdf ? (
-                          <iframe
-                            key={viewingFile.id}
-                            src={fileUrl}
-                            title={viewingFile.originalName}
-                            className="w-full h-full border-0 bg-white"
+                          <PdfViewer
+                            key={`${viewingFile.id}-${project?.updatedAt || ""}`}
+                            url={fileUrl}
+                            className="w-full h-full bg-white"
                             data-testid="pdf-fullview"
                           />
                         ) : (
