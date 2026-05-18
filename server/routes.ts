@@ -4,7 +4,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs/promises";
 import { storage } from "./storage";
-import type { InsertExtractedData } from "@shared/schema";
+import type { InsertExtractedData, InsertWallFeedback } from "@shared/schema";
 import { z } from "zod";
 import {
   classifyAndExtractTables,
@@ -2475,25 +2475,29 @@ export async function registerRoutes(
 
   async function persistFeedback(req: any, parsed: z.infer<typeof wallFeedbackBodySchema>, projectId: number | null) {
     const sig = feedbackSignatureFromBody(parsed);
-    // Hardening anti-poisoning: apenas admin pode marcar isExemplar=true.
-    // Exemplares pulam o threshold de votos no engine — sao "verdade curada".
+    // Hardening anti-poisoning: a flag isExemplar (que pula o threshold de votos no engine)
+    // so e setada por admin — "verdade curada". Nao-admin pode registrar action="exemplar"
+    // para auditoria/UI, mas isExemplar=false e ele entra no mesmo pool de votos.
     const isAdmin = req.user?.role === "admin";
     const isExemplar = isAdmin && (!!parsed.is_exemplar || parsed.action === "exemplar");
-    // Se nao-admin tentou criar exemplar, rebaixa para "correct".
-    const effectiveAction = (!isAdmin && parsed.action === "exemplar") ? "correct" : parsed.action;
-    return storage.createWallFeedback({
+    const insert: InsertWallFeedback = {
       projectId,
       userId: req.user?.id ?? null,
       wallId: parsed.wall_id,
       nivel: parsed.nivel || null,
-      ...sig,
+      espessuraBucketCm: sig.espessuraBucketCm,
+      comprimentoBucketDm: sig.comprimentoBucketDm,
+      hasWindow: sig.hasWindow,
+      hasDoor: sig.hasDoor,
+      reviewReasonBucket: sig.reviewReasonBucket,
       originalClasse: parsed.original_classe || null,
       correctedClasse: parsed.corrected_classe || null,
-      action: effectiveAction,
+      action: parsed.action,
       isExemplar,
       notes: parsed.notes || null,
       active: true,
-    } as any);
+    };
+    return storage.createWallFeedback(insert);
   }
 
   app.post("/api/wall-feedback", requireAuth, async (req: any, res) => {
@@ -2537,6 +2541,21 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("Erro ao salvar feedback em lote:", err);
       res.status(500).json({ message: "Erro ao salvar feedback em lote" });
+    }
+  });
+
+  // Lista feedbacks de UM projeto (visivel para qualquer usuario autenticado).
+  // Serve para a UI exibir os exemplos persistidos do projeto na aba Quantitativos.
+  app.get("/api/wall-feedback/project/:projectId", requireAuth, async (req, res) => {
+    try {
+      const projectId = Number(req.params.projectId);
+      if (!Number.isFinite(projectId)) return res.status(400).json({ message: "projectId invalido" });
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto nao encontrado" });
+      const rows = await storage.getWallFeedback({ projectId, active: true });
+      res.json(rows);
+    } catch {
+      res.status(500).json({ message: "Erro ao listar feedbacks do projeto" });
     }
   });
 

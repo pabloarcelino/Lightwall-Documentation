@@ -32,7 +32,8 @@ import {
   GraduationCap,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
 
 interface Esquadria {
   tipo: string;
@@ -102,7 +103,15 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
   const [bulkPainelType, setBulkPainelType] = useState<string>("");
   const [bulkClasseSlab, setBulkClasseSlab] = useState<string>("");
   const [exemplarMode, setExemplarMode] = useState(false);
-  const [exemplifiedIds, setExemplifiedIds] = useState<Set<string>>(new Set());
+
+  // Exemplares e correcoes persistidos deste projeto (visiveis na sessao).
+  // Endpoint exige apenas autenticacao — qualquer estimador ve os exemplos do projeto que esta vendo.
+  const { data: projectFeedback = [] } = useQuery<any[]>({
+    queryKey: ["/api/wall-feedback/project", Number(projectId)],
+    enabled: !!projectId,
+  });
+  const persistedExemplars = (projectFeedback as any[]).filter(f => f.isExemplar || f.action === "exemplar");
+  const persistedCorrections = (projectFeedback as any[]).filter(f => f.action === "correct" && !f.isExemplar);
 
   // Dedupe in-memory: evita registrar feedback identico (mesma parede+acao+classe) em janela curta.
   const recentFeedbackKeys = (window as any).__lwFeedbackKeys || ((window as any).__lwFeedbackKeys = new Map<string, number>());
@@ -116,9 +125,10 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
     for (const [k, t] of recentFeedbackKeys) if (now - t > 30000) recentFeedbackKeys.delete(k);
     try {
       await apiRequest("POST", "/api/wall-feedback", payload);
+      // Atualiza a lista visivel de exemplares/correcoes do projeto
+      queryClient.invalidateQueries({ queryKey: ["/api/wall-feedback/project", Number(projectId)] });
     } catch (e: any) {
       console.warn("wall-feedback falhou:", e);
-      // 403/projeto-nao-pertence: avisa silenciosamente; 4xx/5xx outros tambem nao bloqueiam
     }
   }
 
@@ -235,7 +245,6 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
   };
   const exemplifyWall = (w: EditableWall) => {
     sendFeedback(buildFeedbackPayload(w, "exemplar", w.classe, w.classe));
-    setExemplifiedIds(prev => { const next = new Set(prev); next.add(w.id); return next; });
     toast({ title: "Marcada como exemplo", description: `${w.id} ira reforcar futuras classificacoes` });
   };
   // Correcao rapida direto do popover (sem precisar abrir o card)
@@ -405,13 +414,29 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
         </div>
       </div>
 
-      {exemplifiedIds.size > 0 && (
-        <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 text-xs" data-testid="banner-exemplares">
-          <Sparkles className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-          <span className="font-medium">{exemplifiedIds.size} exemplo(s) nesta sessao:</span>
-          <span className="text-muted-foreground truncate">
-            {Array.from(exemplifiedIds).slice(0, 12).join(", ")}{exemplifiedIds.size > 12 ? "…" : ""}
-          </span>
+      {(persistedExemplars.length > 0 || persistedCorrections.length > 0) && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 text-xs space-y-1" data-testid="banner-exemplares">
+          {persistedExemplars.length > 0 && (
+            <div className="flex items-start gap-2">
+              <Sparkles className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <span className="font-medium">{persistedExemplars.length} exemplo(s) deste projeto:</span>{" "}
+                <span className="text-muted-foreground">
+                  {persistedExemplars.slice(0, 15).map((f: any) => `${f.wallId}→${f.correctedClasse || f.originalClasse || "?"}`).join(", ")}
+                  {persistedExemplars.length > 15 ? "…" : ""}
+                </span>
+              </div>
+            </div>
+          )}
+          {persistedCorrections.length > 0 && (
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="h-3.5 w-3.5 text-amber-700/70 dark:text-amber-400/70 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0 text-muted-foreground">
+                <span className="font-medium text-foreground">{persistedCorrections.length} correcao(oes) registrada(s)</span>
+                {" — "}sao consideradas na proxima fusao quando convergem com outras do mesmo cliente.
+              </div>
+            </div>
+          )}
         </div>
       )}
 
