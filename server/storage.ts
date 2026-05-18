@@ -105,6 +105,9 @@ export interface IStorage {
   // ===== Wall feedback (human-in-the-loop) =====
   createWallFeedback(fb: InsertWallFeedback): Promise<WallFeedback>;
   getWallFeedback(filters?: { projectId?: number; active?: boolean; isExemplar?: boolean }): Promise<WallFeedback[]>;
+  // Carrega feedbacks ativos com clientName do projeto que originou cada um (join),
+  // para que o engine possa fazer escopo por cliente e proteger contra envenenamento cross-tenant.
+  getActiveWallFeedbackWithClient(): Promise<Array<WallFeedback & { clientName: string | null }>>;
   setWallFeedbackActive(id: number, active: boolean): Promise<WallFeedback | undefined>;
   deleteWallFeedback(id: number): Promise<void>;
 }
@@ -470,6 +473,14 @@ export class DatabaseStorage implements IStorage {
       ? await q.where(conds.length === 1 ? conds[0] : and(...conds)).orderBy(desc(wallFeedback.createdAt))
       : await q.orderBy(desc(wallFeedback.createdAt));
     return rows;
+  }
+  async getActiveWallFeedbackWithClient(): Promise<Array<WallFeedback & { clientName: string | null }>> {
+    const rows = await db
+      .select({ fb: wallFeedback, clientName: projects.clientName })
+      .from(wallFeedback)
+      .leftJoin(projects, eq(projects.id, wallFeedback.projectId))
+      .where(eq(wallFeedback.active, true));
+    return rows.map((r: any) => ({ ...r.fb, clientName: r.clientName ?? null }));
   }
   async setWallFeedbackActive(id: number, active: boolean): Promise<WallFeedback | undefined> {
     const [updated] = await db.update(wallFeedback).set({ active }).where(eq(wallFeedback.id, id)).returning();

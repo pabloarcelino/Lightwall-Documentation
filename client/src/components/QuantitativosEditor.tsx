@@ -102,6 +102,7 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
   const [bulkPainelType, setBulkPainelType] = useState<string>("");
   const [bulkClasseSlab, setBulkClasseSlab] = useState<string>("");
   const [exemplarMode, setExemplarMode] = useState(false);
+  const [exemplifiedIds, setExemplifiedIds] = useState<Set<string>>(new Set());
 
   // Dedupe in-memory: evita registrar feedback identico (mesma parede+acao+classe) em janela curta.
   const recentFeedbackKeys = (window as any).__lwFeedbackKeys || ((window as any).__lwFeedbackKeys = new Map<string, number>());
@@ -234,7 +235,20 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
   };
   const exemplifyWall = (w: EditableWall) => {
     sendFeedback(buildFeedbackPayload(w, "exemplar", w.classe, w.classe));
+    setExemplifiedIds(prev => { const next = new Set(prev); next.add(w.id); return next; });
     toast({ title: "Marcada como exemplo", description: `${w.id} ira reforcar futuras classificacoes` });
+  };
+  // Correcao rapida direto do popover (sem precisar abrir o card)
+  const correctWallTo = (w: EditableWall, target: "externa" | "interna" | "muro" | "nao_parede") => {
+    const idx = walls.findIndex(x => x.id === w.id);
+    if (idx < 0) return;
+    if (target === "nao_parede") {
+      updateWall(idx, "enabled", false);
+      toast({ title: "Desligada", description: `${w.id} marcada como "nao e parede"` });
+    } else {
+      updateWall(idx, "classe", target);
+      toast({ title: "Reclassificada", description: `${w.id}: ${w.classe} → ${target}` });
+    }
   };
 
   const updateSlab = (idx: number, field: string, value: any) => {
@@ -391,6 +405,16 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
         </div>
       </div>
 
+      {exemplifiedIds.size > 0 && (
+        <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 text-xs" data-testid="banner-exemplares">
+          <Sparkles className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+          <span className="font-medium">{exemplifiedIds.size} exemplo(s) nesta sessao:</span>
+          <span className="text-muted-foreground truncate">
+            {Array.from(exemplifiedIds).slice(0, 12).join(", ")}{exemplifiedIds.size > 12 ? "…" : ""}
+          </span>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 gap-4">
         <Card className="glass-card">
           <CardContent className="pt-4 text-center">
@@ -518,7 +542,15 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
                               <Sparkles className="h-3 w-3" /> Exemplificar
                             </Button>
                           </div>
-                          <p className="text-[10px] text-muted-foreground">Use a "Classe" abaixo para corrigir, ou desligue o switch para marcar como "nao e parede".</p>
+                          <div className="pt-1 border-t">
+                            <div className="text-[10px] text-muted-foreground mb-1">Corrigir para:</div>
+                            <div className="flex flex-wrap gap-1">
+                              {(["externa","interna","muro"] as const).filter(c => c !== wall.classe).map(c => (
+                                <Button key={c} size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => correctWallTo(wall, c)} data-testid={`button-fix-${c}-${idx}`}>{c}</Button>
+                              ))}
+                              <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 text-destructive" onClick={() => correctWallTo(wall, "nao_parede")} data-testid={`button-fix-notwall-${idx}`}>nao e parede</Button>
+                            </div>
+                          </div>
                         </div>
                       </PopoverContent>
                     </Popover>
@@ -547,6 +579,15 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
                             <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => exemplifyWall(wall)} data-testid={`button-exemplify-${idx}`}>
                               <Sparkles className="h-3 w-3" /> Exemplificar
                             </Button>
+                          </div>
+                          <div className="pt-1 border-t">
+                            <div className="text-[10px] text-muted-foreground mb-1">Corrigir para:</div>
+                            <div className="flex flex-wrap gap-1">
+                              {(["externa","interna","muro"] as const).filter(c => c !== wall.classe).map(c => (
+                                <Button key={c} size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => correctWallTo(wall, c)} data-testid={`button-fix-${c}-${idx}`}>{c}</Button>
+                              ))}
+                              <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 text-destructive" onClick={() => correctWallTo(wall, "nao_parede")} data-testid={`button-fix-notwall-${idx}`}>nao e parede</Button>
+                            </div>
                           </div>
                         </div>
                       </PopoverContent>

@@ -139,7 +139,13 @@ export interface WallFeedbackEntry {
   correctedClasse: string | null;
   action: string;
   isExemplar: boolean;
+  clientName?: string | null; // cliente do projeto que originou o feedback (escopo cross-project por cliente)
 }
+
+// Minimo de sinais consistentes para sobrescrever a IA por correcao majoritaria.
+// Abaixo disso, abstem-se (preserva a classificacao original). Exemplares (curados
+// por admin) passam com 1 sinal — eles sao a fonte de "verdade alta confianca".
+const MIN_CORRECTION_SIGNALS = 2;
 
 // Tri-state encoding: null/unknown="x", false="0", true="1" — evita colisao entre "desconhecido" e "nao tem"
 function triState(v: boolean | null | undefined): string {
@@ -154,17 +160,33 @@ function wallFeedbackSignature(espCm: number | null, compDm: number | null, hasW
 // Prioridade declarada: exemplar > correct > not_wall (votos majoritarios dentro de cada nivel)
 const ACTION_PRIORITY: Record<string, number> = { exemplar: 3, correct: 2, not_wall: 1, confirm: 0 };
 
-export function applyFeedbackOverrides(walls: ExtractedWall[], feedbacks: WallFeedbackEntry[]): { walls: ExtractedWall[]; overridesApplied: number; notWallRemoved: number } {
+export function applyFeedbackOverrides(
+  walls: ExtractedWall[],
+  feedbacks: WallFeedbackEntry[],
+  currentClientName?: string | null,
+): { walls: ExtractedWall[]; overridesApplied: number; notWallRemoved: number } {
   if (!feedbacks || feedbacks.length === 0) return { walls, overridesApplied: 0, notWallRemoved: 0 };
+
+  // Escopo de seguranca contra envenenamento cross-tenant: cada feedback so e
+  // considerado se (a) pertence ao mesmo cliente do projeto atual OU (b) e
+  // exemplar (curado por admin — fonte de verdade global).
+  const normClient = (s: string | null | undefined) => (s || "").trim().toLowerCase();
+  const curClient = normClient(currentClientName);
+  const scoped = feedbacks.filter(fb => {
+    if (fb.action === "confirm") return false;
+    if (fb.isExemplar) return true; // exemplar admin sempre vale (verdade curada)
+    if (!curClient) return false; // projeto sem cliente: ignora correcoes cross-project
+    return normClient(fb.clientName) === curClient;
+  });
+  if (scoped.length === 0) return { walls, overridesApplied: 0, notWallRemoved: 0 };
+
   const bySig = new Map<string, WallFeedbackEntry[]>();
-  for (const fb of feedbacks) {
-    if (fb.action === "confirm") continue;
-    // Tenta as duas assinaturas: com janela/porta conhecidos e com "desconhecido" (cross-project, sem flag salvo)
+  for (const fb of scoped) {
     const sigStrict = wallFeedbackSignature(fb.espessuraBucketCm, fb.comprimentoBucketDm, fb.hasWindow, fb.hasDoor, fb.originalClasse);
     const arr = bySig.get(sigStrict); if (arr) arr.push(fb); else bySig.set(sigStrict, [fb]);
   }
-  function pickDecisive(matches: WallFeedbackEntry[]): WallFeedbackEntry {
-    // Votos: para cada nivel de prioridade do mais alto ao mais baixo, conta classes corrigidas; vencedor por contagem.
+  function pickDecisive(matches: WallFeedbackEntry[]): { sample: WallFeedbackEntry; count: number } | null {
+    // Para cada tier (exemplar > correct > not_wall), conta classes corrigidas e devolve a campea junto com o tamanho do voto.
     const tiers = [3, 2, 1];
     for (const tier of tiers) {
       const tierMatches = matches.filter(m => (ACTION_PRIORITY[m.action] ?? 0) === tier);
@@ -177,9 +199,9 @@ export function applyFeedbackOverrides(walls: ExtractedWall[], feedbacks: WallFe
       }
       let best: { key: string; count: number; sample: WallFeedbackEntry } | null = null;
       for (const [k, v] of tally) if (!best || v.count > best.count) best = { key: k, count: v.count, sample: v.sample };
-      if (best) return best.sample;
+      if (best) return { sample: best.sample, count: best.count };
     }
-    return matches[0];
+    return null;
   }
   let overridesApplied = 0;
   let notWallRemoved = 0;
@@ -190,15 +212,25 @@ export function applyFeedbackOverrides(walls: ExtractedWall[], feedbacks: WallFe
     const sigStrict = wallFeedbackSignature(espCm, compDm, !!w.has_window, !!w.has_door, w.classe);
     const matches = bySig.get(sigStrict) || [];
     if (matches.length === 0) { out.push(w); continue; }
-    const decisive = pickDecisive(matches);
+    const picked = pickDecisive(matches);
+    if (!picked) { out.push(w); continue; }
+    const { sample: decisive, count } = picked;
+    // Threshold de confianca: exemplar (tier 3) basta 1 sinal; correct/not_wall exige >= MIN_CORRECTION_SIGNALS.
+    const tier = ACTION_PRIORITY[decisive.action] ?? 0;
+    const required = tier >= 3 ? 1 : MIN_CORRECTION_SIGNALS;
+    if (count < required) {
+      console.log(`[FEEDBACK] Parede ${w.id}: ${count} sinal(is) abaixo do limiar (${required}) — preserva IA (sig=${sigStrict})`);
+      out.push(w);
+      continue;
+    }
     if (decisive.action === "not_wall" || decisive.correctedClasse === "nao_parede") {
       notWallRemoved += 1;
-      console.log(`[FEEDBACK] Parede ${w.id} removida via feedback "nao_parede" (sig=${sigStrict})`);
+      console.log(`[FEEDBACK] Parede ${w.id} removida via feedback "nao_parede" (sig=${sigStrict}, ${count} sinais)`);
       continue;
     }
     const corrected = decisive.correctedClasse;
     if (corrected && (corrected === "externa" || corrected === "interna" || corrected === "muro") && corrected !== w.classe) {
-      console.log(`[FEEDBACK] Parede ${w.id} reclassificada via feedback (${decisive.action}): ${w.classe} → ${corrected} (sig=${sigStrict})`);
+      console.log(`[FEEDBACK] Parede ${w.id} reclassificada via feedback (${decisive.action}, ${count} sinais): ${w.classe} → ${corrected} (sig=${sigStrict})`);
       w.classe = corrected;
       w.measurement_source = `${w.measurement_source}_feedback_override`;
       w.confidence = Math.max(w.confidence, 0.9);
@@ -216,6 +248,7 @@ export function fusionMultiView(
   tableData: TableData | null,
   buildingType?: string,
   feedbacks?: WallFeedbackEntry[],
+  currentClientName?: string | null,
 ): { walls: ExtractedWall[]; slabs: ExtractedSlab[]; corners: ExtractedCorner[] } {
   let allWalls: ExtractedWall[] = [];
   let allSlabs: ExtractedSlab[] = [];
@@ -840,7 +873,7 @@ export function fusionMultiView(
   // humana de projetos anteriores tenha a palavra final sobre a classificacao.
   let finalWalls = deduplicatedWalls;
   if (feedbacks && feedbacks.length > 0) {
-    const r = applyFeedbackOverrides(deduplicatedWalls, feedbacks);
+    const r = applyFeedbackOverrides(deduplicatedWalls, feedbacks, currentClientName);
     finalWalls = r.walls;
     if (r.overridesApplied > 0 || r.notWallRemoved > 0) {
       console.log(`[FUSAO] Feedback humano aplicado: ${r.overridesApplied} reclassificacao(oes), ${r.notWallRemoved} parede(s) removida(s) como "nao e parede"`);

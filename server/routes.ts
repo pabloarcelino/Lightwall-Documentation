@@ -1409,10 +1409,15 @@ export async function registerRoutes(
 
       sendProgress(projectId, 4, "Fusao Multivista", "running", "Cruzando dados de todas as paginas...");
       const hasTableData = mergedTableData.paredes_de_tabela.length > 0 || mergedTableData.esquadrias_de_tabela.length > 0;
-      // Carrega feedbacks humanos ativos (cross-project) para override deterministico
+      // Carrega feedbacks humanos ativos com clientName do projeto que originou cada feedback.
+      // O engine fara escopo por cliente atual (anti-poisoning cross-tenant): exemplares
+      // curados por admin valem global; correcoes/not_wall so valem dentro do mesmo cliente.
       let wallFeedbacksForFusion: any[] = [];
+      let currentProjectClient: string | null = null;
       try {
-        const fbRows = await storage.getWallFeedback({ active: true });
+        const curProject = await storage.getProject(projectId);
+        currentProjectClient = curProject?.clientName ?? null;
+        const fbRows = await storage.getActiveWallFeedbackWithClient();
         wallFeedbacksForFusion = fbRows.map(r => ({
           espessuraBucketCm: r.espessuraBucketCm,
           comprimentoBucketDm: r.comprimentoBucketDm,
@@ -1422,14 +1427,15 @@ export async function registerRoutes(
           correctedClasse: r.correctedClasse,
           action: r.action,
           isExemplar: r.isExemplar,
+          clientName: r.clientName,
         }));
         if (wallFeedbacksForFusion.length > 0) {
-          console.log(`[FEEDBACK] Carregados ${wallFeedbacksForFusion.length} feedback(s) ativo(s) para override na fusao`);
+          console.log(`[FEEDBACK] Carregados ${wallFeedbacksForFusion.length} feedback(s) ativo(s); escopo cliente=${currentProjectClient ?? "(nenhum)"}`);
         }
       } catch (fbErr) {
         console.warn("[FEEDBACK] Falha ao carregar feedbacks:", fbErr);
       }
-      const fused = fusionMultiView(allGeometries, hasTableData ? mergedTableData : null, effectiveBuildingType(), wallFeedbacksForFusion);
+      const fused = fusionMultiView(allGeometries, hasTableData ? mergedTableData : null, effectiveBuildingType(), wallFeedbacksForFusion, currentProjectClient);
       sendProgress(projectId, 4, "Fusao Multivista", "done", `${fused.walls.length} paredes, ${fused.slabs.length} lajes, ${fused.corners.length} cantos (apos deduplicacao)`);
 
       const maxThickRaw = await storage.getSetting("wall_thickness_max_m");
@@ -2469,6 +2475,12 @@ export async function registerRoutes(
 
   async function persistFeedback(req: any, parsed: z.infer<typeof wallFeedbackBodySchema>, projectId: number | null) {
     const sig = feedbackSignatureFromBody(parsed);
+    // Hardening anti-poisoning: apenas admin pode marcar isExemplar=true.
+    // Exemplares pulam o threshold de votos no engine — sao "verdade curada".
+    const isAdmin = req.user?.role === "admin";
+    const isExemplar = isAdmin && (!!parsed.is_exemplar || parsed.action === "exemplar");
+    // Se nao-admin tentou criar exemplar, rebaixa para "correct".
+    const effectiveAction = (!isAdmin && parsed.action === "exemplar") ? "correct" : parsed.action;
     return storage.createWallFeedback({
       projectId,
       userId: req.user?.id ?? null,
@@ -2477,8 +2489,8 @@ export async function registerRoutes(
       ...sig,
       originalClasse: parsed.original_classe || null,
       correctedClasse: parsed.corrected_classe || null,
-      action: parsed.action,
-      isExemplar: !!parsed.is_exemplar,
+      action: effectiveAction,
+      isExemplar,
       notes: parsed.notes || null,
       active: true,
     } as any);
