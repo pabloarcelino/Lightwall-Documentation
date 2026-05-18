@@ -140,12 +140,13 @@ export interface WallFeedbackEntry {
   action: string;
   isExemplar: boolean;
   clientName?: string | null; // cliente do projeto que originou o feedback (escopo cross-project por cliente)
+  userId?: number | null;     // usuario que assinou o feedback (para exigir N usuarios distintos)
 }
 
-// Minimo de sinais consistentes para sobrescrever a IA por correcao majoritaria.
-// Abaixo disso, abstem-se (preserva a classificacao original). Exemplares (curados
-// por admin) passam com 1 sinal — eles sao a fonte de "verdade alta confianca".
-const MIN_CORRECTION_SIGNALS = 2;
+// Minimo de USUARIOS DISTINTOS que devem concordar para sobrescrever a IA por
+// correcao majoritaria. Abaixo disso, abstem-se. Exemplares CURADOS por admin
+// (isExemplar=true) passam com 1 sinal — "verdade curada".
+const MIN_DISTINCT_USERS_FOR_CORRECTION = 2;
 
 // Tri-state encoding: null/unknown="x", false="0", true="1" — evita colisao entre "desconhecido" e "nao tem"
 function triState(v: boolean | null | undefined): string {
@@ -157,8 +158,16 @@ function wallFeedbackSignature(espCm: number | null, compDm: number | null, hasW
   return `${espCm ?? "x"}|${compDm ?? "x"}|${triState(hasWin)}|${triState(hasDoor)}|${origClasse ?? "x"}`;
 }
 
-// Prioridade declarada: exemplar > correct > not_wall (votos majoritarios dentro de cada nivel)
-const ACTION_PRIORITY: Record<string, number> = { exemplar: 3, correct: 2, not_wall: 1, confirm: 0 };
+// Prioridade declarada: exemplar CURADO (isExemplar=true) > correct > not_wall.
+// IMPORTANTE: tier 3 (bypass de threshold) so se concede a quem tem isExemplar=true
+// (admin-curado). Um feedback com action="exemplar" mas isExemplar=false (estimador
+// nao-admin) e tratado como "correct" — entra no pool de votos como qualquer correcao.
+function tierOf(fb: { action: string; isExemplar: boolean }): number {
+  if (fb.isExemplar === true) return 3;
+  if (fb.action === "correct" || fb.action === "exemplar") return 2;
+  if (fb.action === "not_wall") return 1;
+  return 0;
+}
 
 export function applyFeedbackOverrides(
   walls: ExtractedWall[],
@@ -185,21 +194,26 @@ export function applyFeedbackOverrides(
     const sigStrict = wallFeedbackSignature(fb.espessuraBucketCm, fb.comprimentoBucketDm, fb.hasWindow, fb.hasDoor, fb.originalClasse);
     const arr = bySig.get(sigStrict); if (arr) arr.push(fb); else bySig.set(sigStrict, [fb]);
   }
-  function pickDecisive(matches: WallFeedbackEntry[]): { sample: WallFeedbackEntry; count: number } | null {
-    // Para cada tier (exemplar > correct > not_wall), conta classes corrigidas e devolve a campea junto com o tamanho do voto.
+  function pickDecisive(matches: WallFeedbackEntry[]): { sample: WallFeedbackEntry; distinctUsers: number; tier: number } | null {
+    // Para cada tier (3>2>1), agrupa por (corrected_classe|not_wall) e conta USUARIOS DISTINTOS.
+    // Dedupe por usuario: o mesmo usuario nao "vota" varias vezes para a mesma classe.
     const tiers = [3, 2, 1];
     for (const tier of tiers) {
-      const tierMatches = matches.filter(m => (ACTION_PRIORITY[m.action] ?? 0) === tier);
+      const tierMatches = matches.filter(m => tierOf(m) === tier);
       if (tierMatches.length === 0) continue;
-      const tally = new Map<string, { count: number; sample: WallFeedbackEntry }>();
+      const tally = new Map<string, { users: Set<string>; sample: WallFeedbackEntry }>();
       for (const m of tierMatches) {
         const key = m.action === "not_wall" ? "__not_wall__" : (m.correctedClasse || "__none__");
-        const cur = tally.get(key) || { count: 0, sample: m };
-        cur.count += 1; tally.set(key, cur);
+        const cur = tally.get(key) || { users: new Set<string>(), sample: m };
+        // Identidade do votante: userId quando disponivel; caso contrario, hash do clientName
+        // para nao colapsar todos os feedbacks anonimos no mesmo balde.
+        const voter = m.userId != null ? `u${m.userId}` : `c:${m.clientName || "anon"}`;
+        cur.users.add(voter);
+        tally.set(key, cur);
       }
-      let best: { key: string; count: number; sample: WallFeedbackEntry } | null = null;
-      for (const [k, v] of tally) if (!best || v.count > best.count) best = { key: k, count: v.count, sample: v.sample };
-      if (best) return { sample: best.sample, count: best.count };
+      let best: { key: string; distinct: number; sample: WallFeedbackEntry } | null = null;
+      for (const [k, v] of tally) if (!best || v.users.size > best.distinct) best = { key: k, distinct: v.users.size, sample: v.sample };
+      if (best) return { sample: best.sample, distinctUsers: best.distinct, tier };
     }
     return null;
   }
@@ -214,23 +228,22 @@ export function applyFeedbackOverrides(
     if (matches.length === 0) { out.push(w); continue; }
     const picked = pickDecisive(matches);
     if (!picked) { out.push(w); continue; }
-    const { sample: decisive, count } = picked;
-    // Threshold de confianca: exemplar (tier 3) basta 1 sinal; correct/not_wall exige >= MIN_CORRECTION_SIGNALS.
-    const tier = ACTION_PRIORITY[decisive.action] ?? 0;
-    const required = tier >= 3 ? 1 : MIN_CORRECTION_SIGNALS;
-    if (count < required) {
-      console.log(`[FEEDBACK] Parede ${w.id}: ${count} sinal(is) abaixo do limiar (${required}) — preserva IA (sig=${sigStrict})`);
+    const { sample: decisive, distinctUsers, tier } = picked;
+    // Threshold de confianca: tier 3 (admin-curado) basta 1 usuario; tier 2/1 exige >=2 usuarios distintos.
+    const required = tier >= 3 ? 1 : MIN_DISTINCT_USERS_FOR_CORRECTION;
+    if (distinctUsers < required) {
+      console.log(`[FEEDBACK] Parede ${w.id}: ${distinctUsers} usuario(s) distinto(s) abaixo do limiar (${required}) — preserva IA (sig=${sigStrict}, tier=${tier})`);
       out.push(w);
       continue;
     }
     if (decisive.action === "not_wall" || decisive.correctedClasse === "nao_parede") {
       notWallRemoved += 1;
-      console.log(`[FEEDBACK] Parede ${w.id} removida via feedback "nao_parede" (sig=${sigStrict}, ${count} sinais)`);
+      console.log(`[FEEDBACK] Parede ${w.id} removida via feedback "nao_parede" (sig=${sigStrict}, tier=${tier}, ${distinctUsers} usuarios)`);
       continue;
     }
     const corrected = decisive.correctedClasse;
     if (corrected && (corrected === "externa" || corrected === "interna" || corrected === "muro") && corrected !== w.classe) {
-      console.log(`[FEEDBACK] Parede ${w.id} reclassificada via feedback (${decisive.action}, ${count} sinais): ${w.classe} → ${corrected} (sig=${sigStrict})`);
+      console.log(`[FEEDBACK] Parede ${w.id} reclassificada (tier=${tier}, ${distinctUsers} usuarios): ${w.classe} → ${corrected} (sig=${sigStrict})`);
       w.classe = corrected;
       w.measurement_source = `${w.measurement_source}_feedback_override`;
       w.confidence = Math.max(w.confidence, 0.9);

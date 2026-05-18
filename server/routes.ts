@@ -1428,6 +1428,7 @@ export async function registerRoutes(
           action: r.action,
           isExemplar: r.isExemplar,
           clientName: r.clientName,
+          userId: r.userId,
         }));
         if (wallFeedbacksForFusion.length > 0) {
           console.log(`[FEEDBACK] Carregados ${wallFeedbacksForFusion.length} feedback(s) ativo(s); escopo cliente=${currentProjectClient ?? "(nenhum)"}`);
