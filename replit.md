@@ -8,6 +8,7 @@ Web app for parametric budgeting of Lightwall concrete panels with AI-powered in
 - `npm run db:push`: Applies the Drizzle database schema migrations.
 - `npm run db:seed`: Populates the product catalog.
 - `npm run validate`: Validates system configuration.
+- `npx tsx server/importLeroyMerlinPrices.ts [path.xlsx]`: Importa a Tabela Unificada Leroy Merlin (aba `Tabelas_Nova Válida`, coluna **TABELA VÁLIDA** — sem frete). Cria um perfil de preço por central (`LM-MACEIO`, `LM-FORTALEZA`, `LM-NATAL`, `LM-BARRA-DA-TIJUCA`, `LM-SANTOS`, `LM-ANHANGUERA`, `LM-DOM-PEDRO`, `LM-MORUMBI`, `LM-RAPOSO-TAVARES`, `LM-SAO-JOSE`, `LM-TAMBORE`, `LM-TIETE-2`) e faz upsert de `profile_prices` casando produtos por nome normalizado (sem acentos/aspas). Idempotente. Default lê `attached_assets/Tabela_Unificada_-_Leroy_Merlim_V2_1779112601069.xlsx`.
 - `npx tsx server/tests/accuracy.ts [fixture]`: Runs the quantitative accuracy regression suite against fixtures defined in `server/tests/groundTruth.json`. Reads persisted budgets from the DB (no AI calls) and reports per-category and weighted-average accuracy vs. ground truth. Pass a substring (e.g. `patricia`) to filter.
 
 **Environment Variables:**
