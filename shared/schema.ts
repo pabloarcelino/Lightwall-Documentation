@@ -217,6 +217,39 @@ export const insertAiRunSchema = createInsertSchema(aiRuns).omit({
   createdAt: true,
 });
 
+// ===== Wall feedback (human-in-the-loop classification learning) =====
+// Cada linha = uma correcao/confirmacao humana da classe de uma parede (ou
+// "nao e parede"). Usado como override deterministico na fusao.
+export const wallFeedback = pgTable("wall_feedback", {
+  id: serial("id").primaryKey(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "set null" }),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  // Identidade da parede no momento da correcao
+  wallId: varchar("wall_id", { length: 50 }).notNull(),
+  nivel: varchar("nivel", { length: 100 }),
+  // Atributos usados para casar paredes futuras (assinatura)
+  espessuraBucketCm: integer("espessura_bucket_cm"), // ex.: 10 para 0.10m
+  comprimentoBucketDm: integer("comprimento_bucket_dm"), // ex.: 34 para 3.4m
+  hasWindow: boolean("has_window"),
+  hasDoor: boolean("has_door"),
+  reviewReasonBucket: varchar("review_reason_bucket", { length: 50 }),
+  // Decisao
+  originalClasse: varchar("original_classe", { length: 20 }),  // o que a IA disse
+  correctedClasse: varchar("corrected_classe", { length: 20 }), // o que o humano disse: externa|interna|muro|nao_parede
+  action: varchar("action", { length: 20 }).notNull(), // "confirm" | "correct" | "exemplar" | "not_wall"
+  isExemplar: boolean("is_exemplar").notNull().default(false),
+  notes: text("notes"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertWallFeedbackSchema = createInsertSchema(wallFeedback).omit({
+  id: true,
+  createdAt: true,
+});
+export type WallFeedback = typeof wallFeedback.$inferSelect;
+export type InsertWallFeedback = z.infer<typeof insertWallFeedbackSchema>;
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 

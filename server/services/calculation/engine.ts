@@ -130,10 +130,92 @@ function slabSignature(s: ExtractedSlab): string {
   return `${s.nivel}|${s.classe}|${Math.round(s.area_m2 * 20)}`;
 }
 
+export interface WallFeedbackEntry {
+  espessuraBucketCm: number | null;
+  comprimentoBucketDm: number | null;
+  hasWindow: boolean | null;
+  hasDoor: boolean | null;
+  originalClasse: string | null;
+  correctedClasse: string | null;
+  action: string;
+  isExemplar: boolean;
+}
+
+// Tri-state encoding: null/unknown="x", false="0", true="1" — evita colisao entre "desconhecido" e "nao tem"
+function triState(v: boolean | null | undefined): string {
+  if (v === true) return "1";
+  if (v === false) return "0";
+  return "x";
+}
+function wallFeedbackSignature(espCm: number | null, compDm: number | null, hasWin: boolean | null, hasDoor: boolean | null, origClasse: string | null): string {
+  return `${espCm ?? "x"}|${compDm ?? "x"}|${triState(hasWin)}|${triState(hasDoor)}|${origClasse ?? "x"}`;
+}
+
+// Prioridade declarada: exemplar > correct > not_wall (votos majoritarios dentro de cada nivel)
+const ACTION_PRIORITY: Record<string, number> = { exemplar: 3, correct: 2, not_wall: 1, confirm: 0 };
+
+export function applyFeedbackOverrides(walls: ExtractedWall[], feedbacks: WallFeedbackEntry[]): { walls: ExtractedWall[]; overridesApplied: number; notWallRemoved: number } {
+  if (!feedbacks || feedbacks.length === 0) return { walls, overridesApplied: 0, notWallRemoved: 0 };
+  const bySig = new Map<string, WallFeedbackEntry[]>();
+  for (const fb of feedbacks) {
+    if (fb.action === "confirm") continue;
+    // Tenta as duas assinaturas: com janela/porta conhecidos e com "desconhecido" (cross-project, sem flag salvo)
+    const sigStrict = wallFeedbackSignature(fb.espessuraBucketCm, fb.comprimentoBucketDm, fb.hasWindow, fb.hasDoor, fb.originalClasse);
+    const arr = bySig.get(sigStrict); if (arr) arr.push(fb); else bySig.set(sigStrict, [fb]);
+  }
+  function pickDecisive(matches: WallFeedbackEntry[]): WallFeedbackEntry {
+    // Votos: para cada nivel de prioridade do mais alto ao mais baixo, conta classes corrigidas; vencedor por contagem.
+    const tiers = [3, 2, 1];
+    for (const tier of tiers) {
+      const tierMatches = matches.filter(m => (ACTION_PRIORITY[m.action] ?? 0) === tier);
+      if (tierMatches.length === 0) continue;
+      const tally = new Map<string, { count: number; sample: WallFeedbackEntry }>();
+      for (const m of tierMatches) {
+        const key = m.action === "not_wall" ? "__not_wall__" : (m.correctedClasse || "__none__");
+        const cur = tally.get(key) || { count: 0, sample: m };
+        cur.count += 1; tally.set(key, cur);
+      }
+      let best: { key: string; count: number; sample: WallFeedbackEntry } | null = null;
+      for (const [k, v] of tally) if (!best || v.count > best.count) best = { key: k, count: v.count, sample: v.sample };
+      if (best) return best.sample;
+    }
+    return matches[0];
+  }
+  let overridesApplied = 0;
+  let notWallRemoved = 0;
+  const out: ExtractedWall[] = [];
+  for (const w of walls) {
+    const espCm = Math.round((w.espessura_m || 0) * 100);
+    const compDm = Math.round((w.comprimento_m || 0) * 10);
+    const sigStrict = wallFeedbackSignature(espCm, compDm, !!w.has_window, !!w.has_door, w.classe);
+    const matches = bySig.get(sigStrict) || [];
+    if (matches.length === 0) { out.push(w); continue; }
+    const decisive = pickDecisive(matches);
+    if (decisive.action === "not_wall" || decisive.correctedClasse === "nao_parede") {
+      notWallRemoved += 1;
+      console.log(`[FEEDBACK] Parede ${w.id} removida via feedback "nao_parede" (sig=${sigStrict})`);
+      continue;
+    }
+    const corrected = decisive.correctedClasse;
+    if (corrected && (corrected === "externa" || corrected === "interna" || corrected === "muro") && corrected !== w.classe) {
+      console.log(`[FEEDBACK] Parede ${w.id} reclassificada via feedback (${decisive.action}): ${w.classe} → ${corrected} (sig=${sigStrict})`);
+      w.classe = corrected;
+      w.measurement_source = `${w.measurement_source}_feedback_override`;
+      w.confidence = Math.max(w.confidence, 0.9);
+      w.needs_review = false;
+      w.review_reason = undefined;
+      overridesApplied += 1;
+    }
+    out.push(w);
+  }
+  return { walls: out, overridesApplied, notWallRemoved };
+}
+
 export function fusionMultiView(
   geometries: GeometryResult[],
   tableData: TableData | null,
   buildingType?: string,
+  feedbacks?: WallFeedbackEntry[],
 ): { walls: ExtractedWall[]; slabs: ExtractedSlab[]; corners: ExtractedCorner[] } {
   let allWalls: ExtractedWall[] = [];
   let allSlabs: ExtractedSlab[] = [];
@@ -753,7 +835,19 @@ export function fusionMultiView(
     console.warn(`[FUSAO] Auditoria de perimetro falhou: ${auditErr?.message || auditErr}`);
   }
 
-  return { walls: deduplicatedWalls, slabs: deduplicatedSlabs, corners: allCorners };
+  // ===== Feedback overrides (human-in-the-loop) =====
+  // Aplicado por ultimo: depois da fusao, dedup, auditoria — para que a decisao
+  // humana de projetos anteriores tenha a palavra final sobre a classificacao.
+  let finalWalls = deduplicatedWalls;
+  if (feedbacks && feedbacks.length > 0) {
+    const r = applyFeedbackOverrides(deduplicatedWalls, feedbacks);
+    finalWalls = r.walls;
+    if (r.overridesApplied > 0 || r.notWallRemoved > 0) {
+      console.log(`[FUSAO] Feedback humano aplicado: ${r.overridesApplied} reclassificacao(oes), ${r.notWallRemoved} parede(s) removida(s) como "nao e parede"`);
+    }
+  }
+
+  return { walls: finalWalls, slabs: deduplicatedSlabs, corners: allCorners };
 }
 
 function calculateWallPanels(wall: ExtractedWall): WallItem {

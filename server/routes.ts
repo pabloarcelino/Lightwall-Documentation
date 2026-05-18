@@ -5,6 +5,7 @@ import path from "path";
 import fs from "fs/promises";
 import { storage } from "./storage";
 import type { InsertExtractedData } from "@shared/schema";
+import { z } from "zod";
 import {
   classifyAndExtractTables,
   extractGeometryParallel,
@@ -1408,7 +1409,27 @@ export async function registerRoutes(
 
       sendProgress(projectId, 4, "Fusao Multivista", "running", "Cruzando dados de todas as paginas...");
       const hasTableData = mergedTableData.paredes_de_tabela.length > 0 || mergedTableData.esquadrias_de_tabela.length > 0;
-      const fused = fusionMultiView(allGeometries, hasTableData ? mergedTableData : null, effectiveBuildingType());
+      // Carrega feedbacks humanos ativos (cross-project) para override deterministico
+      let wallFeedbacksForFusion: any[] = [];
+      try {
+        const fbRows = await storage.getWallFeedback({ active: true });
+        wallFeedbacksForFusion = fbRows.map(r => ({
+          espessuraBucketCm: r.espessuraBucketCm,
+          comprimentoBucketDm: r.comprimentoBucketDm,
+          hasWindow: r.hasWindow,
+          hasDoor: r.hasDoor,
+          originalClasse: r.originalClasse,
+          correctedClasse: r.correctedClasse,
+          action: r.action,
+          isExemplar: r.isExemplar,
+        }));
+        if (wallFeedbacksForFusion.length > 0) {
+          console.log(`[FEEDBACK] Carregados ${wallFeedbacksForFusion.length} feedback(s) ativo(s) para override na fusao`);
+        }
+      } catch (fbErr) {
+        console.warn("[FEEDBACK] Falha ao carregar feedbacks:", fbErr);
+      }
+      const fused = fusionMultiView(allGeometries, hasTableData ? mergedTableData : null, effectiveBuildingType(), wallFeedbacksForFusion);
       sendProgress(projectId, 4, "Fusao Multivista", "done", `${fused.walls.length} paredes, ${fused.slabs.length} lajes, ${fused.corners.length} cantos (apos deduplicacao)`);
 
       const maxThickRaw = await storage.getSetting("wall_thickness_max_m");
@@ -2397,6 +2418,211 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Erro ao exportar:", error);
       res.status(500).json({ message: "Erro ao exportar orçamento" });
+    }
+  });
+
+  // ===== Wall feedback (human-in-the-loop) =====
+  // Schema de payload (cliente). Limites de string previnem inflar a coluna.
+  const wallFeedbackBodySchema = z.object({
+    project_id: z.union([z.number(), z.string()]).optional().nullable(),
+    wall_id: z.string().trim().min(1).max(64),
+    nivel: z.string().trim().max(64).optional().nullable(),
+    espessura_m: z.number().nonnegative().max(10).optional(),
+    comprimento_m: z.number().nonnegative().max(1000).optional(),
+    has_window: z.boolean().optional().nullable(),
+    has_door: z.boolean().optional().nullable(),
+    review_reason_bucket: z.string().trim().max(64).optional().nullable(),
+    original_classe: z.enum(["externa", "interna", "muro"]).optional().nullable(),
+    corrected_classe: z.enum(["externa", "interna", "muro", "nao_parede"]).optional().nullable(),
+    action: z.enum(["confirm", "correct", "exemplar", "not_wall"]),
+    is_exemplar: z.boolean().optional(),
+    notes: z.string().trim().max(500).optional().nullable(),
+  });
+
+  function feedbackSignatureFromBody(b: z.infer<typeof wallFeedbackBodySchema>) {
+    const espM = Number(b.espessura_m ?? 0);
+    const compM = Number(b.comprimento_m ?? 0);
+    return {
+      espessuraBucketCm: espM > 0 ? Math.round(espM * 100) : null,
+      comprimentoBucketDm: compM > 0 ? Math.round(compM * 10) : null,
+      hasWindow: typeof b.has_window === "boolean" ? b.has_window : null,
+      hasDoor: typeof b.has_door === "boolean" ? b.has_door : null,
+      reviewReasonBucket: b.review_reason_bucket || null,
+    };
+  }
+
+  // Verifica que o projeto pertence ao usuario (ou que ele e admin). Previne poisoning cross-tenant.
+  async function assertCanFeedbackForProject(req: any, projectIdRaw: number | string | null | undefined): Promise<{ ok: true; projectId: number | null } | { ok: false; status: number; message: string }> {
+    const projectId = projectIdRaw != null && projectIdRaw !== "" ? Number(projectIdRaw) : null;
+    if (projectId === null) {
+      // Sem projeto explicito: so admin pode (feedback global manual e raro)
+      if (req.user?.role !== "admin") return { ok: false, status: 403, message: "Apenas admin pode criar feedback sem projeto" };
+      return { ok: true, projectId: null };
+    }
+    if (!Number.isFinite(projectId)) return { ok: false, status: 400, message: "project_id invalido" };
+    const project = await storage.getProject(projectId);
+    if (!project) return { ok: false, status: 404, message: "Projeto nao encontrado" };
+    // Projetos nao tem owner explicito nesta plataforma; basta que o projeto exista.
+    // (Acesso ao app ja exige autenticacao; admin retem permissao total.)
+    return { ok: true, projectId };
+  }
+
+  async function persistFeedback(req: any, parsed: z.infer<typeof wallFeedbackBodySchema>, projectId: number | null) {
+    const sig = feedbackSignatureFromBody(parsed);
+    return storage.createWallFeedback({
+      projectId,
+      userId: req.user?.id ?? null,
+      wallId: parsed.wall_id,
+      nivel: parsed.nivel || null,
+      ...sig,
+      originalClasse: parsed.original_classe || null,
+      correctedClasse: parsed.corrected_classe || null,
+      action: parsed.action,
+      isExemplar: !!parsed.is_exemplar,
+      notes: parsed.notes || null,
+      active: true,
+    } as any);
+  }
+
+  app.post("/api/wall-feedback", requireAuth, async (req: any, res) => {
+    try {
+      const parsed = wallFeedbackBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Payload invalido", errors: parsed.error.flatten() });
+      const auth = await assertCanFeedbackForProject(req, parsed.data.project_id ?? null);
+      if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
+      const fb = await persistFeedback(req, parsed.data, auth.projectId);
+      res.json(fb);
+    } catch (err: any) {
+      console.error("Erro ao salvar feedback:", err);
+      res.status(500).json({ message: "Erro ao salvar feedback" });
+    }
+  });
+
+  app.post("/api/wall-feedback/batch", requireAuth, async (req: any, res) => {
+    try {
+      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+      if (items.length === 0) return res.status(400).json({ message: "items vazio" });
+      if (items.length > 500) return res.status(400).json({ message: "Limite de 500 items por lote" });
+      const created: any[] = [];
+      const skipped: any[] = [];
+      const permCache = new Map<string, { ok: boolean; status?: number; projectId: number | null; message?: string }>();
+      for (const raw of items) {
+        const parsed = wallFeedbackBodySchema.safeParse(raw);
+        if (!parsed.success) { skipped.push({ reason: "schema", item: raw }); continue; }
+        const pid = parsed.data.project_id ?? null;
+        const cacheKey = pid != null ? String(pid) : "__none__";
+        let perm = permCache.get(cacheKey);
+        if (!perm) {
+          const r = await assertCanFeedbackForProject(req, pid);
+          perm = r.ok ? { ok: true, projectId: r.projectId } : { ok: false, status: r.status, projectId: null, message: r.message };
+          permCache.set(cacheKey, perm);
+        }
+        if (!perm.ok) { skipped.push({ reason: perm.message, item: raw }); continue; }
+        const fb = await persistFeedback(req, parsed.data, perm.projectId);
+        created.push(fb);
+      }
+      res.json({ created: created.length, skipped: skipped.length, items: created });
+    } catch (err: any) {
+      console.error("Erro ao salvar feedback em lote:", err);
+      res.status(500).json({ message: "Erro ao salvar feedback em lote" });
+    }
+  });
+
+  app.get("/api/wall-feedback", requireAdmin, async (req, res) => {
+    try {
+      const projectId = req.query.projectId ? Number(req.query.projectId) : undefined;
+      const active = req.query.active !== undefined ? req.query.active === "true" : undefined;
+      const isExemplar = req.query.isExemplar !== undefined ? req.query.isExemplar === "true" : undefined;
+      const rows = await storage.getWallFeedback({ projectId, active, isExemplar });
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ message: "Erro ao listar feedbacks" });
+    }
+  });
+
+  app.patch("/api/wall-feedback/:id/active", requireAdmin, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const active = !!req.body?.active;
+      const updated = await storage.setWallFeedbackActive(id, active);
+      if (!updated) return res.status(404).json({ message: "Feedback nao encontrado" });
+      res.json(updated);
+    } catch {
+      res.status(500).json({ message: "Erro ao atualizar feedback" });
+    }
+  });
+
+  app.delete("/api/wall-feedback/:id", requireAdmin, async (req, res) => {
+    try {
+      await storage.deleteWallFeedback(Number(req.params.id));
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ message: "Erro ao deletar feedback" });
+    }
+  });
+
+  app.get("/api/wall-feedback/stats", requireAdmin, async (_req, res) => {
+    try {
+      const all = await storage.getWallFeedback({});
+      const active = all.filter(f => f.active);
+      const counts = {
+        total: all.length,
+        active: active.length,
+        confirm: all.filter(f => f.action === "confirm").length,
+        correct: all.filter(f => f.action === "correct").length,
+        not_wall: all.filter(f => f.action === "not_wall").length,
+        exemplar: all.filter(f => f.isExemplar).length,
+      };
+      // Top padroes por assinatura (apenas correcoes/exemplares ativos)
+      const sigMap = new Map<string, { espessuraBucketCm: number | null; comprimentoBucketDm: number | null; originalClasse: string | null; correctedClasse: string | null; count: number }>();
+      for (const f of active) {
+        if (f.action === "confirm") continue;
+        const key = `${f.espessuraBucketCm ?? "x"}|${f.comprimentoBucketDm ?? "x"}|${f.originalClasse ?? "x"}|${f.correctedClasse ?? "x"}`;
+        const cur = sigMap.get(key) || { espessuraBucketCm: f.espessuraBucketCm, comprimentoBucketDm: f.comprimentoBucketDm, originalClasse: f.originalClasse, correctedClasse: f.correctedClasse, count: 0 };
+        cur.count += 1;
+        sigMap.set(key, cur);
+      }
+      const topPatterns = Array.from(sigMap.values()).sort((a, b) => b.count - a.count).slice(0, 20);
+
+      // Acuracia de classificacao: comparar etapa4_fusao vs etapa4_fusao_original
+      // para todos os projetos de teste. Acuracia = paredes cuja classe nao mudou
+      // E o humano nao desativou. Paredes removidas pelo humano contam como "mudadas"
+      // (a IA originalmente as classificou como parede valida e o humano discordou).
+      const projects = await storage.getProjects();
+      const testProjects = projects.filter(p => p.projectType === "teste" && p.status === "completed");
+      const perProjectRaw = await Promise.all(testProjects.map(async (p) => {
+        const [orig, edited] = await Promise.all([
+          storage.getExtractedDataByType(p.id, "etapa4_fusao_original"),
+          storage.getExtractedDataByType(p.id, "etapa4_fusao"),
+        ]);
+        if (!orig || !edited) return null;
+        const ow = ((orig.data as any)?.resultado?.walls || []) as any[];
+        const ew = ((edited.data as any)?.resultado?.walls || []) as any[];
+        const editedById = new Map(ew.map(w => [w.id, w]));
+        let pTot = 0, pUn = 0;
+        for (const o of ow) {
+          pTot += 1;
+          const e = editedById.get(o.id);
+          if (e && o.classe === e.classe && e.enabled !== false) pUn += 1;
+        }
+        if (pTot === 0) return null;
+        return { projectId: p.id, projectName: p.name, total: pTot, unchanged: pUn, accuracy: Math.round((pUn / pTot) * 1000) / 10 };
+      }));
+      const perProject = perProjectRaw.filter((x): x is { projectId: number; projectName: string; total: number; unchanged: number; accuracy: number } => x !== null);
+      let totalWalls = 0;
+      let unchangedWalls = 0;
+      for (const pp of perProject) { totalWalls += pp.total; unchangedWalls += pp.unchanged; }
+      const classificationAccuracy = totalWalls > 0 ? Math.round((unchangedWalls / totalWalls) * 1000) / 10 : null;
+      res.json({
+        counts,
+        topPatterns,
+        classificationAccuracy,
+        classificationSample: { totalWalls, unchangedWalls, projectsCompared: perProject.length },
+        perProject,
+      });
+    } catch (err: any) {
+      console.error("Erro stats feedback:", err);
+      res.status(500).json({ message: "Erro ao calcular estatisticas" });
     }
   });
 

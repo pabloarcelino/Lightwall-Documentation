@@ -14,8 +14,36 @@ import Calibracao from "@/pages/Calibracao";
 import Usuarios from "@/pages/Usuarios";
 import TabelasPreco from "@/pages/TabelasPreco";
 import GuiaExterno from "@/pages/GuiaExterno";
+import AprendizadoIA from "@/pages/AprendizadoIA";
 import Login from "@/pages/Login";
 import { Loader2 } from "lucide-react";
+import { Link } from "wouter";
+import { Button } from "@/components/ui/button";
+
+function AdminGuard({ children }: { children: React.ReactNode }) {
+  const { data: user, isLoading } = useQuery<{ role?: string } | null>({
+    queryKey: ["/api/auth/me"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    staleTime: Infinity,
+  });
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin lw-text-accent" />
+      </div>
+    );
+  }
+  if (!user || user.role !== "admin") {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-6 text-center">
+        <p className="text-lg font-medium">Acesso restrito</p>
+        <p className="text-sm text-muted-foreground">Esta pagina e exclusiva para administradores.</p>
+        <Link href="/"><Button variant="outline" data-testid="link-home">Voltar ao inicio</Button></Link>
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
 
 function Router() {
   return (
@@ -30,6 +58,9 @@ function Router() {
       <Route path="/usuarios" component={Usuarios} />
       <Route path="/tabelas-preco" component={TabelasPreco} />
       <Route path="/guia" component={GuiaExterno} />
+      <Route path="/aprendizado-ia">
+        {() => <AdminGuard><AprendizadoIA /></AdminGuard>}
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );

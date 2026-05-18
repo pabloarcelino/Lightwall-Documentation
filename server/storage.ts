@@ -11,6 +11,7 @@ import {
   users,
   pricingProfiles,
   profilePrices,
+  wallFeedback,
   type Product,
   type InsertProduct,
   type Project,
@@ -30,6 +31,8 @@ import {
   type InsertPricingProfile,
   type ProfilePrice,
   type InsertProfilePrice,
+  type WallFeedback,
+  type InsertWallFeedback,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -98,6 +101,12 @@ export interface IStorage {
   getProfilePrice(profileId: number, sku: string): Promise<ProfilePrice | undefined>;
   upsertProfilePrice(profileId: number, sku: string, unitPrice: string): Promise<ProfilePrice>;
   deleteProfilePrice(profileId: number, sku: string): Promise<void>;
+
+  // ===== Wall feedback (human-in-the-loop) =====
+  createWallFeedback(fb: InsertWallFeedback): Promise<WallFeedback>;
+  getWallFeedback(filters?: { projectId?: number; active?: boolean; isExemplar?: boolean }): Promise<WallFeedback[]>;
+  setWallFeedbackActive(id: number, active: boolean): Promise<WallFeedback | undefined>;
+  deleteWallFeedback(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -444,6 +453,30 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteProfilePrice(profileId: number, sku: string): Promise<void> {
     await db.delete(profilePrices).where(and(eq(profilePrices.profileId, profileId), eq(profilePrices.sku, sku)));
+  }
+
+  // ===== Wall feedback =====
+  async createWallFeedback(fb: InsertWallFeedback): Promise<WallFeedback> {
+    const [created] = await db.insert(wallFeedback).values(fb).returning();
+    return created;
+  }
+  async getWallFeedback(filters?: { projectId?: number; active?: boolean; isExemplar?: boolean }): Promise<WallFeedback[]> {
+    const conds = [] as any[];
+    if (filters?.projectId !== undefined) conds.push(eq(wallFeedback.projectId, filters.projectId));
+    if (filters?.active !== undefined) conds.push(eq(wallFeedback.active, filters.active));
+    if (filters?.isExemplar !== undefined) conds.push(eq(wallFeedback.isExemplar, filters.isExemplar));
+    const q = db.select().from(wallFeedback);
+    const rows = conds.length > 0
+      ? await q.where(conds.length === 1 ? conds[0] : and(...conds)).orderBy(desc(wallFeedback.createdAt))
+      : await q.orderBy(desc(wallFeedback.createdAt));
+    return rows;
+  }
+  async setWallFeedbackActive(id: number, active: boolean): Promise<WallFeedback | undefined> {
+    const [updated] = await db.update(wallFeedback).set({ active }).where(eq(wallFeedback.id, id)).returning();
+    return updated;
+  }
+  async deleteWallFeedback(id: number): Promise<void> {
+    await db.delete(wallFeedback).where(eq(wallFeedback.id, id));
   }
 }
 

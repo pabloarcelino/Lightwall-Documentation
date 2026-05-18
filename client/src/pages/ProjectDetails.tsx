@@ -707,10 +707,11 @@ export default function ProjectDetails() {
           {project.projectType === "teste" && (
             <div className="w-full mt-3 border-t border-border/40 pt-3">
               <p className="text-xs font-medium text-muted-foreground mb-2">m² Real por Categoria (para acuracia por area):</p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 {([
                   { key: "realAreaExt", label: "Par. Externas" },
                   { key: "realAreaInt", label: "Par. Internas" },
+                  { key: "realAreaMuros", label: "Muros" },
                   { key: "realAreaPiso", label: "Laje Piso" },
                   { key: "realAreaCoberta", label: "Laje Coberta" },
                 ] as const).map(({ key, label }) => (

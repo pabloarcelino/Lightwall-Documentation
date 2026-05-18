@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -22,8 +24,15 @@ import {
   Layers,
   SquareStack,
   DoorOpen,
+  HelpCircle,
+  Sparkles,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  GraduationCap,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 interface Esquadria {
   tipo: string;
@@ -47,6 +56,9 @@ interface EditableWall {
   has_window: boolean;
   esquadrias: Esquadria[];
   enabled: boolean;
+  needs_review?: boolean;
+  review_reason?: string;
+  painelType?: "2P" | "SP" | "Muro";
 }
 
 interface EditableSlab {
@@ -84,6 +96,47 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
   const [saving, setSaving] = useState(false);
   const [expandedWalls, setExpandedWalls] = useState<Set<string>>(new Set());
   const [hasChanges, setHasChanges] = useState(false);
+  const [selectedWallIds, setSelectedWallIds] = useState<Set<string>>(new Set());
+  const [selectedSlabIds, setSelectedSlabIds] = useState<Set<string>>(new Set());
+  const [bulkClasseWall, setBulkClasseWall] = useState<string>("");
+  const [bulkPainelType, setBulkPainelType] = useState<string>("");
+  const [bulkClasseSlab, setBulkClasseSlab] = useState<string>("");
+  const [exemplarMode, setExemplarMode] = useState(false);
+
+  // Dedupe in-memory: evita registrar feedback identico (mesma parede+acao+classe) em janela curta.
+  const recentFeedbackKeys = (window as any).__lwFeedbackKeys || ((window as any).__lwFeedbackKeys = new Map<string, number>());
+  async function sendFeedback(payload: any) {
+    const key = `${payload.project_id}|${payload.wall_id}|${payload.action}|${payload.corrected_classe ?? ""}`;
+    const now = Date.now();
+    const last = recentFeedbackKeys.get(key);
+    if (last && (now - last) < 5000) return;
+    recentFeedbackKeys.set(key, now);
+    // Limpa entradas antigas (> 30s)
+    for (const [k, t] of recentFeedbackKeys) if (now - t > 30000) recentFeedbackKeys.delete(k);
+    try {
+      await apiRequest("POST", "/api/wall-feedback", payload);
+    } catch (e: any) {
+      console.warn("wall-feedback falhou:", e);
+      // 403/projeto-nao-pertence: avisa silenciosamente; 4xx/5xx outros tambem nao bloqueiam
+    }
+  }
+
+  function buildFeedbackPayload(w: EditableWall, action: "confirm" | "correct" | "exemplar" | "not_wall", originalClasse: string | null, correctedClasse: string | null) {
+    return {
+      project_id: Number(projectId),
+      wall_id: w.id,
+      nivel: w.nivel,
+      espessura_m: w.espessura_m,
+      comprimento_m: w.comprimento_m,
+      has_window: !!w.has_window,
+      has_door: !!w.has_door,
+      review_reason_bucket: w.review_reason ? (w.review_reason.split(" ")[0] || null) : null,
+      original_classe: originalClasse,
+      corrected_classe: correctedClasse,
+      action,
+      is_exemplar: action === "exemplar" || exemplarMode,
+    };
+  }
 
   useEffect(() => {
     const fusao = extractedData?.find((d: any) => d.elementType === "etapa4_fusao");
@@ -104,7 +157,8 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
   const updateWall = (idx: number, field: string, value: any) => {
     setWalls(prev => {
       const next = [...prev];
-      next[idx] = { ...next[idx], [field]: value };
+      const before = next[idx];
+      next[idx] = { ...before, [field]: value };
       if (field === "esquadrias") {
         let openingArea = 0;
         for (const esq of (value as Esquadria[])) {
@@ -112,9 +166,75 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
         }
         next[idx].opening_area_m2 = Math.round(openingArea * 100) / 100;
       }
+      // Correcao de classe registra feedback automatico
+      if (field === "classe" && value !== before.classe) {
+        sendFeedback(buildFeedbackPayload(before, exemplarMode ? "exemplar" : "correct", before.classe, value));
+      }
+      if (field === "enabled" && value === false) {
+        sendFeedback(buildFeedbackPayload(before, "not_wall", before.classe, "nao_parede"));
+      }
       return next;
     });
     markChanged();
+  };
+
+  const toggleWallSelected = (id: string) => {
+    setSelectedWallIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSlabSelected = (id: string) => {
+    setSelectedSlabIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const selectAllWalls = (checked: boolean) => {
+    if (checked) setSelectedWallIds(new Set(walls.map(w => w.id))); else setSelectedWallIds(new Set());
+  };
+  const selectAllSlabs = (checked: boolean) => {
+    if (checked) setSelectedSlabIds(new Set(slabs.map(s => s.id))); else setSelectedSlabIds(new Set());
+  };
+
+  const applyBulkWalls = () => {
+    if (selectedWallIds.size === 0) return;
+    setWalls(prev => prev.map(w => {
+      if (!selectedWallIds.has(w.id)) return w;
+      const updated: EditableWall = { ...w };
+      if (bulkClasseWall && (bulkClasseWall === "externa" || bulkClasseWall === "interna" || bulkClasseWall === "muro")) {
+        if (updated.classe !== bulkClasseWall) {
+          sendFeedback(buildFeedbackPayload(w, exemplarMode ? "exemplar" : "correct", w.classe, bulkClasseWall));
+          updated.classe = bulkClasseWall as EditableWall["classe"];
+        }
+      }
+      if (bulkPainelType && (bulkPainelType === "2P" || bulkPainelType === "SP" || bulkPainelType === "Muro")) {
+        updated.painelType = bulkPainelType as EditableWall["painelType"];
+      }
+      return updated;
+    }));
+    markChanged();
+    toast({ title: "Lote aplicado", description: `${selectedWallIds.size} parede(s) atualizada(s)` });
+    setBulkClasseWall(""); setBulkPainelType(""); setSelectedWallIds(new Set());
+  };
+
+  const applyBulkSlabs = () => {
+    if (selectedSlabIds.size === 0 || !bulkClasseSlab) return;
+    setSlabs(prev => prev.map(s => selectedSlabIds.has(s.id) ? { ...s, classe: bulkClasseSlab as EditableSlab["classe"] } : s));
+    markChanged();
+    toast({ title: "Lote aplicado", description: `${selectedSlabIds.size} laje(s) atualizada(s)` });
+    setBulkClasseSlab(""); setSelectedSlabIds(new Set());
+  };
+
+  const confirmWall = (w: EditableWall) => {
+    sendFeedback(buildFeedbackPayload(w, "confirm", w.classe, w.classe));
+    toast({ title: "Confirmado", description: `${w.id}: classificacao "${w.classe}" confirmada` });
+  };
+  const exemplifyWall = (w: EditableWall) => {
+    sendFeedback(buildFeedbackPayload(w, "exemplar", w.classe, w.classe));
+    toast({ title: "Marcada como exemplo", description: `${w.id} ira reforcar futuras classificacoes` });
   };
 
   const updateSlab = (idx: number, field: string, value: any) => {
@@ -254,15 +374,21 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
           <h3 className="text-lg font-semibold">Editor de Quantitativos</h3>
           <p className="text-sm text-muted-foreground">Edite paredes, lajes e aberturas. Desative elementos que nao devem ser considerados no orcamento.</p>
         </div>
-        <Button
-          onClick={handleRecalculate}
-          disabled={saving || !hasChanges}
-          className="gap-2"
-          data-testid="button-recalculate"
-        >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
-          Recalcular Orcamento
-        </Button>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-xs cursor-pointer select-none" title="Marca as correcoes deste projeto como exemplo, dando-lhes mais peso na aprendizagem da IA">
+            <Switch checked={exemplarMode} onCheckedChange={setExemplarMode} data-testid="switch-exemplar-mode" />
+            <span className="flex items-center gap-1"><GraduationCap className="h-3.5 w-3.5" /> Modo Exemplificar</span>
+          </label>
+          <Button
+            onClick={handleRecalculate}
+            disabled={saving || !hasChanges}
+            className="gap-2"
+            data-testid="button-recalculate"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
+            Recalcular Orcamento
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
@@ -291,15 +417,48 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <CardTitle className="flex items-center gap-2">
               <Layers className="h-5 w-5" />
               Paredes ({walls.length})
             </CardTitle>
-            <Button variant="outline" size="sm" onClick={addWall} className="gap-1" data-testid="button-add-wall">
-              <Plus className="h-3 w-3" /> Adicionar Parede
-            </Button>
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Checkbox
+                  checked={selectedWallIds.size > 0 && selectedWallIds.size === walls.length}
+                  onCheckedChange={(c) => selectAllWalls(!!c)}
+                  data-testid="checkbox-select-all-walls"
+                />
+                Selecionar todas
+              </label>
+              <Button variant="outline" size="sm" onClick={addWall} className="gap-1" data-testid="button-add-wall">
+                <Plus className="h-3 w-3" /> Adicionar Parede
+              </Button>
+            </div>
           </div>
+          {selectedWallIds.size > 0 && (
+            <div className="mt-3 flex items-center gap-2 flex-wrap rounded-md border bg-muted/30 p-2 text-xs" data-testid="bulk-wall-bar">
+              <span className="font-medium">{selectedWallIds.size} selecionada(s):</span>
+              <Select value={bulkClasseWall} onValueChange={setBulkClasseWall}>
+                <SelectTrigger className="h-7 w-32 text-xs" data-testid="select-bulk-classe-wall"><SelectValue placeholder="Classe..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="externa">Externa</SelectItem>
+                  <SelectItem value="interna">Interna</SelectItem>
+                  <SelectItem value="muro">Muro</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={bulkPainelType} onValueChange={setBulkPainelType}>
+                <SelectTrigger className="h-7 w-32 text-xs" data-testid="select-bulk-painel"><SelectValue placeholder="Painel..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="2P">2P</SelectItem>
+                  <SelectItem value="SP">SP</SelectItem>
+                  <SelectItem value="Muro">Muro</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button size="sm" className="h-7 text-xs" onClick={applyBulkWalls} disabled={!bulkClasseWall && !bulkPainelType} data-testid="button-apply-bulk-walls">Aplicar</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSelectedWallIds(new Set())}>Limpar</Button>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           <div className="space-y-2">
@@ -316,6 +475,12 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
                   className="flex items-center gap-3 px-4 py-3 cursor-pointer"
                   onClick={() => toggleWallExpanded(wall.id)}
                 >
+                  <Checkbox
+                    checked={selectedWallIds.has(wall.id)}
+                    onCheckedChange={() => toggleWallSelected(wall.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    data-testid={`checkbox-wall-${idx}`}
+                  />
                   {expandedWalls.has(wall.id) ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                   <Switch
                     checked={wall.enabled}
@@ -331,9 +496,68 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
                   </Badge>
                   <span className="text-sm font-medium">{wall.id}</span>
                   <span className="text-xs text-muted-foreground">{wall.nivel}</span>
+                  {wall.needs_review && (
+                    <Popover>
+                      <PopoverTrigger asChild onClick={(e) => e.stopPropagation()}>
+                        <Badge variant="outline" className="text-[10px] gap-1 border-amber-500/40 text-amber-700 dark:text-amber-400 cursor-pointer hover-elevate" data-testid={`badge-review-${idx}`}>
+                          <AlertTriangle className="h-3 w-3" /> revisar
+                        </Badge>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-80 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <div className="space-y-2">
+                          <div className="font-semibold flex items-center gap-1"><HelpCircle className="h-3.5 w-3.5" /> Por que a IA marcou para revisar?</div>
+                          <p className="text-muted-foreground">{wall.review_reason || "Sem detalhes."}</p>
+                          <div className="text-[10px] text-muted-foreground">
+                            Confianca: {(wall.confidence * 100).toFixed(0)}% · Fonte: {wall.measurement_source}
+                          </div>
+                          <div className="flex gap-2 pt-1">
+                            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => confirmWall(wall)} data-testid={`button-confirm-${idx}`}>
+                              <CheckCircle2 className="h-3 w-3" /> Confirmar
+                            </Button>
+                            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => exemplifyWall(wall)} data-testid={`button-exemplify-${idx}`}>
+                              <Sparkles className="h-3 w-3" /> Exemplificar
+                            </Button>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground">Use a "Classe" abaixo para corrigir, ou desligue o switch para marcar como "nao e parede".</p>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  )}
+                  {!wall.needs_review && (
+                    <Popover>
+                      <PopoverTrigger asChild onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-foreground"
+                          aria-label="Por que IA decidiu?"
+                          data-testid={`button-why-${idx}`}
+                        >
+                          <HelpCircle className="h-3.5 w-3.5" />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-72 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <div className="space-y-2">
+                          <div className="font-semibold">Decisao da IA</div>
+                          <div>Classe: <Badge variant="outline" className="text-[10px]">{wall.classe}</Badge></div>
+                          <div className="text-[10px] text-muted-foreground">Confianca: {(wall.confidence * 100).toFixed(0)}% · Fonte: {wall.measurement_source}</div>
+                          <div className="flex gap-2 pt-1">
+                            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => confirmWall(wall)} data-testid={`button-confirm-${idx}`}>
+                              <CheckCircle2 className="h-3 w-3" /> Confirmar
+                            </Button>
+                            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => exemplifyWall(wall)} data-testid={`button-exemplify-${idx}`}>
+                              <Sparkles className="h-3 w-3" /> Exemplificar
+                            </Button>
+                          </div>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  )}
                   <span className="text-sm ml-auto">
                     {wall.comprimento_m}m x {wall.altura_m}m = {(wall.comprimento_m * wall.altura_m).toFixed(1)} m2
                   </span>
+                  {wall.painelType && (
+                    <Badge variant="secondary" className="text-[10px]">{wall.painelType}</Badge>
+                  )}
                   {wall.esquadrias.length > 0 && (
                     <Badge variant="outline" className="text-xs gap-1">
                       <DoorOpen className="h-3 w-3" /> {wall.esquadrias.length}
@@ -496,10 +720,35 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
               <SquareStack className="h-5 w-5" />
               Lajes ({slabs.length})
             </CardTitle>
-            <Button variant="outline" size="sm" onClick={addSlab} className="gap-1" data-testid="button-add-slab">
-              <Plus className="h-3 w-3" /> Adicionar Laje
-            </Button>
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Checkbox
+                  checked={selectedSlabIds.size > 0 && selectedSlabIds.size === slabs.length}
+                  onCheckedChange={(c) => selectAllSlabs(!!c)}
+                  data-testid="checkbox-select-all-slabs"
+                />
+                Selecionar todas
+              </label>
+              <Button variant="outline" size="sm" onClick={addSlab} className="gap-1" data-testid="button-add-slab">
+                <Plus className="h-3 w-3" /> Adicionar Laje
+              </Button>
+            </div>
           </div>
+          {selectedSlabIds.size > 0 && (
+            <div className="mt-3 flex items-center gap-2 flex-wrap rounded-md border bg-muted/30 p-2 text-xs" data-testid="bulk-slab-bar">
+              <span className="font-medium">{selectedSlabIds.size} selecionada(s):</span>
+              <Select value={bulkClasseSlab} onValueChange={setBulkClasseSlab}>
+                <SelectTrigger className="h-7 w-32 text-xs" data-testid="select-bulk-classe-slab"><SelectValue placeholder="Classe..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="piso">Piso</SelectItem>
+                  <SelectItem value="coberta">Coberta</SelectItem>
+                  <SelectItem value="radier">Radier</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button size="sm" className="h-7 text-xs" onClick={applyBulkSlabs} disabled={!bulkClasseSlab} data-testid="button-apply-bulk-slabs">Aplicar</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setSelectedSlabIds(new Set())}>Limpar</Button>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           <div className="space-y-2">
@@ -510,6 +759,11 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
                 data-testid={`slab-row-${idx}`}
               >
                 <div className="flex items-center gap-3 flex-wrap">
+                  <Checkbox
+                    checked={selectedSlabIds.has(slab.id)}
+                    onCheckedChange={() => toggleSlabSelected(slab.id)}
+                    data-testid={`checkbox-slab-${idx}`}
+                  />
                   <Switch
                     checked={slab.enabled}
                     onCheckedChange={(v) => updateSlab(idx, "enabled", v)}
