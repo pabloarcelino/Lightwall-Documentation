@@ -19,6 +19,8 @@ import Login from "@/pages/Login";
 import { Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
+import { ThemeProvider } from "@/hooks/use-theme";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 function AdminGuard({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading } = useQuery<{ role?: string } | null>({
@@ -92,10 +94,13 @@ function AuthGate() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <AuthGate />
-      </TooltipProvider>
+      <ThemeProvider>
+        <TooltipProvider>
+          <Toaster />
+          <AuthGate />
+          <ThemeToggle variant="floating" />
+        </TooltipProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }
