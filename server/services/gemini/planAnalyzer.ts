@@ -235,6 +235,8 @@ async function callGemini(base64Data: string, mimeType: string, prompt: string, 
       contents: [{ role: "user", parts }],
       config: buildConfig(0.1, maxTokens, thinkingBudget),
     });
+    const { recordAiUsage, geminiUsageFromResponse } = await import("../audit/aiAuditor");
+    recordAiUsage(geminiUsageFromResponse(response));
     return response.text ?? "";
   }, "callGemini");
 }
@@ -255,6 +257,8 @@ async function callGeminiExtraction(base64Data: string, mimeType: string, prompt
       contents: [{ role: "user", parts }],
       config: buildConfig(0.1, maxTokens, thinkingBudget),
     });
+    const { recordAiUsage, geminiUsageFromResponse } = await import("../audit/aiAuditor");
+    recordAiUsage(geminiUsageFromResponse(response));
     return response.text ?? "";
   }, "callGeminiExtraction");
 }
@@ -274,6 +278,8 @@ async function callGeminiMultiPart(
       contents: [{ role: "user", parts }],
       config: buildConfig(temperature, maxTokens, thinkingBudget),
     });
+    const { recordAiUsage, geminiUsageFromResponse } = await import("../audit/aiAuditor");
+    recordAiUsage(geminiUsageFromResponse(response));
     return response.text ?? "";
   }, "callGeminiMultiPart");
 }
@@ -293,6 +299,8 @@ async function callGeminiExtractionMultiPart(
       contents: [{ role: "user", parts }],
       config: buildConfig(temperature, maxTokens, thinkingBudget),
     });
+    const { recordAiUsage, geminiUsageFromResponse } = await import("../audit/aiAuditor");
+    recordAiUsage(geminiUsageFromResponse(response));
     return response.text ?? "";
   }, "callGeminiExtractionMultiPart");
 }

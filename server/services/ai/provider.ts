@@ -44,6 +44,8 @@ export class GeminiProvider implements AIProvider {
           maxOutputTokens: options?.maxOutputTokens ?? 8192,
         },
       });
+      const { recordAiUsage, geminiUsageFromResponse } = await import("../audit/aiAuditor");
+      recordAiUsage(geminiUsageFromResponse(response));
       return response.text ?? "";
     }, "GeminiProvider");
   }
@@ -109,6 +111,8 @@ export class OpenAIProvider implements AIProvider {
     }
 
     const response = await client.chat.completions.create(params);
+    const { recordAiUsage, openAiUsageFromResponse } = await import("../audit/aiAuditor");
+    recordAiUsage(openAiUsageFromResponse(response));
     return response.choices[0]?.message?.content ?? "";
   }
 }

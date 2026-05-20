@@ -179,6 +179,8 @@ export async function runGlobalCrossValidation(
             contents: [{ role: "user", parts }],
             config: { maxOutputTokens: 16384, thinkingConfig: { thinkingBudget: 8192 } },
           });
+          const { recordAiUsage, geminiUsageFromResponse } = await import("../audit/aiAuditor");
+          recordAiUsage(geminiUsageFromResponse(response));
           return response.text ?? "";
         }
       },

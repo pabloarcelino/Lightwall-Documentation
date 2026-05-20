@@ -50,6 +50,7 @@ import { validateGeometry, summarizeValidation } from "./services/calculation/ge
 import { inspectFile, summarizePreflight } from "./services/preflight/inspector";
 import { extractFromVectorPdf } from "./services/preflight/pdfVectorExtractor";
 import { auditAiCall } from "./services/audit/aiAuditor";
+import { addAiEventClient } from "./services/audit/aiEvents";
 import { runGlobalCrossValidation } from "./services/gemini/globalValidator";
 import type { ExtractedWall, ExtractedSlab, ExtractedCorner } from "./services/gemini/planAnalyzer";
 import {
@@ -972,6 +973,29 @@ export async function registerRoutes(
       const remaining = (progressClients.get(projectId) || []).filter(c => c !== res);
       if (remaining.length === 0) progressClients.delete(projectId);
       else progressClients.set(projectId, remaining);
+    });
+  });
+
+  // SSE: timeline ao vivo de chamadas IA (started/completed/failed) com tokens
+  // e custo estimado. Funciona para Gemini e OpenAI — o auditor emite eventos
+  // independentemente do provider que de fato executou.
+  app.get("/api/projects/:id/ai-events", (req, res) => {
+    const projectId = parseInt(String(req.params.id));
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    try { res.write(": connected\n\n"); } catch {}
+
+    const remove = addAiEventClient(projectId, res);
+    const heartbeat = setInterval(() => {
+      try { res.write(`: ping ${Date.now()}\n\n`); } catch {}
+    }, 15000);
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      remove();
     });
   });
 

@@ -71,6 +71,7 @@ import FloorPlanDiagram from "@/components/FloorPlanDiagram";
 import AnnotatedFloorPlan from "@/components/AnnotatedFloorPlan";
 import { LightwallDots } from "@/components/LightwallLogo";
 import { PageHeader } from "@/components/PageHeader";
+import { AiTimeline } from "@/components/AiTimeline";
 import { LoadingState } from "@/components/ui/states";
 import type { Product } from "@shared/schema";
 
@@ -720,7 +721,7 @@ export default function ProjectDetails() {
     switch (status) {
       case "done": return <CheckCircle className={`${size} text-green-500`} />;
       case "running": return <Loader2 className={`${size} text-blue-500 animate-spin`} />;
-      case "error": return <XCircle className={`${size} text-red-500`} />;
+      case "error": return <XCircle className={`${size} text-error`} />;
       default: return <Clock className={`${size} text-slate-300`} />;
     }
   }
@@ -744,7 +745,7 @@ export default function ProjectDetails() {
                 </Button>
               </Link>
               <div className="flex items-center gap-2">
-                <LightwallDots className="h-5 w-5 lw-text-accent" />
+                <LightwallDots className="h-5 w-5 text-primary" />
                 {editingInfo ? (
                   <div className="flex items-center gap-2">
                     <div>
@@ -848,13 +849,13 @@ export default function ProjectDetails() {
                 {project.status === "completed" ? "Concluido" : project.status === "processing" ? "Processando" : project.status === "error" ? "Erro" : "Rascunho"}
               </Badge>
               {!showDeleteConfirm ? (
-                <Button variant="outline" size="sm" className="text-red-600 border-red-300 hover:bg-red-50" onClick={() => setShowDeleteConfirm(true)} data-testid="button-delete-project">
+                <Button variant="outline" size="sm" className="text-error border-red-300 hover:bg-red-50" onClick={() => setShowDeleteConfirm(true)} data-testid="button-delete-project">
                   <Trash2 className="h-4 w-4 mr-1" />
                   Excluir
                 </Button>
               ) : (
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-red-600 font-medium">Confirma?</span>
+                  <span className="text-sm text-error font-medium">Confirma?</span>
                   <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending} data-testid="button-confirm-delete">
                     {deleteMutation.isPending ? "Excluindo..." : "Sim, excluir"}
                   </Button>
@@ -868,6 +869,14 @@ export default function ProjectDetails() {
       </PageHeader>
 
       <main className="container mx-auto px-4 py-8">
+        {projectId && (
+          <div className="mb-6">
+            <AiTimeline
+              projectId={projectId}
+              enabled={isProcessing || project.status === "processing"}
+            />
+          </div>
+        )}
         <div className="flex items-center gap-4 mb-6 glass-card rounded-xl p-4">
           <div className="flex items-center gap-3">
             <span className="text-sm font-medium text-muted-foreground">Tipo:</span>
@@ -1071,7 +1080,7 @@ export default function ProjectDetails() {
                         </div>
                         {step.detail && (
                           <p className={`mt-1 break-words ${isSubStep ? "text-[10px]" : "text-xs"} ${
-                            step.status === "error" ? "text-red-600" :
+                            step.status === "error" ? "text-error" :
                             step.status === "done" ? "text-green-700 dark:text-green-400" :
                             "text-blue-600 dark:text-blue-400"
                           }`} data-testid={`pipeline-detail-${step.step}`}>
@@ -1364,8 +1373,8 @@ export default function ProjectDetails() {
                                     <p className="text-lg font-bold text-purple-700 dark:text-purple-300">{d.resultado?.pavimentos?.length || 0}</p>
                                   </div>
                                   <div className="bg-orange-50 dark:bg-orange-900/30 rounded-lg p-3 text-center">
-                                    <p className="text-xs text-orange-600 dark:text-orange-400">Paredes</p>
-                                    <p className="text-lg font-bold text-orange-700 dark:text-orange-300">{d.resultado?.resumo?.total_paredes || 0}</p>
+                                    <p className="text-xs text-warning dark:text-orange-400">Paredes</p>
+                                    <p className="text-lg font-bold text-warning dark:text-orange-300">{d.resultado?.resumo?.total_paredes || 0}</p>
                                   </div>
                                 </div>
                                 {d.resultado?.pavimentos?.map((pav: any, pi: number) => (
@@ -1940,10 +1949,10 @@ export default function ProjectDetails() {
                       <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-xs">
                         {[
                           { label: "Par. Externas", value: externas.length, sub: `${fmt(totalExt)}m`, color: "text-cyan-600", dot: "bg-cyan-500" },
-                          { label: "Par. Internas", value: internas.length, sub: `${fmt(totalInt)}m`, color: "text-orange-600", dot: "bg-orange-500" },
+                          { label: "Par. Internas", value: internas.length, sub: `${fmt(totalInt)}m`, color: "text-warning", dot: "bg-orange-500" },
                           { label: "Muros", value: muros.length, sub: `${fmt(totalMuros)}m`, color: "text-purple-600", dot: "bg-purple-500" },
-                          { label: "Laje Piso", value: slabPiso.length, sub: `${fmt(totalPiso)}m²`, color: "text-emerald-600", dot: "bg-emerald-500" },
-                          { label: "Laje Coberta", value: slabCoberta.length, sub: `${fmt(totalCoberta)}m²`, color: "text-red-600", dot: "bg-red-500" },
+                          { label: "Laje Piso", value: slabPiso.length, sub: `${fmt(totalPiso)}m²`, color: "text-success", dot: "bg-emerald-500" },
+                          { label: "Laje Coberta", value: slabCoberta.length, sub: `${fmt(totalCoberta)}m²`, color: "text-error", dot: "bg-red-500" },
                         ].map(item => (
                           <div key={item.label} className="text-center p-2 bg-muted/30 rounded">
                             <div className="flex items-center justify-center gap-1 mb-1">
@@ -2017,7 +2026,7 @@ export default function ProjectDetails() {
                                 <Button
                                   size="sm"
                                   variant={clickMode === "exterior" ? "default" : "outline"}
-                                  className={clickMode === "exterior" ? "bg-orange-600 hover:bg-orange-700" : "border-orange-500 text-orange-700 hover:bg-orange-50"}
+                                  className={clickMode === "exterior" ? "bg-orange-600 hover:bg-orange-700" : "border-orange-500 text-warning hover:bg-orange-50"}
                                   onClick={() => setClickMode("exterior")}
                                   data-testid="button-mode-exterior"
                                 >
@@ -2246,7 +2255,7 @@ export default function ProjectDetails() {
                       >
                         <CardTitle className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2">
-                            <AlertTriangle className="h-5 w-5 text-orange-500" />
+                            <AlertTriangle className="h-5 w-5 text-warning" />
                             Alertas e Inconsistencias
                             <Badge variant="secondary" className="ml-1" data-testid="badge-alerts-count">
                               {budget.alerts.length}
@@ -2257,7 +2266,7 @@ export default function ProjectDetails() {
                               </Badge>
                             )}
                             {counts.warning > 0 && (
-                              <Badge variant="outline" className="text-xs border-orange-400 text-orange-600 dark:text-orange-400">
+                              <Badge variant="outline" className="text-xs border-orange-400 text-warning dark:text-orange-400">
                                 {counts.warning} aviso(s)
                               </Badge>
                             )}
@@ -2291,7 +2300,7 @@ export default function ProjectDetails() {
                   const isMedium = reliability.level === "medium";
                   const borderColor = isHigh ? "border-emerald-200 dark:border-emerald-800" : isMedium ? "border-amber-200 dark:border-amber-800" : "border-red-200 dark:border-red-800";
                   const bgColor = isHigh ? "bg-emerald-50 dark:bg-emerald-900/20" : isMedium ? "bg-amber-50 dark:bg-amber-900/20" : "bg-red-50 dark:bg-red-900/20";
-                  const textColor = isHigh ? "text-emerald-700 dark:text-emerald-400" : isMedium ? "text-amber-700 dark:text-amber-400" : "text-red-700 dark:text-red-400";
+                  const textColor = isHigh ? "text-success dark:text-success" : isMedium ? "text-warning dark:text-warning" : "text-error dark:text-error";
                   const ShieldIcon = isHigh ? ShieldCheck : isMedium ? Shield : ShieldAlert;
                   return (
                     <Card className={borderColor} data-testid="card-api-health">
@@ -2357,15 +2366,15 @@ export default function ProjectDetails() {
                                 <div className="text-xs text-muted-foreground">Resultado</div>
                                 <div className="text-sm font-semibold" data-testid="text-verification-result">
                                   {metrics.verification.hadCorrections ? (
-                                    <span className="text-amber-600 dark:text-amber-400">Correcoes aplicadas</span>
+                                    <span className="text-warning dark:text-warning">Correcoes aplicadas</span>
                                   ) : (
-                                    <span className="text-emerald-600 dark:text-emerald-400">Aprovado</span>
+                                    <span className="text-success dark:text-success">Aprovado</span>
                                   )}
                                 </div>
                               </div>
                             </div>
                             {metrics.verification.fallbackUsed && (
-                              <div className="mt-2 text-xs text-amber-600 dark:text-amber-400" data-testid="text-verification-fallback">
+                              <div className="mt-2 text-xs text-warning dark:text-warning" data-testid="text-verification-fallback">
                                 Fallback: OpenAI falhou, Gemini foi usado como verificador. Motivo: {metrics.verification.fallbackReason}
                               </div>
                             )}
@@ -2378,7 +2387,7 @@ export default function ProjectDetails() {
                               Fatores que afetam a confiabilidade
                             </div>
                             {reliability.factors.map((factor: string, idx: number) => (
-                              <div key={idx} className={`text-sm px-3 py-1.5 rounded ${isHigh ? "text-emerald-700 dark:text-emerald-400" : isMedium ? "text-amber-700 dark:text-amber-400" : "text-red-700 dark:text-red-400"} ${bgColor}`} data-testid={`text-reliability-factor-${idx}`}>
+                              <div key={idx} className={`text-sm px-3 py-1.5 rounded ${isHigh ? "text-success dark:text-success" : isMedium ? "text-warning dark:text-warning" : "text-error dark:text-error"} ${bgColor}`} data-testid={`text-reliability-factor-${idx}`}>
                                 {factor}
                               </div>
                             ))}
@@ -2592,7 +2601,7 @@ export default function ProjectDetails() {
                             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4 space-y-2 text-sm">
                               <div className="flex justify-between"><span>Subtotal paineis</span><span className="font-mono" data-testid="text-subtotal-panels">R$ {fmt(panelCost)}</span></div>
                               {discountPct > 0 && (
-                                <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
+                                <div className="flex justify-between text-success dark:text-success">
                                   <span>Desconto ({discountPct.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%)</span>
                                   <span className="font-mono" data-testid="text-discount-value">- R$ {fmt(discountValue)}</span>
                                 </div>
@@ -2782,7 +2791,7 @@ export default function ProjectDetails() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <Card className="cursor-pointer hover:shadow-md transition-shadow">
                     <CardContent className="p-6 text-center">
-                      <FileText className="h-12 w-12 mx-auto text-red-500 mb-4" />
+                      <FileText className="h-12 w-12 mx-auto text-error mb-4" />
                       <h3 className="text-lg font-semibold mb-2">PDF</h3>
                       <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">Relatorio formatado para impressao</p>
                       <Button onClick={() => handleExport("pdf")} className="w-full" data-testid="button-export-pdf">
