@@ -239,21 +239,24 @@ async function callGemini(base64Data: string, mimeType: string, prompt: string, 
   }, "callGemini");
 }
 
-const FLASH_MODEL = "gemini-2.5-flash";
+// Modelo usado nas chamadas de extracao/classificacao. Promovido de Flash para
+// Pro porque o 2.5-Flash erra muito em plantas com cotas pequenas e topologia
+// externa/interna. Custo sobe ~5x, latencia ~3-4x — aceito em troca de acuracia.
+const EXTRACTION_MODEL = "gemini-2.5-pro";
 
-async function callGeminiFlash(base64Data: string, mimeType: string, prompt: string, maxTokens: number = 16384, thinkingBudget?: number): Promise<string> {
+async function callGeminiExtraction(base64Data: string, mimeType: string, prompt: string, maxTokens: number = 16384, thinkingBudget?: number): Promise<string> {
   const parts = [{ inlineData: { mimeType, data: base64Data } }, { text: prompt }];
   const openaiText = await maybeRouteToOpenAI(parts, maxTokens, 0.1);
   if (openaiText !== null) return openaiText;
   const { withRetry } = await import("./client");
   return withRetry(async () => {
     const response = await activeGenAI.models.generateContent({
-      model: FLASH_MODEL,
+      model: EXTRACTION_MODEL,
       contents: [{ role: "user", parts }],
       config: buildConfig(0.1, maxTokens, thinkingBudget),
     });
     return response.text ?? "";
-  }, "callGeminiFlash");
+  }, "callGeminiExtraction");
 }
 
 async function callGeminiMultiPart(
@@ -275,7 +278,7 @@ async function callGeminiMultiPart(
   }, "callGeminiMultiPart");
 }
 
-async function callGeminiFlashMultiPart(
+async function callGeminiExtractionMultiPart(
   parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }>,
   maxTokens: number = 16384,
   temperature: number = 0.1,
@@ -286,12 +289,12 @@ async function callGeminiFlashMultiPart(
   const { withRetry } = await import("./client");
   return withRetry(async () => {
     const response = await activeGenAI.models.generateContent({
-      model: FLASH_MODEL,
+      model: EXTRACTION_MODEL,
       contents: [{ role: "user", parts }],
       config: buildConfig(temperature, maxTokens, thinkingBudget),
     });
     return response.text ?? "";
-  }, "callGeminiFlashMultiPart");
+  }, "callGeminiExtractionMultiPart");
 }
 
 const _splitCache = new Map<string, Array<{ pageIndex: number; base64: string }>>();
@@ -548,7 +551,7 @@ Responda com seu raciocinio entre <RACIOCINIO> e </RACIOCINIO>, e depois APENAS 
   "tipo_edificacao": "residencial|comercial|institucional|industrial|outro"`}
 }`;
 
-  const text = await callGeminiFlash(page.base64, page.mimeType, prompt, 8192);
+  const text = await callGeminiExtraction(page.base64, page.mimeType, prompt, 8192, 4096);
   console.log(`[ETAPA1+2] Pag ${page.pageIndex}: ${text.substring(0, 300)}`);
 
   let parsed = tryParseResponse(text);
@@ -559,7 +562,7 @@ Responda com seu raciocinio entre <RACIOCINIO> e </RACIOCINIO>, e depois APENAS 
     recordJsonParseRetry();
     const retryPrompt = `Analise esta pagina de projeto arquitetonico. Responda SOMENTE com JSON valido, SEM texto antes ou depois:
 {"classificacao":{"page_index":${page.pageIndex},"classificacao":"planta_baixa|planta_cobertura|corte|fachada|vista_3d|tabela_quantitativo|quadro_esquadrias|detalhe_construtivo|irrelevante","pavimento":"Terreo|Superior|Subsolo|Coberta","has_table":false,"has_scale":false},"tabelas":{"paredes_de_tabela":[],"esquadrias_de_tabela":[],"areas_de_tabela":[]}}`;
-    const retryText = await callGeminiFlash(page.base64, page.mimeType, retryPrompt, 4096);
+    const retryText = await callGeminiExtraction(page.base64, page.mimeType, retryPrompt, 4096, 4096);
     console.log(`[ETAPA1+2] Pag ${page.pageIndex} retry: ${retryText.substring(0, 300)}`);
     parsed = tryParseResponse(retryText);
 
@@ -759,7 +762,7 @@ export async function extractGeometryParallel(
     const failedPages: number[] = [];
 
     const { getActiveProvider: _gapEtapa3 } = await import("../ai/provider");
-    const _providerLabelEtapa3 = _gapEtapa3() === "openai" ? "OpenAI" : "Gemini Flash";
+    const _providerLabelEtapa3 = _gapEtapa3() === "openai" ? "OpenAI" : "Gemini Pro";
     console.log(`[ETAPA3] Extraindo ${floorGroups.size} pavimento(s) em PARALELO com ${_providerLabelEtapa3} (${plantaPages.length} paginas + ${cortePages.slice(0, 2).length} cortes)`);
 
     // Extract all floors in parallel using Flash for speed
@@ -780,7 +783,7 @@ export async function extractGeometryParallel(
         parts.push({ text: prompt });
 
         console.log(`[ETAPA3] Pavimento "${pav}": ${floorPages.length} pagina(s) via ${_providerLabelEtapa3}`);
-        const text = await callGeminiFlashMultiPart(parts, 16384, 0.1, 4096);
+        const text = await callGeminiExtractionMultiPart(parts, 16384, 0.1, 8192);
         console.log(`[ETAPA3] "${pav}" resposta: ${text.substring(0, 400)}`);
 
         const result = parseGeometryResponse(text, pav);
@@ -830,7 +833,7 @@ export async function extractGeometryParallel(
       const mimeType = getMimeType(filePath, fileType);
       const allPavs = Array.from(floorGroups.keys());
       const fallbackPrompt = buildGeometryPrompt(allPavs.length > 0 ? allPavs : ["Terreo"], buildingType, peDireito);
-      const fallbackText = await callGeminiFlash(base64, mimeType, fallbackPrompt, 16384, 4096);
+      const fallbackText = await callGeminiExtraction(base64, mimeType, fallbackPrompt, 16384, 8192);
       const fallbackResult = parseGeometryResponse(fallbackText, "Terreo");
       for (const w of fallbackResult.walls) {
         if (w.page_index === undefined) w.page_index = 0;
@@ -923,7 +926,7 @@ Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs"
   // Try verification, retry once on JSON parse failure
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const text = await callGeminiFlashMultiPart(parts, 16384, 0.1, 4096);
+      const text = await callGeminiExtractionMultiPart(parts, 16384, 0.1, 8192);
 
       if (text.includes("APROVADO")) {
         console.log(`[VERIFY] Pav "${pavimento}": APROVADO (tentativa ${attempt + 1})`);
@@ -1433,7 +1436,7 @@ ${floorDesc ? `- Distribuicao:\n${floorDesc}` : ""}
 
 IMPORTANTE: Use SOMENTE formato de topicos com "## " para secoes e "- " para itens. NAO escreva paragrafos longos. Seja conciso e direto ao ponto. Escreva em portugues do Brasil.` });
 
-    const text = await callGeminiFlashMultiPart(parts, 4096, 0.3);
+    const text = await callGeminiExtractionMultiPart(parts, 4096, 0.3);
     console.log(`[DESCRICAO] Texto gerado: ${text.substring(0, 200)}...`);
     return text.trim();
   } catch (error) {
@@ -1495,7 +1498,7 @@ Responda APENAS com JSON neste formato (sem markdown, sem texto extra):
   ]
 }`;
     try {
-      const text = await callGeminiFlash(page.base64, page.mimeType, prompt, 2048);
+      const text = await callGeminiExtraction(page.base64, page.mimeType, prompt, 2048, 2048);
       const parsed = repairJSON(text);
       const sections: any[] = parsed?.sections || [];
       for (const s of sections) {

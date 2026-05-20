@@ -171,10 +171,13 @@ export async function runGlobalCrossValidation(
             inlineData: { mimeType: img.mimeType, data: img.base64 },
           }));
           parts.push({ text: prompt });
+          // Modelos com thinking nao aceitam topP/topK/temperature personalizados.
+          // Usamos thinkingBudget alto porque esta chamada e a verificacao
+          // global cruzada — onde acurar a classificacao topologica vale o custo.
           const response = await genAI.models.generateContent({
             model: "gemini-2.5-pro",
             contents: [{ role: "user", parts }],
-            config: { temperature: 0.1, maxOutputTokens: 16384, topP: 0.95, topK: 40 },
+            config: { maxOutputTokens: 16384, thinkingConfig: { thinkingBudget: 8192 } },
           });
           return response.text ?? "";
         }
