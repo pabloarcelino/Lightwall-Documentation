@@ -235,6 +235,10 @@ export default function AnnotatedFloorPlan({ projectId, walls, files, highlighte
   const { toast } = useToast();
   const [aiImage, setAiImage] = useState<string | null>(preGeneratedImage || null);
   const [aiSummary, setAiSummary] = useState<any>(preGeneratedSummary || null);
+  // Task #9: lista de imagens anotadas por pavimento (1 por pavimento).
+  // O endpoint ja devolve `images[]`; backward-compat: se vier so `image`, encapsulamos.
+  const [aiImages, setAiImages] = useState<Array<{ pavimento: string; pageIndex: number; image: string; summary: any }>>([]);
+  const [activePavTab, setActivePavTab] = useState<string>("");
   const [aiLoading, setAiLoading] = useState(false);
 
   useEffect(() => {
@@ -248,12 +252,22 @@ export default function AnnotatedFloorPlan({ projectId, walls, files, highlighte
     setAiLoading(true);
     setAiImage(null);
     setAiSummary(null);
+    setAiImages([]);
     try {
       const res = await apiRequest("POST", `/api/projects/${projectId}/annotated-image`, {});
       const json = await res.json();
-      setAiImage(json.image);
+      const imgs: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = Array.isArray(json.images) && json.images.length > 0
+        ? json.images
+        : (json.image ? [{ pavimento: "all", pageIndex: 0, image: json.image, summary: json.summary || null }] : []);
+      setAiImages(imgs);
+      setActivePavTab(imgs[0]?.pavimento || "");
+      setAiImage(imgs[0]?.image || json.image || null);
       setAiSummary(json.summary || null);
-      toast({ title: "Imagem anotada gerada", description: "A IA pintou os elementos identificados." });
+      const pavCount = imgs.length;
+      toast({
+        title: "Imagem anotada gerada",
+        description: pavCount > 1 ? `A IA gerou ${pavCount} imagens (1 por pavimento).` : "A IA pintou os elementos identificados.",
+      });
     } catch (e: any) {
       const raw = e?.message || "Erro desconhecido";
       // Strip giant JSON dumps from upstream API errors so the toast stays readable.
@@ -360,6 +374,26 @@ export default function AnnotatedFloorPlan({ projectId, walls, files, highlighte
               </div>
             ) : aiImage ? (
               <div className="space-y-3">
+                {aiImages.length > 1 && (
+                  <div className="flex flex-wrap gap-1" data-testid="tabs-pavimentos-annotated">
+                    {aiImages.map((img) => (
+                      <Button
+                        key={img.pavimento}
+                        size="sm"
+                        variant={activePavTab === img.pavimento ? "default" : "outline"}
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          setActivePavTab(img.pavimento);
+                          setAiImage(img.image);
+                          setAiSummary(img.summary);
+                        }}
+                        data-testid={`tab-pavimento-${img.pavimento}`}
+                      >
+                        {img.pavimento === "all" ? "Geral" : img.pavimento}
+                      </Button>
+                    ))}
+                  </div>
+                )}
                 <img
                   src={aiImage}
                   alt="Planta anotada pela IA"

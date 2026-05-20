@@ -1,4 +1,4 @@
-import type { ExtractedWall, ExtractedSlab, ExtractedCorner, TableData, GeometryResult } from "../gemini/planAnalyzer";
+import type { ExtractedWall, ExtractedSlab, ExtractedCorner, TableData, GeometryResult, SectionInfo } from "../gemini/planAnalyzer";
 import { DEFAULT_ASSUMPTIONS } from "./assumptions";
 import { getBuildingTypeConfig } from "../gemini/buildingTypePrompts";
 
@@ -78,11 +78,19 @@ function num(v: any, fallback = 0): number {
 
 function applyWallDefaults(wall: ExtractedWall): ExtractedWall {
   const w = { ...wall, esquadrias: [...(wall.esquadrias || [])] };
-  w.altura_m = num(w.altura_m, 0);
+  const rawHeight = num(w.altura_m, 0);
+  w.altura_m = rawHeight;
   w.espessura_m = num(w.espessura_m, 0);
   w.comprimento_m = num(w.comprimento_m, 0);
   w.opening_area_m2 = num(w.opening_area_m2, 0);
-  if (!w.altura_m || w.altura_m <= 0) w.altura_m = DEFAULT_ASSUMPTIONS.wallHeight.value;
+  // Task #9: rastrear origem da altura. Preserva "corte"/"table" se ja setado;
+  // caso contrario "ai" se a IA forneceu altura > 0, "default" se caiu no fallback.
+  if (!w.altura_m || w.altura_m <= 0) {
+    w.altura_m = DEFAULT_ASSUMPTIONS.wallHeight.value;
+    if (!w.height_source) w.height_source = "default";
+  } else if (!w.height_source) {
+    w.height_source = w.measurement_source === "table" ? "table" : "ai";
+  }
   if (!w.espessura_m || w.espessura_m <= 0) w.espessura_m = 0.10;
   if (!w.comprimento_m || w.comprimento_m <= 0) w.comprimento_m = 0;
 
@@ -254,6 +262,97 @@ export function applyFeedbackOverrides(
     out.push(w);
   }
   return { walls: out, overridesApplied, notWallRemoved };
+}
+
+/**
+ * Task #9: Aplica informacao extraida de cortes (pe-direito por pavimento) e
+ * marca paredes para validacao cruzada.
+ *
+ * - Para cada SectionInfo com confidence>=0.6: sobrescreve altura_m das paredes
+ *   daquele pavimento e marca height_source="corte", confirmed_by_section=true.
+ * - Para pavimentos SEM corte em projetos multi-pavimento: marca
+ *   needs_section_confirmation=true (aparece como badge "verificar" na UI).
+ * - Em projetos mono-pavimento (1 pavimento detectado) sem corte: NAO marca —
+ *   preserva comportamento atual.
+ *
+ * Idempotente: ja inclui guards contra duplicacao.
+ */
+export function applySectionData(
+  walls: ExtractedWall[],
+  sections: SectionInfo[],
+): { walls: ExtractedWall[]; heightsApplied: number; pavimentosConfirmed: number; pavimentosPending: number } {
+  if (!walls || walls.length === 0) return { walls, heightsApplied: 0, pavimentosConfirmed: 0, pavimentosPending: 0 };
+
+  const allPavimentos = new Set<string>(walls.map(w => w.nivel || "Terreo"));
+  const isMultiFloor = allPavimentos.size > 1;
+
+  // Indexa cortes por pavimento normalizado (com fallback fuzzy via "contains").
+  const normPav = (s: string) => (s || "").trim().toLowerCase();
+  const sectionByPav = new Map<string, SectionInfo>();
+  for (const s of sections) {
+    if (s.confidence < 0.6) continue;
+    const key = normPav(s.pavimento);
+    const prev = sectionByPav.get(key);
+    if (!prev || s.confidence > prev.confidence) sectionByPav.set(key, s);
+  }
+
+  // Extrai ordinal do nome do pavimento, se houver. "1 Pavimento" -> "1",
+  // "Pavimento Terreo" -> "terreo", "Cobertura" -> "cobertura". Usado para
+  // matching estrito que evita colisao "Pav 1" vs "Pav 10".
+  function pavToken(s: string): string {
+    const n = normPav(s);
+    const ordMatch = n.match(/\b(\d+)(?:[ºo]|\s*pav|\s|$)/);
+    if (ordMatch) return `ord:${ordMatch[1]}`;
+    if (/\bterreo\b|\bterreo|\bt[eé]rreo\b/.test(n)) return "kw:terreo";
+    if (/\bcobertura\b|\bcoberta\b/.test(n)) return "kw:cobertura";
+    if (/\bsubsolo\b|\bsub\b/.test(n)) return "kw:subsolo";
+    if (/\bmezanino\b/.test(n)) return "kw:mezanino";
+    return n; // fallback: nome inteiro normalizado
+  }
+
+  function findSectionFor(pavimento: string): SectionInfo | undefined {
+    const key = normPav(pavimento);
+    if (sectionByPav.has(key)) return sectionByPav.get(key);
+    // Match por token canonico (ordinal/palavra-chave) — evita confundir
+    // "Pav 1" com "Pav 10" e "Terreo" com "Subterraneo".
+    const token = pavToken(pavimento);
+    if (token === pavimento.toLowerCase()) return undefined;
+    for (const [k, v] of sectionByPav) {
+      if (pavToken(k) === token) return v;
+    }
+    return undefined;
+  }
+
+  const pavimentosWithSection = new Set<string>();
+  let heightsApplied = 0;
+
+  for (const w of walls) {
+    const pav = w.nivel || "Terreo";
+    const sec = findSectionFor(pav);
+    if (sec) {
+      pavimentosWithSection.add(pav);
+      // Sobrescreve altura somente se diferir significativamente (>5cm) ou se
+      // origem atual nao for ja "corte" — evita marcar override em re-rodadas.
+      if (Math.abs((w.altura_m || 0) - sec.pe_direito_m) > 0.05 || w.height_source !== "corte") {
+        w.altura_m = sec.pe_direito_m;
+        w.height_source = "corte";
+        heightsApplied += 1;
+      }
+      w.confirmed_by_section = true;
+      // Limpa pending caso tenha sido marcada antes
+      if (w.needs_section_confirmation) w.needs_section_confirmation = false;
+    } else if (isMultiFloor) {
+      // Multi-pavimento sem corte para ESSE pavimento — recomenda verificacao
+      w.needs_section_confirmation = true;
+    }
+  }
+
+  return {
+    walls,
+    heightsApplied,
+    pavimentosConfirmed: pavimentosWithSection.size,
+    pavimentosPending: isMultiFloor ? (allPavimentos.size - pavimentosWithSection.size) : 0,
+  };
 }
 
 export function fusionMultiView(

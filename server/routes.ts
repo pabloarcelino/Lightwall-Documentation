@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   classifyAndExtractTables,
   extractGeometryParallel,
+  extractSectionInfo,
   describeProject,
   setUserApiKey,
   clearUserApiKey,
@@ -39,6 +40,7 @@ import {
 } from "./services/ai/provider";
 import {
   fusionMultiView,
+  applySectionData,
   calculateBudget,
   budgetToLegacy,
   inconsistenciasToAlerts,
@@ -1097,6 +1099,10 @@ export async function registerRoutes(
       pipelineStartTimes.set(projectId, Date.now());
 
       const allClassifications: PageClassification[] = [];
+      // Task #9: rastreia qual arquivo é dono de cada (page_index) — necessário
+      // para a etapa de validação por cortes, que precisa ler a página do PDF
+      // correto. Chave: `${fileId}:${pageIndex}` -> file.
+      const classificationsByFile = new Map<string, PageClassification[]>();
       const allGeometries: GeometryResult[] = [];
       let mergedTableData: TableData = { paredes_de_tabela: [], esquadrias_de_tabela: [], areas_de_tabela: [] };
       const pipelineFailedPages: Array<{ fileId: number; fileName: string; pageIndex: number }> = [];
@@ -1186,6 +1192,7 @@ export async function registerRoutes(
           sendProgress(projectId, 1, "Classificacao + Tabelas", "done", `${classifications.length} pagina(s): ${classDetail} | Tabelas: ${tablesSummary}${failedMsg}`);
 
           allClassifications.push(...classifications);
+          classificationsByFile.set(String(file.id), classifications);
           for (const p of ctFailed) {
             pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: p });
             recordFailedPage({ fileId: file.id, fileName: file.originalName, pageIndex: p, reason: "Falha na classificacao/tabelas" });
@@ -1498,6 +1505,33 @@ export async function registerRoutes(
           console.warn(`[GLOBAL-VALIDATOR] Pulando (erro): ${gvErr?.message || gvErr}`);
           sendProgress(projectId, 4.6, "Validacao Global IA", "done", `pulado (erro: ${gvErr?.message || "desconhecido"})`);
         }
+      }
+
+      // ===== Task #9: Validacao por cortes (Etapa 4.7) =====
+      // Le paginas classificadas como "corte" e extrai pe-direito por pavimento.
+      // Aplica como ground-truth de altura nas paredes do pavimento correspondente,
+      // marca confirmed_by_section=true, e marca pavimentos multi-andar SEM corte
+      // como needs_section_confirmation. Pulado silenciosamente se nao houver corte.
+      try {
+        const hasCorte = allClassifications.some(c => c.classificacao === "corte");
+        if (hasCorte) {
+          sendProgress(projectId, 4.7, "Validacao por Cortes", "running", "Extraindo alturas dos cortes...");
+          const allSections: import("./services/gemini/planAnalyzer").SectionInfo[] = [];
+          for (const file of files) {
+            const fileClassifications = classificationsByFile.get(String(file.id)) || [];
+            if (fileClassifications.length === 0) continue;
+            if (!fileClassifications.some(c => c.classificacao === "corte")) continue;
+            const sections = await extractSectionInfo(file.filePath, file.fileType, fileClassifications);
+            allSections.push(...sections);
+          }
+          const sectionResult = applySectionData(fused.walls, allSections);
+          const detail = `${allSections.length} corte(s); ${sectionResult.heightsApplied} parede(s) c/ altura do corte; ${sectionResult.pavimentosConfirmed} pavimento(s) confirmado(s); ${sectionResult.pavimentosPending} pendente(s)`;
+          console.log(`[CORTE] ${detail}`);
+          sendProgress(projectId, 4.7, "Validacao por Cortes", "done", detail);
+        }
+      } catch (secErr: any) {
+        console.warn(`[CORTE] Pulando validacao por cortes (erro): ${secErr?.message || secErr}`);
+        sendProgress(projectId, 4.7, "Validacao por Cortes", "done", `pulado (erro: ${secErr?.message || "desconhecido"})`);
       }
 
       const scopedWalls = fused.walls.filter(w => {
@@ -3031,7 +3065,16 @@ export async function registerRoutes(
 
       const annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
 
-      for (const src of imgSources) {
+      // Task #9: dedupe — UMA imagem anotada por pavimento. Se ha multiplas
+      // paginas do mesmo pavimento (raro mas possivel), mantemos a primeira.
+      const seenPavimentos = new Set<string>();
+      const dedupedSources = imgSources.filter(s => {
+        if (seenPavimentos.has(s.pavimento)) return false;
+        seenPavimentos.add(s.pavimento);
+        return true;
+      });
+
+      for (const src of dedupedSources) {
         const floorWalls = walls.filter((w: any) => src.pavimento === "all" || w.nivel === src.pavimento);
         const floorSlabs = slabs.filter((s: any) => src.pavimento === "all" || s.nivel === src.pavimento);
         const enabledFloorWalls = floorWalls.filter((w: any) => w.enabled !== false);

@@ -54,6 +54,24 @@ export interface ExtractedWall {
   page_index?: number;
   needs_review?: boolean;
   review_reason?: string;
+  // Task #9: origem da altura. "ai" = extraída da própria planta; "corte" =
+  // confirmada/sobrescrita por um corte; "default" = fallback do
+  // DEFAULT_ASSUMPTIONS.wallHeight. Default em projetos sem corte.
+  height_source?: "ai" | "corte" | "default" | "table";
+  // Task #9: validação cruzada com cortes. `confirmed_by_section=true` quando
+  // o pavimento desta parede tem corte processado. `needs_section_confirmation`
+  // marca pavimentos multi-andar sem corte (revisão recomendada).
+  confirmed_by_section?: boolean;
+  needs_section_confirmation?: boolean;
+}
+
+// Task #9: informação extraída de um corte (height por pavimento)
+export interface SectionInfo {
+  pavimento: string;
+  pe_direito_m: number;
+  confidence: number;
+  page_index: number;
+  observacao?: string;
 }
 
 export interface ExtractedSlab {
@@ -1422,4 +1440,87 @@ IMPORTANTE: Use SOMENTE formato de topicos com "## " para secoes e "- " para ite
     console.error("[DESCRICAO] Erro ao gerar descricao:", error);
     return "Nao foi possivel gerar a descricao automatica do projeto. Tente novamente.";
   }
+}
+
+// ===================================================================
+// Task #9: Extracao de informacao de cortes (alturas/pe-direito).
+// Le paginas classificadas como "corte" e devolve, por pavimento, o
+// pe-direito anotado nas cotas verticais. Pulado silenciosamente quando
+// nao houver corte (preserva comportamento mono-pavimento sem corte).
+// ===================================================================
+export async function extractSectionInfo(
+  filePath: string,
+  fileType: string | undefined,
+  classifications: PageClassification[],
+): Promise<SectionInfo[]> {
+  const cortePages = classifications.filter(c => c.classificacao === "corte");
+  if (cortePages.length === 0) return [];
+
+  const fileMime = getMimeType(filePath, fileType);
+  // Carrega paginas. PDF -> splitPdfPages devolve 1-page PDFs (mime application/pdf).
+  // Imagem -> bytes brutos no mime real do arquivo.
+  let pageImages: Array<{ pageIndex: number; base64: string; mimeType: string }>;
+  if (fileMime === "application/pdf") {
+    const pdfPages = await splitPdfPages(filePath);
+    pageImages = pdfPages.map(p => ({ ...p, mimeType: "application/pdf" }));
+  } else {
+    const buf = await fs.readFile(filePath);
+    pageImages = [{ pageIndex: 0, base64: buf.toString("base64"), mimeType: fileMime }];
+  }
+
+  const results: SectionInfo[] = [];
+  for (const c of cortePages) {
+    const page = pageImages.find(p => p.pageIndex === c.page_index);
+    if (!page) continue;
+    const pavHint = c.pavimento || "Terreo";
+    const prompt = `Voce esta vendo um CORTE arquitetonico (vista vertical). Extraia o PE-DIREITO (altura piso-a-teto) de cada pavimento visivel no corte. Use as cotas verticais anotadas no desenho.
+
+Regras:
+- Se o desenho mostrar uma cota em metros (ex: "2,80 m", "3.0 m", "2700"), use ESSA cota.
+- Cotas em mm/cm devem ser convertidas para metros.
+- "Pe-direito" = distancia do piso acabado ao teto/laje superior do mesmo pavimento.
+- Se ha multiplos pavimentos no corte, retorne UM item por pavimento.
+- Se o corte nao tem cotas claras, retorne array vazio.
+- NAO invente: melhor retornar vazio do que chutar.
+
+Pavimento associado a este corte (sugestao da classificacao): "${pavHint}". Use o nome real do pavimento se vier marcado no corte (ex: "Terreo", "1 Pavimento", "Cobertura"). Caso contrario, use "${pavHint}".
+
+Responda APENAS com JSON neste formato (sem markdown, sem texto extra):
+{
+  "sections": [
+    { "pavimento": "Terreo", "pe_direito_m": 2.80, "confidence": 0.9, "observacao": "cota '2.80m' lida ao lado da escada" }
+  ]
+}`;
+    try {
+      const text = await callGeminiFlash(page.base64, page.mimeType, prompt, 2048);
+      const parsed = repairJSON(text);
+      const sections: any[] = parsed?.sections || [];
+      for (const s of sections) {
+        const pd = num(s.pe_direito_m, 0);
+        const conf = num(s.confidence, 0);
+        if (pd <= 1.5 || pd > 8) continue; // sanidade
+        results.push({
+          pavimento: String(s.pavimento || pavHint).trim() || pavHint,
+          pe_direito_m: pd,
+          confidence: Math.max(0, Math.min(1, conf)),
+          page_index: c.page_index,
+          observacao: s.observacao ? String(s.observacao).slice(0, 200) : undefined,
+        });
+      }
+    } catch (err: any) {
+      console.warn(`[CORTE] Falha extraindo corte pg ${c.page_index}: ${err?.message || err}`);
+    }
+  }
+
+  console.log(`[CORTE] ${results.length} pavimento(s) com pe-direito extraido de ${cortePages.length} corte(s)`);
+  return results;
+}
+
+function num(v: any, fallback = 0): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = parseFloat(v.replace(",", "."));
+    if (Number.isFinite(n)) return n;
+  }
+  return fallback;
 }

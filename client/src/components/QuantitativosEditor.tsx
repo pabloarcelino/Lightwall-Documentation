@@ -60,6 +60,10 @@ interface EditableWall {
   needs_review?: boolean;
   review_reason?: string;
   painelType?: "2P" | "SP" | "Muro";
+  // Task #9: origem da altura e validacao por corte
+  height_source?: "ai" | "corte" | "default" | "table";
+  confirmed_by_section?: boolean;
+  needs_section_confirmation?: boolean;
 }
 
 interface EditableSlab {
@@ -627,6 +631,37 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
                   {wall.esquadrias.length > 0 && (
                     <Badge variant="outline" className="text-xs gap-1">
                       <DoorOpen className="h-3 w-3" /> {wall.esquadrias.length}
+                    </Badge>
+                  )}
+                  {/* Task #9: badges de validacao por corte */}
+                  {wall.confirmed_by_section && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] gap-1 border-emerald-500/40 text-emerald-700 dark:text-emerald-400"
+                      title="Altura confirmada por corte arquitetonico"
+                      data-testid={`badge-confirmed-section-${idx}`}
+                    >
+                      <CheckCircle2 className="h-3 w-3" /> corte
+                    </Badge>
+                  )}
+                  {wall.needs_section_confirmation && !wall.confirmed_by_section && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] gap-1 border-sky-500/40 text-sky-700 dark:text-sky-400"
+                      title="Pavimento sem corte arquitetonico — verificar altura"
+                      data-testid={`badge-needs-section-${idx}`}
+                    >
+                      <HelpCircle className="h-3 w-3" /> verificar
+                    </Badge>
+                  )}
+                  {wall.height_source === "default" && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] gap-1 border-slate-400/40 text-slate-600 dark:text-slate-400"
+                      title="Altura usando valor default (pe-direito padrao)"
+                      data-testid={`badge-height-default-${idx}`}
+                    >
+                      h: default
                     </Badge>
                   )}
                 </div>
