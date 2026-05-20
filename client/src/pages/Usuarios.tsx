@@ -77,7 +77,7 @@ export default function Usuarios() {
       <div className="min-h-screen lw-gradient-bg flex items-center justify-center">
         <Card className="max-w-md">
           <CardContent className="pt-6 text-center">
-            <ShieldAlert className="h-12 w-12 mx-auto mb-4 text-red-500" />
+            <ShieldAlert className="h-12 w-12 mx-auto mb-4 text-error" />
             <h2 className="text-xl font-bold mb-2">Acesso Restrito</h2>
             <p className="text-muted-foreground mb-4">Esta pagina e acessivel apenas para administradores.</p>
             <Button onClick={() => navigate("/")} data-testid="button-go-home">Voltar ao Dashboard</Button>
@@ -211,7 +211,7 @@ export default function Usuarios() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
-              <Users className="h-6 w-6 lw-text-accent" />
+              <Users className="h-6 w-6 text-primary" />
               Gerenciamento de Usuarios
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
@@ -228,7 +228,7 @@ export default function Usuarios() {
           <div className="glass-stat rounded-xl p-5">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium text-muted-foreground">Total</span>
-              <Users className="h-4 w-4 lw-text-accent opacity-60" />
+              <Users className="h-4 w-4 text-primary opacity-60" />
             </div>
             <div className="text-3xl font-bold" data-testid="text-total-users">{allUsers?.length || 0}</div>
           </div>
@@ -242,9 +242,9 @@ export default function Usuarios() {
           <div className="glass-stat rounded-xl p-5">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium text-muted-foreground">Inativos</span>
-              <UserX className="h-4 w-4 text-red-500 opacity-60" />
+              <UserX className="h-4 w-4 text-error opacity-60" />
             </div>
-            <div className="text-3xl font-bold text-red-600" data-testid="text-inactive-users">{inactiveUsers.length}</div>
+            <div className="text-3xl font-bold text-error" data-testid="text-inactive-users">{inactiveUsers.length}</div>
           </div>
         </div>
 
@@ -312,7 +312,7 @@ export default function Usuarios() {
                           {user.active === 1 ? (
                             <Badge variant="outline" className="text-green-600 border-green-300">Ativo</Badge>
                           ) : (
-                            <Badge variant="outline" className="text-red-600 border-red-300">Inativo</Badge>
+                            <Badge variant="outline" className="text-error border-red-300">Inativo</Badge>
                           )}
                         </td>
                         <td className="p-3 text-xs text-muted-foreground">
@@ -333,7 +333,7 @@ export default function Usuarios() {
                               size="sm"
                               aria-label={user.active === 1 ? `Desativar usuario ${user.username}` : `Ativar usuario ${user.username}`}
                               onClick={() => toggleActive(user)}
-                              className={user.active === 1 ? "text-red-500 hover:text-red-700" : "text-green-500 hover:text-green-700"}
+                              className={user.active === 1 ? "text-error hover:text-error" : "text-green-500 hover:text-green-700"}
                               data-testid={`button-toggle-user-${user.id}`}
                             >
                               {user.active === 1 ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}

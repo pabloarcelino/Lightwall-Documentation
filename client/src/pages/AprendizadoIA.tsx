@@ -88,7 +88,7 @@ export default function AprendizadoIA() {
   }
 
   const accuracyColor = (a: number | null) =>
-    a === null ? "" : a >= 90 ? "text-emerald-600" : a >= 70 ? "text-amber-600" : "text-red-600";
+    a === null ? "" : a >= 90 ? "text-success" : a >= 70 ? "text-warning" : "text-error";
 
   return (
     <div className="min-h-screen lw-gradient-bg">
@@ -104,7 +104,7 @@ export default function AprendizadoIA() {
       </PageHeader>
       <main className="container mx-auto px-4 py-8 space-y-6">
         <div className="flex items-center gap-3">
-          <GraduationCap className="h-7 w-7 lw-text-accent" />
+          <GraduationCap className="h-7 w-7 text-primary" />
           <div>
             <h1 className="text-2xl font-bold">Aprendizado da IA</h1>
             <p className="text-sm text-muted-foreground">Correcoes humanas que servem como override deterministico na classificacao de paredes.</p>
@@ -240,7 +240,7 @@ export default function AprendizadoIA() {
                             <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => toggleActive.mutate({ id: r.id, active: !r.active })} data-testid={`button-toggle-${r.id}`} title={r.active ? "Desativar" : "Reativar"}>
                               {r.active ? <Power className="h-3.5 w-3.5" /> : <PowerOff className="h-3.5 w-3.5 text-muted-foreground" />}
                             </Button>
-                            <Button size="icon" variant="ghost" className="h-7 w-7 text-red-500 hover:text-red-700" onClick={() => remove.mutate(r.id)} data-testid={`button-delete-${r.id}`}>
+                            <Button size="icon" variant="ghost" className="h-7 w-7 text-error hover:text-error" onClick={() => remove.mutate(r.id)} data-testid={`button-delete-${r.id}`}>
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           </div>

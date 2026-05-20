@@ -49,8 +49,8 @@ export default function Login({ onLogin }: LoginProps) {
     <div className="min-h-screen lw-gradient-bg flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <LightwallDots className="h-14 w-14 lw-text-accent mx-auto mb-4" />
-          <h1 className="text-2xl font-bold tracking-tight lw-text-brand">
+          <LightwallDots className="h-14 w-14 text-primary mx-auto mb-4" />
+          <h1 className="text-2xl font-bold tracking-tight text-secondary">
             Lightwall
           </h1>
           <p className="text-foreground text-lg font-semibold mt-1">

@@ -158,7 +158,7 @@ export default function Catalogo() {
               </Button>
             </Link>
             <div className="flex items-center gap-2">
-              <LightwallDots className="h-5 w-5 lw-text-accent" />
+              <LightwallDots className="h-5 w-5 text-primary" />
               <div>
                 <h1 className="text-lg font-bold" data-testid="text-page-title">
                   Catalogo de Paineis
@@ -306,7 +306,7 @@ export default function Catalogo() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="text-red-500 hover:text-red-700"
+                                className="text-error hover:text-error"
                                 aria-label={`Excluir painel ${product.name}`}
                                 onClick={() => setDeleteConfirmId(product.id)}
                                 data-testid={`button-delete-${product.id}`}

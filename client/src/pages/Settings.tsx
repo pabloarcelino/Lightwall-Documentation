@@ -283,12 +283,12 @@ function ApiKeyCard({
           </div>
         ) : (
           <div className="flex items-center gap-3 p-4 rounded-lg bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800">
-            <XCircle className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+            <XCircle className="h-5 w-5 text-warning dark:text-warning flex-shrink-0" />
             <div>
               <p className="font-medium text-amber-800 dark:text-amber-200" data-testid={`${testIdPrefix}-no-key`}>
                 Nenhuma chave configurada
               </p>
-              <p className="text-sm text-amber-600 dark:text-amber-400">
+              <p className="text-sm text-warning dark:text-warning">
                 {testIdPrefix === "gemini" ? "O sistema usara o servico integrado do Replit (pode ter limitacoes)" : "Verificacao cross-model desativada (Gemini verifica a si mesmo)"}
               </p>
             </div>
@@ -366,7 +366,7 @@ export default function Settings() {
             </Button>
           </Link>
           <div className="flex items-center gap-2">
-            <LightwallDots className="h-5 w-5 lw-text-accent" />
+            <LightwallDots className="h-5 w-5 text-primary" />
             <div>
               <h1 className="text-lg font-bold" data-testid="text-page-title">
                 Configuracoes

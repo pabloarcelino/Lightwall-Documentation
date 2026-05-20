@@ -25,7 +25,7 @@ export default function GuiaExterno() {
         <Card>
           <CardHeader>
             <CardTitle className="text-2xl flex items-center gap-2">
-              <HelpCircle className="h-6 w-6 lw-text-accent" />
+              <HelpCircle className="h-6 w-6 text-primary" />
               Guia de Utilizacao para Externos
             </CardTitle>
             <p className="text-muted-foreground">
@@ -38,7 +38,7 @@ export default function GuiaExterno() {
               <AccordionItem value="passo1">
                 <AccordionTrigger className="text-base font-semibold">
                   <span className="flex items-center gap-2">
-                    <FileUp className="h-4 w-4 lw-text-accent" />
+                    <FileUp className="h-4 w-4 text-primary" />
                     Passo 1 — Criar Projeto e Enviar Arquivos
                   </span>
                 </AccordionTrigger>
@@ -62,7 +62,7 @@ export default function GuiaExterno() {
               <AccordionItem value="passo2">
                 <AccordionTrigger className="text-base font-semibold">
                   <span className="flex items-center gap-2">
-                    <Play className="h-4 w-4 lw-text-accent" />
+                    <Play className="h-4 w-4 text-primary" />
                     Passo 2 — Processar o Projeto
                   </span>
                 </AccordionTrigger>
@@ -75,10 +75,10 @@ export default function GuiaExterno() {
                     <li>O progresso e exibido em tempo real com barras de status para cada etapa.</li>
                   </ol>
                   <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 mt-2">
-                    <p className="font-medium text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                    <p className="font-medium text-warning dark:text-amber-300 flex items-center gap-1">
                       <AlertTriangle className="h-4 w-4" /> Importante
                     </p>
-                    <p className="text-amber-600 dark:text-amber-400 mt-1">Nao feche o navegador durante o processamento. Se houver erro, voce pode reprocessar clicando no botao novamente.</p>
+                    <p className="text-warning dark:text-warning mt-1">Nao feche o navegador durante o processamento. Se houver erro, voce pode reprocessar clicando no botao novamente.</p>
                   </div>
                 </AccordionContent>
               </AccordionItem>
@@ -86,7 +86,7 @@ export default function GuiaExterno() {
               <AccordionItem value="passo3">
                 <AccordionTrigger className="text-base font-semibold">
                   <span className="flex items-center gap-2">
-                    <BarChart3 className="h-4 w-4 lw-text-accent" />
+                    <BarChart3 className="h-4 w-4 text-primary" />
                     Passo 3 — Consultar o Orcamento
                   </span>
                 </AccordionTrigger>
@@ -104,7 +104,7 @@ export default function GuiaExterno() {
               <AccordionItem value="passo4">
                 <AccordionTrigger className="text-base font-semibold">
                   <span className="flex items-center gap-2">
-                    <Download className="h-4 w-4 lw-text-accent" />
+                    <Download className="h-4 w-4 text-primary" />
                     Passo 4 — Exportar
                   </span>
                 </AccordionTrigger>
@@ -121,7 +121,7 @@ export default function GuiaExterno() {
               <AccordionItem value="passo5">
                 <AccordionTrigger className="text-base font-semibold">
                   <span className="flex items-center gap-2">
-                    <Settings className="h-4 w-4 lw-text-accent" />
+                    <Settings className="h-4 w-4 text-primary" />
                     Passo 5 — Ajustar Quantitativos (Opcional)
                   </span>
                 </AccordionTrigger>
@@ -159,7 +159,7 @@ export default function GuiaExterno() {
               <AccordionItem value="alertas">
                 <AccordionTrigger className="text-base font-semibold">
                   <span className="flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4 text-amber-500" />
+                    <AlertTriangle className="h-4 w-4 text-warning" />
                     Alertas e Validacao
                   </span>
                 </AccordionTrigger>
@@ -167,11 +167,11 @@ export default function GuiaExterno() {
                   <p>Apos o processamento, o sistema pode gerar alertas de validacao em 3 niveis:</p>
                   <div className="space-y-2 ml-2">
                     <div className="flex items-start gap-2">
-                      <span className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-xs font-bold px-2 py-0.5 rounded">CRITICA</span>
+                      <span className="bg-red-100 dark:bg-red-900/30 text-error dark:text-red-300 text-xs font-bold px-2 py-0.5 rounded">CRITICA</span>
                       <span>Inconsistencias graves que podem invalidar o orcamento (ex: parede sem comprimento).</span>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-xs font-bold px-2 py-0.5 rounded">MEDIA</span>
+                      <span className="bg-amber-100 dark:bg-amber-900/30 text-warning dark:text-amber-300 text-xs font-bold px-2 py-0.5 rounded">MEDIA</span>
                       <span>Valores suspeitos que devem ser revisados (ex: parede muito longa).</span>
                     </div>
                     <div className="flex items-start gap-2">
@@ -186,7 +186,7 @@ export default function GuiaExterno() {
               <AccordionItem value="glossario">
                 <AccordionTrigger className="text-base font-semibold">
                   <span className="flex items-center gap-2">
-                    <HelpCircle className="h-4 w-4 lw-text-accent" />
+                    <HelpCircle className="h-4 w-4 text-primary" />
                     Glossario de Termos
                   </span>
                 </AccordionTrigger>

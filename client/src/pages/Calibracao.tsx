@@ -109,9 +109,9 @@ const catToApiField: Record<string, string> = {
 };
 
 function AccuracyBadge({ accuracy }: { accuracy: number }) {
-  const color = accuracy >= 90 ? "bg-emerald-500/15 text-emerald-600 border-emerald-500/20"
-    : accuracy >= 70 ? "bg-amber-500/15 text-amber-600 border-amber-500/20"
-    : "bg-red-500/15 text-red-600 border-red-500/20";
+  const color = accuracy >= 90 ? "bg-success-soft text-success border-success/20"
+    : accuracy >= 70 ? "bg-warning-soft text-warning border-warning/20"
+    : "bg-error-soft text-error border-error/20";
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${color}`}>
       {accuracy.toFixed(1)}%
@@ -121,7 +121,7 @@ function AccuracyBadge({ accuracy }: { accuracy: number }) {
 
 function DeviationText({ value }: { value: number | null }) {
   if (value === null) return <span className="text-muted-foreground">—</span>;
-  const color = Math.abs(value) < 5 ? "text-emerald-600" : value > 0 ? "text-amber-600" : "text-blue-600";
+  const color = Math.abs(value) < 5 ? "text-success" : value > 0 ? "text-warning" : "text-blue-600";
   const Icon = Math.abs(value) < 5 ? Minus : value > 0 ? TrendingUp : TrendingDown;
   return (
     <span className={`inline-flex items-center gap-0.5 text-xs font-medium ${color}`}>
@@ -200,7 +200,7 @@ export default function Calibracao() {
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
         <div className="flex items-center gap-3 mb-6">
-          <BarChart3 className="h-6 w-6 lw-text-accent" />
+          <BarChart3 className="h-6 w-6 text-primary" />
           <div>
             <h1 className="text-2xl font-bold">Calibracao do Sistema</h1>
             <p className="text-sm text-muted-foreground">Acuracia por m² — comparacao entre area calculada e area real por tipo de elemento</p>
@@ -229,7 +229,7 @@ export default function Calibracao() {
                 <CardContent className="pt-5 text-center">
                   <p className="text-xs text-muted-foreground mb-1">Acuracia Media (m²)</p>
                   {calibration.avgAreaAccuracy !== null ? (
-                    <p className={`text-3xl font-bold ${calibration.avgAreaAccuracy >= 90 ? "text-emerald-600" : calibration.avgAreaAccuracy >= 70 ? "text-amber-600" : "text-red-600"}`}>
+                    <p className={`text-3xl font-bold ${calibration.avgAreaAccuracy >= 90 ? "text-success" : calibration.avgAreaAccuracy >= 70 ? "text-warning" : "text-error"}`}>
                       {calibration.avgAreaAccuracy.toFixed(1)}%
                     </p>
                   ) : (
@@ -259,14 +259,14 @@ export default function Calibracao() {
                     <div className="space-y-1">
                       {calibration.patterns.slice(0, 3).map((p, i) => (
                         <p key={i} className="text-[10px] text-muted-foreground flex items-start gap-1">
-                          <AlertTriangle className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
+                          <AlertTriangle className="h-3 w-3 text-warning mt-0.5 shrink-0" />
                           {p}
                         </p>
                       ))}
                     </div>
                   ) : (
                     <p className="text-[10px] text-muted-foreground flex items-center gap-1">
-                      <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                      <CheckCircle2 className="h-3 w-3 text-success" />
                       Nenhum padrao anomalo
                     </p>
                   )}
@@ -285,7 +285,7 @@ export default function Calibracao() {
                     {calibration.categories.map(cat => {
                       const hasData = cat.avgAreaAccuracy !== null;
                       const barWidth = hasData ? Math.min(cat.avgAreaAccuracy!, 100) : 0;
-                      const barColor = !hasData ? "bg-muted/40" : cat.avgAreaAccuracy! >= 90 ? "bg-emerald-500/70" : cat.avgAreaAccuracy! >= 70 ? "bg-amber-500/70" : "bg-red-500/70";
+                      const barColor = !hasData ? "bg-muted/40" : cat.avgAreaAccuracy! >= 90 ? "bg-success/70" : cat.avgAreaAccuracy! >= 70 ? "bg-warning/70" : "bg-error/70";
                       return (
                         <div key={cat.category} className="flex items-center gap-3">
                           <span className="text-sm w-28 text-muted-foreground">{categoryLabelsFull[cat.category]}</span>
@@ -389,7 +389,7 @@ export default function Calibracao() {
                                     <Button
                                       size="icon"
                                       variant="ghost"
-                                      className="h-7 w-7 text-emerald-600 hover:text-emerald-700"
+                                      className="h-7 w-7 text-success hover:text-success"
                                       onClick={() => saveEdit(proj.projectId)}
                                       disabled={updateMutation.isPending}
                                     >
@@ -440,7 +440,7 @@ export default function Calibracao() {
                                             {hasReal && (
                                               <>
                                                 <div className="pt-1 border-t border-muted/30">
-                                                  <p className={`text-sm font-bold ${cd!.accuracy! >= 90 ? "text-emerald-600" : cd!.accuracy! >= 70 ? "text-amber-600" : "text-red-600"}`}>
+                                                  <p className={`text-sm font-bold ${cd!.accuracy! >= 90 ? "text-success" : cd!.accuracy! >= 70 ? "text-warning" : "text-error"}`}>
                                                     {cd!.accuracy!.toFixed(1)}%
                                                   </p>
                                                   <DeviationText value={cd!.deviation} />
@@ -473,7 +473,7 @@ export default function Calibracao() {
                 <div className="space-y-2.5">
                   {[...calibration.projects].sort((a, b) => new Date(a.processedAt).getTime() - new Date(b.processedAt).getTime()).map(proj => {
                     const barWidth = Math.min(proj.accuracy, 100);
-                    const barColor = proj.accuracy >= 90 ? "bg-emerald-500/70" : proj.accuracy >= 70 ? "bg-amber-500/70" : "bg-red-500/70";
+                    const barColor = proj.accuracy >= 90 ? "bg-success/70" : proj.accuracy >= 70 ? "bg-warning/70" : "bg-error/70";
                     return (
                       <div key={proj.projectId} className="flex items-center gap-3">
                         <div className="w-36 text-xs text-muted-foreground truncate">{proj.projectName}</div>

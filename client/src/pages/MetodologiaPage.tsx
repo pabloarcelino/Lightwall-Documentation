@@ -18,7 +18,7 @@ export default function MetodologiaPage() {
               </Button>
             </Link>
             <div className="flex items-center gap-2">
-              <LightwallDots className="h-5 w-5 lw-text-accent" />
+              <LightwallDots className="h-5 w-5 text-primary" />
               <div>
                 <h1 className="text-lg font-bold" data-testid="text-page-title">
                   Metodologia
