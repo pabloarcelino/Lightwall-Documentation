@@ -998,9 +998,11 @@ export function fusionMultiView(
 
   // ===== Regra geometrica: interna paralela+sobreposta a externa = duplicata =====
   // Paredes internas e externas NUNCA ocupam o mesmo trecho fisico. Se uma INT
-  // esta paralela e sobreposta a uma EXT, e provavelmente uma duplicata da
-  // extracao (duas fontes/iteracoes pegaram a mesma parede com classes
-  // diferentes). Marca a INT como needs_review pro orcamentista decidir.
+  // esta paralela e sobreposta a uma EXT, e duplicata da extracao (duas fontes
+  // ou iteracoes pegaram a mesma parede com classes diferentes). Regra do
+  // negocio: a EXTERNA sempre prevalece — removemos a INT do orcamento e
+  // marcamos a EXT com uma nota pra revisao opcional.
+  const internalDuplicateIds = new Set<string>();
   try {
     type WB = { ymin: number; xmin: number; ymax: number; xmax: number };
     const bboxOf = (w: ExtractedWall): WB | null => {
@@ -1051,10 +1053,14 @@ export function fusionMultiView(
           const overlap = Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
           if (overlap / Math.min(lenI, lenE) < OVERLAP_RATIO_MIN) continue;
 
-          if (!wi.needs_review) {
-            wi.needs_review = true;
-            wi.review_reason = `Parede interna paralela e sobreposta a parede externa ${we.id} (${(overlap / Math.min(lenI, lenE) * 100).toFixed(0)}% de sobreposicao). Provavel duplicata — confirme se deve ser EXTERNA, INTERNA ou se nao deve existir.`;
-            wi.confidence = Math.min(wi.confidence, 0.5);
+          if (!internalDuplicateIds.has(wi.id)) {
+            internalDuplicateIds.add(wi.id);
+            const pct = (overlap / Math.min(lenI, lenE) * 100).toFixed(0);
+            // Nota na externa pro orcamentista saber que houve dedup automatica
+            const note = `Removida parede interna ${wi.id} paralela e sobreposta (${pct}%) — externa prevalece.`;
+            we.review_reason = we.review_reason ? `${we.review_reason} ${note}` : note;
+            we.needs_review = true;
+            we.confidence = Math.min(we.confidence, 0.7);
             flagged++;
           }
           break;
@@ -1062,18 +1068,23 @@ export function fusionMultiView(
       }
     }
     if (flagged > 0) {
-      console.log(`[FUSAO] Dedup geometrica: ${flagged} parede(s) interna(s) flagadas como duplicata de externa paralela`);
+      console.log(`[FUSAO] Dedup geometrica: ${flagged} parede(s) interna(s) removida(s) por duplicar parede externa paralela (externa prevalece)`);
     }
   } catch (dedupErr: any) {
     console.warn(`[FUSAO] Dedup geometrica falhou: ${dedupErr?.message || dedupErr}`);
   }
 
+  // Aplica a remocao das internas duplicadas — externa prevalece
+  const walls_after_parallel_dedup = internalDuplicateIds.size > 0
+    ? deduplicatedWalls.filter(w => !internalDuplicateIds.has(w.id))
+    : deduplicatedWalls;
+
   // ===== Feedback overrides (human-in-the-loop) =====
   // Aplicado por ultimo: depois da fusao, dedup, auditoria — para que a decisao
   // humana de projetos anteriores tenha a palavra final sobre a classificacao.
-  let finalWalls = deduplicatedWalls;
+  let finalWalls = walls_after_parallel_dedup;
   if (feedbacks && feedbacks.length > 0) {
-    const r = applyFeedbackOverrides(deduplicatedWalls, feedbacks, currentClientName);
+    const r = applyFeedbackOverrides(walls_after_parallel_dedup, feedbacks, currentClientName);
     finalWalls = r.walls;
     if (r.overridesApplied > 0 || r.notWallRemoved > 0) {
       console.log(`[FUSAO] Feedback humano aplicado: ${r.overridesApplied} reclassificacao(oes), ${r.notWallRemoved} parede(s) removida(s) como "nao e parede"`);
