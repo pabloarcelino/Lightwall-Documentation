@@ -1513,14 +1513,18 @@ export async function registerRoutes(
       // marca confirmed_by_section=true, e marca pavimentos multi-andar SEM corte
       // como needs_section_confirmation. Pulado silenciosamente se nao houver corte.
       try {
-        const hasCorte = allClassifications.some(c => c.classificacao === "corte");
-        if (hasCorte) {
-          sendProgress(projectId, 4.7, "Validacao por Cortes", "running", "Extraindo alturas dos cortes...");
+        // Task #9: aceita "corte" e "fachada" (elevacao) como fontes verticais
+        // para extrair pe-direito. Ambas mostram alturas anotadas, embora cortes
+        // sejam mais ricos por mostrarem multiplos pavimentos empilhados.
+        const isVerticalView = (c: PageClassification) => c.classificacao === "corte" || c.classificacao === "fachada";
+        const hasVertical = allClassifications.some(isVerticalView);
+        if (hasVertical) {
+          sendProgress(projectId, 4.7, "Validacao por Cortes", "running", "Extraindo alturas dos cortes/fachadas...");
           const allSections: import("./services/gemini/planAnalyzer").SectionInfo[] = [];
           for (const file of files) {
             const fileClassifications = classificationsByFile.get(String(file.id)) || [];
             if (fileClassifications.length === 0) continue;
-            if (!fileClassifications.some(c => c.classificacao === "corte")) continue;
+            if (!fileClassifications.some(isVerticalView)) continue;
             const sections = await extractSectionInfo(file.filePath, file.fileType, fileClassifications);
             allSections.push(...sections);
           }
@@ -3068,11 +3072,25 @@ export async function registerRoutes(
       // Task #9: dedupe — UMA imagem anotada por pavimento. Se ha multiplas
       // paginas do mesmo pavimento (raro mas possivel), mantemos a primeira.
       const seenPavimentos = new Set<string>();
-      const dedupedSources = imgSources.filter(s => {
+      let dedupedSources = imgSources.filter(s => {
         if (seenPavimentos.has(s.pavimento)) return false;
         seenPavimentos.add(s.pavimento);
         return true;
       });
+
+      // Task #9: filtro opcional por pavimento/pageIndex no body. Permite
+      // regenerar a imagem de UM pavimento especifico sem reprocessar os outros.
+      const reqPavimento = typeof req.body?.pavimento === "string" ? req.body.pavimento.trim() : "";
+      const reqPageIndex = Number.isFinite(req.body?.pageIndex) ? Number(req.body.pageIndex) : undefined;
+      if (reqPavimento) {
+        dedupedSources = dedupedSources.filter(s => s.pavimento === reqPavimento);
+      }
+      if (typeof reqPageIndex === "number") {
+        dedupedSources = dedupedSources.filter(s => s.pageIndex === reqPageIndex);
+      }
+      if ((reqPavimento || reqPageIndex !== undefined) && dedupedSources.length === 0) {
+        return res.status(404).json({ message: `Nenhuma planta encontrada para pavimento="${reqPavimento}" pageIndex=${reqPageIndex ?? "?"}` });
+      }
 
       for (const src of dedupedSources) {
         const floorWalls = walls.filter((w: any) => src.pavimento === "all" || w.nivel === src.pavimento);

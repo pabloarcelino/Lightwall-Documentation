@@ -1453,8 +1453,11 @@ export async function extractSectionInfo(
   fileType: string | undefined,
   classifications: PageClassification[],
 ): Promise<SectionInfo[]> {
-  const cortePages = classifications.filter(c => c.classificacao === "corte");
-  if (cortePages.length === 0) return [];
+  // Task #9: aceita "corte" e "fachada" (elevacao) — ambos sao vistas verticais
+  // com cotas de altura. Fachada normalmente mostra apenas o exterior, mas
+  // suficiente para confirmar pe-direito total da edificacao.
+  const verticalPages = classifications.filter(c => c.classificacao === "corte" || c.classificacao === "fachada");
+  if (verticalPages.length === 0) return [];
 
   const fileMime = getMimeType(filePath, fileType);
   // Carrega paginas. PDF -> splitPdfPages devolve 1-page PDFs (mime application/pdf).
@@ -1469,7 +1472,7 @@ export async function extractSectionInfo(
   }
 
   const results: SectionInfo[] = [];
-  for (const c of cortePages) {
+  for (const c of verticalPages) {
     const page = pageImages.find(p => p.pageIndex === c.page_index);
     if (!page) continue;
     const pavHint = c.pavimento || "Terreo";
@@ -1512,7 +1515,7 @@ Responda APENAS com JSON neste formato (sem markdown, sem texto extra):
     }
   }
 
-  console.log(`[CORTE] ${results.length} pavimento(s) com pe-direito extraido de ${cortePages.length} corte(s)`);
+  console.log(`[CORTE] ${results.length} pavimento(s) com pe-direito extraido de ${verticalPages.length} vista(s) vertical(is) (cortes/fachadas)`);
   return results;
 }
 

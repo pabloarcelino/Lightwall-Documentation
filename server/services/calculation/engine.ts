@@ -331,18 +331,28 @@ export function applySectionData(
     const sec = findSectionFor(pav);
     if (sec) {
       pavimentosWithSection.add(pav);
-      // Sobrescreve altura somente se diferir significativamente (>5cm) ou se
-      // origem atual nao for ja "corte" — evita marcar override em re-rodadas.
-      if (Math.abs((w.altura_m || 0) - sec.pe_direito_m) > 0.05 || w.height_source !== "corte") {
+      const priorHeight = w.altura_m || 0;
+      const diff = Math.abs(priorHeight - sec.pe_direito_m);
+      // Tres casos por parede:
+      //  (a) altura preexistente bateu com a do corte (<=5cm) -> CONFIRMA
+      //      (height_source inalterado, confirmed_by_section=true).
+      //  (b) altura preexistente divergiu OU veio de "default" -> OVERRIDE
+      //      (height_source="corte", confirmed_by_section=true).
+      //  (c) origem ja era "corte" -> idempotente, so reafirma o flag.
+      if (priorHeight > 0 && diff <= 0.05 && w.height_source !== "default") {
+        w.confirmed_by_section = true;
+      } else {
         w.altura_m = sec.pe_direito_m;
         w.height_source = "corte";
+        w.confirmed_by_section = true;
         heightsApplied += 1;
       }
-      w.confirmed_by_section = true;
       // Limpa pending caso tenha sido marcada antes
       if (w.needs_section_confirmation) w.needs_section_confirmation = false;
-    } else if (isMultiFloor) {
-      // Multi-pavimento sem corte para ESSE pavimento — recomenda verificacao
+    } else if (isMultiFloor && (w.height_source === "default" || !w.height_source)) {
+      // So sinaliza "verificar" quando NAO ha corroboracao independente da altura
+      // (i.e., a altura veio do default). Paredes com altura confirmada por IA
+      // ou pela tabela nao precisam de verificacao adicional.
       w.needs_section_confirmation = true;
     }
   }

@@ -262,7 +262,9 @@ export default function AnnotatedFloorPlan({ projectId, walls, files, highlighte
       setAiImages(imgs);
       setActivePavTab(imgs[0]?.pavimento || "");
       setAiImage(imgs[0]?.image || json.image || null);
-      setAiSummary(json.summary || null);
+      // Mostra o sumario do pavimento ativo (primeiro tab) ao inves do agregado
+      // — evita inconsistencia entre imagem exibida e contagens.
+      setAiSummary(imgs[0]?.summary || json.summary || null);
       const pavCount = imgs.length;
       toast({
         title: "Imagem anotada gerada",
