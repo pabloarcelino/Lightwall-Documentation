@@ -347,6 +347,12 @@ export function applySectionData(
         w.confirmed_by_section = true;
         heightsApplied += 1;
       }
+      // Boost de confianca quando confirmado por corte/fachada — a altura
+      // passa a ter corroboracao independente (vista vertical com cota).
+      // Cap em 0.99 para evitar overconfidence absoluta.
+      if (typeof w.confidence === "number" && w.confidence < 0.99) {
+        w.confidence = Math.min(0.99, w.confidence + 0.1);
+      }
       // Limpa pending caso tenha sido marcada antes
       if (w.needs_section_confirmation) w.needs_section_confirmation = false;
     } else if (isMultiFloor && (w.height_source === "default" || !w.height_source)) {
