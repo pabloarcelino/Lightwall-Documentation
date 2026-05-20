@@ -66,7 +66,7 @@ import {
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import PdfViewer from "@/components/PdfViewer";
 import Metodologia from "@/components/Metodologia";
-import QuantitativosEditor from "@/components/QuantitativosEditor";
+import QuantitativosEditor, { type QuantitativosEditorHandle } from "@/components/QuantitativosEditor";
 import FloorPlanDiagram from "@/components/FloorPlanDiagram";
 import AnnotatedFloorPlan from "@/components/AnnotatedFloorPlan";
 import { LightwallDots } from "@/components/LightwallLogo";
@@ -137,6 +137,115 @@ function formatElapsed(ms: number): string {
   return `${secs}s`;
 }
 
+// Overlay clicavel sobre a planta anotada pela IA. Cada parede com bbox vira
+// uma area clicavel que cicla a classe (externa -> interna -> muro) via o
+// handle do QuantitativosEditor. Bbox e normalizado 0-1000 (mesmo padrao da IA).
+function InteractiveAnnotatedPlan({
+  src,
+  alt,
+  testId,
+  walls,
+  onClickWall,
+  onHoverWall,
+  highlightedWallId,
+}: {
+  src: string;
+  alt: string;
+  testId: string;
+  walls: Array<{ id: string; classe: string; bbox?: number[]; enabled?: boolean; needs_review?: boolean }>;
+  onClickWall: (wallId: string) => void;
+  onHoverWall?: (wallId: string | null) => void;
+  highlightedWallId?: string | null;
+}) {
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!el) return;
+    const update = () => {
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        setDims({ w: el.clientWidth, h: el.clientHeight });
+      }
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [src]);
+
+  const colorFor = (c: string) =>
+    c === "externa" ? "#dc2626" : c === "muro" ? "#1d4ed8" : "#16a34a";
+
+  const wallsWithBbox = walls.filter(
+    (w) => Array.isArray(w.bbox) && w.bbox.length >= 4,
+  );
+
+  return (
+    <div className="relative inline-block w-full">
+      <img
+        ref={imgRef}
+        src={src}
+        alt={alt}
+        className="block w-full h-auto rounded border"
+        data-testid={testId}
+        onLoad={(e) => {
+          const img = e.currentTarget;
+          setDims({ w: img.clientWidth, h: img.clientHeight });
+        }}
+      />
+      {dims && wallsWithBbox.length > 0 && (
+        <svg
+          className="absolute top-0 left-0 pointer-events-none"
+          width={dims.w}
+          height={dims.h}
+          viewBox={`0 0 ${dims.w} ${dims.h}`}
+          style={{ width: dims.w, height: dims.h }}
+        >
+          {wallsWithBbox.map((w) => {
+            const [ymin, xmin, ymax, xmax] = w.bbox as number[];
+            const x = (xmin / 1000) * dims.w;
+            const y = (ymin / 1000) * dims.h;
+            const width = ((xmax - xmin) / 1000) * dims.w;
+            const height = ((ymax - ymin) / 1000) * dims.h;
+            const color = colorFor(w.classe);
+            const isHighlighted = highlightedWallId === w.id;
+            const isDimmed = highlightedWallId && highlightedWallId !== w.id;
+            const enabled = w.enabled !== false;
+            const opacity = isDimmed ? 0.2 : enabled ? 1 : 0.4;
+            return (
+              <g
+                key={w.id}
+                className="pointer-events-auto cursor-pointer"
+                onMouseEnter={() => onHoverWall?.(w.id)}
+                onMouseLeave={() => onHoverWall?.(null)}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  onClickWall(w.id);
+                }}
+                data-testid={`overlay-ai-wall-${w.id}`}
+                style={{ opacity }}
+              >
+                <rect
+                  x={x}
+                  y={y}
+                  width={width}
+                  height={height}
+                  fill={color}
+                  fillOpacity={isHighlighted ? 0.45 : 0.05}
+                  stroke={color}
+                  strokeWidth={isHighlighted ? 4 : 2}
+                  strokeDasharray={w.needs_review ? "6 4" : undefined}
+                />
+              </g>
+            );
+          })}
+        </svg>
+      )}
+    </div>
+  );
+}
+
 export default function ProjectDetails() {
   const [, params] = useRoute("/project/:id");
   const projectId = params?.id;
@@ -185,6 +294,7 @@ export default function ProjectDetails() {
   const [editClient, setEditClient] = useState("");
   const [highlightedWallId, setHighlightedWallId] = useState<string | null>(null);
   const [liveWalls, setLiveWalls] = useState<any[] | null>(null);
+  const editorRef = useRef<QuantitativosEditorHandle | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const sseRetryRef = useRef<number>(0);
   const [pipelineStartTime, setPipelineStartTime] = useState<number | null>(null);
@@ -1795,34 +1905,45 @@ export default function ProjectDetails() {
                             </p>
                           </div>
                           {renderSummary()}
-                          {isMultiFloor ? (
-                            <Tabs defaultValue={floorImages[0].pavimento} className="w-full">
-                              <TabsList className="w-full justify-start">
+                          {(() => {
+                            const cycleWall = (wallId: string) => editorRef.current?.cycleWallClasse(wallId);
+                            const wallsForPav = (pav: string) =>
+                              planWalls.filter((w: any) => pav === "all" || w.nivel === pav);
+                            return isMultiFloor ? (
+                              <Tabs defaultValue={floorImages[0].pavimento} className="w-full">
+                                <TabsList className="w-full justify-start">
+                                  {floorImages.map((fi) => (
+                                    <TabsTrigger key={fi.pavimento} value={fi.pavimento}>
+                                      {floorLabel(fi.pavimento)}
+                                    </TabsTrigger>
+                                  ))}
+                                </TabsList>
                                 {floorImages.map((fi) => (
-                                  <TabsTrigger key={fi.pavimento} value={fi.pavimento}>
-                                    {floorLabel(fi.pavimento)}
-                                  </TabsTrigger>
+                                  <TabsContent key={fi.pavimento} value={fi.pavimento}>
+                                    <InteractiveAnnotatedPlan
+                                      src={fi.image}
+                                      alt={`Planta anotada - ${floorLabel(fi.pavimento)}`}
+                                      testId={`img-ai-annotated-plan-${fi.pavimento}`}
+                                      walls={wallsForPav(fi.pavimento)}
+                                      onClickWall={cycleWall}
+                                      onHoverWall={setHighlightedWallId}
+                                      highlightedWallId={highlightedWallId}
+                                    />
+                                  </TabsContent>
                                 ))}
-                              </TabsList>
-                              {floorImages.map((fi) => (
-                                <TabsContent key={fi.pavimento} value={fi.pavimento}>
-                                  <img
-                                    src={fi.image}
-                                    alt={`Planta anotada - ${floorLabel(fi.pavimento)}`}
-                                    className="block w-full h-auto rounded border"
-                                    data-testid={`img-ai-annotated-plan-${fi.pavimento}`}
-                                  />
-                                </TabsContent>
-                              ))}
-                            </Tabs>
-                          ) : (
-                            <img
-                              src={floorImages[0].image}
-                              alt="Planta anotada pela IA"
-                              className="block w-full h-auto rounded border"
-                              data-testid="img-ai-annotated-plan"
-                            />
-                          )}
+                              </Tabs>
+                            ) : (
+                              <InteractiveAnnotatedPlan
+                                src={floorImages[0].image}
+                                alt="Planta anotada pela IA"
+                                testId="img-ai-annotated-plan"
+                                walls={wallsForPav(floorImages[0].pavimento)}
+                                onClickWall={cycleWall}
+                                onHoverWall={setHighlightedWallId}
+                                highlightedWallId={highlightedWallId}
+                              />
+                            );
+                          })()}
                           {renderLegend()}
                         </CardContent>
                       </Card>
@@ -1929,6 +2050,7 @@ export default function ProjectDetails() {
               );
             })()}
             <QuantitativosEditor
+              ref={editorRef}
               projectId={projectId!}
               extractedData={extractedData || []}
               onRecalculated={() => {

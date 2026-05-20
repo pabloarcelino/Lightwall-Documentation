@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, forwardRef, useImperativeHandle, type Ref } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -93,7 +93,14 @@ interface Props {
   onWallsChange?: (walls: EditableWall[]) => void;
 }
 
-export default function QuantitativosEditor({ projectId, extractedData, onRecalculated, highlightedWallId, onHoverWall, onWallsChange }: Props) {
+export interface QuantitativosEditorHandle {
+  cycleWallClasse: (wallId: string) => void;
+}
+
+const QuantitativosEditor = forwardRef(function QuantitativosEditor(
+  { projectId, extractedData, onRecalculated, highlightedWallId, onHoverWall, onWallsChange }: Props,
+  ref: Ref<QuantitativosEditorHandle>,
+) {
   const { toast } = useToast();
   const [walls, setWalls] = useState<EditableWall[]>([]);
   const [slabs, setSlabs] = useState<EditableSlab[]>([]);
@@ -166,6 +173,27 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
   useEffect(() => {
     if (onWallsChange) onWallsChange(walls);
   }, [walls, onWallsChange]);
+
+  // Handle imperativo: permite que componentes pais (ex: overlay clicavel sobre
+  // a imagem anotada) ciclem a classe de uma parede reutilizando a logica de
+  // update + feedback do editor.
+  useImperativeHandle(ref, () => ({
+    cycleWallClasse: (wallId: string) => {
+      setWalls(prev => {
+        const idx = prev.findIndex(w => w.id === wallId);
+        if (idx < 0) return prev;
+        const before = prev[idx];
+        const cycle: Array<EditableWall["classe"]> = ["externa", "interna", "muro"];
+        const next = cycle[(cycle.indexOf(before.classe) + 1) % cycle.length];
+        const updated = [...prev];
+        updated[idx] = { ...before, classe: next };
+        sendFeedback(buildFeedbackPayload(before, exemplarMode ? "exemplar" : "correct", before.classe, next));
+        toast({ title: "Reclassificada", description: `${before.id}: ${before.classe} → ${next}` });
+        return updated;
+      });
+      setHasChanges(true);
+    },
+  }), [exemplarMode]);
 
   const markChanged = () => setHasChanges(true);
 
@@ -941,4 +969,6 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
       )}
     </div>
   );
-}
+});
+
+export default QuantitativosEditor;
