@@ -371,12 +371,80 @@ export function applySectionData(
   };
 }
 
+export interface FloorSideHintEntry {
+  pavimento: string;
+  xNorm: number; // 0-1000
+  yNorm: number;
+  side: "exterior" | "interior";
+}
+
+// Aplica marcadores humanos de "lado externo" / "lado interno" sobre as paredes.
+// Para cada parede com bbox, dispara dois "probes" perpendiculares (um para cada
+// lado) e checa qual marcador esta mais proximo de cada probe. Se um lado eh
+// dominantemente "exterior" e o outro "interior" -> parede EXTERNA. Se ambos
+// "interior" -> parede INTERNA. Caso contrario, mantem a classificacao da IA.
+export function applySideHintsOverride(
+  walls: ExtractedWall[],
+  hints: FloorSideHintEntry[],
+): { walls: ExtractedWall[]; overridden: number } {
+  if (!hints || hints.length === 0) return { walls, overridden: 0 };
+  const PROBE_OFFSET = 50; // unidades 0-1000 (~5% da pagina)
+  const byPav = new Map<string, FloorSideHintEntry[]>();
+  for (const h of hints) {
+    if (!byPav.has(h.pavimento)) byPav.set(h.pavimento, []);
+    byPav.get(h.pavimento)!.push(h);
+  }
+  const nearestSide = (px: number, py: number, pavHints: FloorSideHintEntry[]): "exterior" | "interior" | null => {
+    let best: { d: number; side: "exterior" | "interior" } | null = null;
+    for (const h of pavHints) {
+      const dx = h.xNorm - px, dy = h.yNorm - py;
+      const d = dx * dx + dy * dy;
+      if (!best || d < best.d) best = { d, side: h.side };
+    }
+    return best?.side ?? null;
+  };
+  let overridden = 0;
+  const out: ExtractedWall[] = [];
+  for (const w of walls) {
+    if (!w.bbox || w.bbox.length < 4 || w.classe === "muro") { out.push(w); continue; }
+    const pavHints = byPav.get(w.nivel) || byPav.get("all") || [];
+    if (pavHints.length === 0) { out.push(w); continue; }
+    const [ymin, xmin, ymax, xmax] = w.bbox;
+    const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2;
+    const horizontal = (xmax - xmin) >= (ymax - ymin);
+    // probe1, probe2: pontos um pouco antes/depois da parede (eixo perpendicular)
+    const p1 = horizontal ? { x: cx, y: cy - PROBE_OFFSET } : { x: cx - PROBE_OFFSET, y: cy };
+    const p2 = horizontal ? { x: cx, y: cy + PROBE_OFFSET } : { x: cx + PROBE_OFFSET, y: cy };
+    const s1 = nearestSide(p1.x, p1.y, pavHints);
+    const s2 = nearestSide(p2.x, p2.y, pavHints);
+    if (!s1 || !s2) { out.push(w); continue; }
+    let target: "externa" | "interna" | null = null;
+    if ((s1 === "exterior" && s2 === "interior") || (s1 === "interior" && s2 === "exterior")) {
+      target = "externa";
+    } else if (s1 === "interior" && s2 === "interior") {
+      target = "interna";
+    } // se ambos "exterior" -> muro/cerca, mantem como esta
+    if (target && target !== w.classe) {
+      const nw: ExtractedWall = { ...w, classe: target };
+      const note = `Reclassificada como ${target.toUpperCase()} pelo marcador humano (lado exterior/interior).`;
+      nw.review_reason = note;
+      nw.confidence = Math.max(nw.confidence ?? 0, 0.95);
+      out.push(nw);
+      overridden++;
+    } else {
+      out.push(w);
+    }
+  }
+  return { walls: out, overridden };
+}
+
 export function fusionMultiView(
   geometries: GeometryResult[],
   tableData: TableData | null,
   buildingType?: string,
   feedbacks?: WallFeedbackEntry[],
   currentClientName?: string | null,
+  sideHints?: FloorSideHintEntry[],
 ): { walls: ExtractedWall[]; slabs: ExtractedSlab[]; corners: ExtractedCorner[] } {
   let allWalls: ExtractedWall[] = [];
   let allSlabs: ExtractedSlab[] = [];
@@ -1088,6 +1156,17 @@ export function fusionMultiView(
     finalWalls = r.walls;
     if (r.overridesApplied > 0 || r.notWallRemoved > 0) {
       console.log(`[FUSAO] Feedback humano aplicado: ${r.overridesApplied} reclassificacao(oes), ${r.notWallRemoved} parede(s) removida(s) como "nao e parede"`);
+    }
+  }
+
+  // Side hints sao a ultima palavra do humano para este projeto: sobrepoem
+  // tudo (IA, dedup, feedback historico). O orcamentista pintou onde fica o
+  // exterior/interior dele neste projeto, entao confiamos plenamente.
+  if (sideHints && sideHints.length > 0) {
+    const r = applySideHintsOverride(finalWalls, sideHints);
+    finalWalls = r.walls;
+    if (r.overridden > 0) {
+      console.log(`[FUSAO] Side hints aplicadas: ${r.overridden} parede(s) reclassificada(s) pelo marcador humano`);
     }
   }
 

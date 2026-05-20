@@ -12,6 +12,7 @@ import {
   pricingProfiles,
   profilePrices,
   wallFeedback,
+  floorSideHints,
   type Product,
   type InsertProduct,
   type Project,
@@ -33,6 +34,8 @@ import {
   type InsertProfilePrice,
   type WallFeedback,
   type InsertWallFeedback,
+  type FloorSideHint,
+  type InsertFloorSideHint,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -110,6 +113,10 @@ export interface IStorage {
   getActiveWallFeedbackWithClient(): Promise<Array<WallFeedback & { clientName: string | null }>>;
   setWallFeedbackActive(id: number, active: boolean): Promise<WallFeedback | undefined>;
   deleteWallFeedback(id: number): Promise<void>;
+
+  // ===== Floor side hints (lado externo / interno marcado pelo humano) =====
+  getFloorSideHints(projectId: number): Promise<FloorSideHint[]>;
+  replaceFloorSideHints(projectId: number, hints: InsertFloorSideHint[]): Promise<FloorSideHint[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -488,6 +495,20 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteWallFeedback(id: number): Promise<void> {
     await db.delete(wallFeedback).where(eq(wallFeedback.id, id));
+  }
+
+  // ===== Floor side hints =====
+  async getFloorSideHints(projectId: number): Promise<FloorSideHint[]> {
+    return await db
+      .select()
+      .from(floorSideHints)
+      .where(eq(floorSideHints.projectId, projectId))
+      .orderBy(floorSideHints.id);
+  }
+  async replaceFloorSideHints(projectId: number, hints: InsertFloorSideHint[]): Promise<FloorSideHint[]> {
+    await db.delete(floorSideHints).where(eq(floorSideHints.projectId, projectId));
+    if (hints.length === 0) return [];
+    return await db.insert(floorSideHints).values(hints).returning();
   }
 }
 

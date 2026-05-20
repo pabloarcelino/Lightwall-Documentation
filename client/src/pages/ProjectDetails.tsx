@@ -140,6 +140,9 @@ function formatElapsed(ms: number): string {
 // Overlay clicavel sobre a planta anotada pela IA. Cada parede com bbox vira
 // uma area clicavel que cicla a classe (externa -> interna -> muro) via o
 // handle do QuantitativosEditor. Bbox e normalizado 0-1000 (mesmo padrao da IA).
+type SideHint = { xNorm: number; yNorm: number; side: "exterior" | "interior"; id?: number; pavimento?: string };
+type ClickMode = "wall" | "exterior" | "interior";
+
 function InteractiveAnnotatedPlan({
   src,
   alt,
@@ -148,6 +151,10 @@ function InteractiveAnnotatedPlan({
   onClickWall,
   onHoverWall,
   highlightedWallId,
+  mode = "wall",
+  hints = [],
+  onAddHint,
+  onRemoveHint,
 }: {
   src: string;
   alt: string;
@@ -156,6 +163,10 @@ function InteractiveAnnotatedPlan({
   onClickWall: (wallId: string) => void;
   onHoverWall?: (wallId: string | null) => void;
   highlightedWallId?: string | null;
+  mode?: ClickMode;
+  hints?: SideHint[];
+  onAddHint?: (xNorm: number, yNorm: number, side: "exterior" | "interior") => void;
+  onRemoveHint?: (hint: SideHint) => void;
 }) {
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -194,13 +205,22 @@ function InteractiveAnnotatedPlan({
           setDims({ w: img.clientWidth, h: img.clientHeight });
         }}
       />
-      {dims && wallsWithBbox.length > 0 && (
+      {dims && (
         <svg
-          className="absolute top-0 left-0 pointer-events-none"
+          className={`absolute top-0 left-0 ${mode === "wall" ? "pointer-events-none" : ""}`}
           width={dims.w}
           height={dims.h}
           viewBox={`0 0 ${dims.w} ${dims.h}`}
-          style={{ width: dims.w, height: dims.h }}
+          style={{ width: dims.w, height: dims.h, cursor: mode === "wall" ? undefined : "crosshair" }}
+          onClick={(ev) => {
+            if (mode === "wall") return;
+            const rect = (ev.currentTarget as SVGSVGElement).getBoundingClientRect();
+            const px = ev.clientX - rect.left;
+            const py = ev.clientY - rect.top;
+            const xNorm = Math.max(0, Math.min(1000, Math.round((px / dims.w) * 1000)));
+            const yNorm = Math.max(0, Math.min(1000, Math.round((py / dims.h) * 1000)));
+            onAddHint?.(xNorm, yNorm, mode);
+          }}
         >
           {wallsWithBbox.map((w) => {
             const [ymin, xmin, ymax, xmax] = w.bbox as number[];
@@ -216,10 +236,11 @@ function InteractiveAnnotatedPlan({
             return (
               <g
                 key={w.id}
-                className="pointer-events-auto cursor-pointer"
-                onMouseEnter={() => onHoverWall?.(w.id)}
-                onMouseLeave={() => onHoverWall?.(null)}
+                className={mode === "wall" ? "pointer-events-auto cursor-pointer" : "pointer-events-none"}
+                onMouseEnter={() => mode === "wall" && onHoverWall?.(w.id)}
+                onMouseLeave={() => mode === "wall" && onHoverWall?.(null)}
                 onClick={(ev) => {
+                  if (mode !== "wall") return;
                   ev.stopPropagation();
                   onClickWall(w.id);
                 }}
@@ -237,6 +258,27 @@ function InteractiveAnnotatedPlan({
                   strokeWidth={isHighlighted ? 4 : 2}
                   strokeDasharray={w.needs_review ? "6 4" : undefined}
                 />
+              </g>
+            );
+          })}
+          {hints.map((h, i) => {
+            const cx = (h.xNorm / 1000) * dims.w;
+            const cy = (h.yNorm / 1000) * dims.h;
+            const color = h.side === "exterior" ? "#ea580c" : "#0891b2";
+            return (
+              <g
+                key={`hint-${i}`}
+                className="pointer-events-auto cursor-pointer"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  onRemoveHint?.(h);
+                }}
+                data-testid={`hint-${h.side}-${i}`}
+              >
+                <circle cx={cx} cy={cy} r={10} fill={color} fillOpacity={0.85} stroke="#fff" strokeWidth={2} />
+                <text x={cx} y={cy + 4} textAnchor="middle" fill="#fff" fontSize={11} fontWeight="bold">
+                  {h.side === "exterior" ? "E" : "I"}
+                </text>
               </g>
             );
           })}
@@ -295,6 +337,11 @@ export default function ProjectDetails() {
   const [highlightedWallId, setHighlightedWallId] = useState<string | null>(null);
   const [liveWalls, setLiveWalls] = useState<any[] | null>(null);
   const editorRef = useRef<QuantitativosEditorHandle | null>(null);
+  // Marcadores humanos de lado exterior/interior sobre a planta anotada
+  const [clickMode, setClickMode] = useState<ClickMode>("wall");
+  const [pendingHints, setPendingHints] = useState<SideHint[]>([]);
+  const [hintsDirty, setHintsDirty] = useState(false);
+  const [activeAnnotPav, setActiveAnnotPav] = useState<string>("all");
   const eventSourceRef = useRef<EventSource | null>(null);
   const sseRetryRef = useRef<number>(0);
   const [pipelineStartTime, setPipelineStartTime] = useState<number | null>(null);
@@ -369,6 +416,49 @@ export default function ProjectDetails() {
   const { data: catalogProducts } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
+  // Marcadores humanos de lado exterior/interior persistidos pra este projeto
+  const { data: serverHints } = useQuery<Array<{ id: number; pavimento: string; xNorm: number; yNorm: number; side: "exterior" | "interior" }>>({
+    queryKey: ["/api/projects", projectId, "side-hints"],
+    enabled: !!projectId,
+  });
+  useEffect(() => {
+    if (serverHints && !hintsDirty) {
+      setPendingHints(serverHints.map(h => ({ id: h.id, pavimento: h.pavimento, xNorm: h.xNorm, yNorm: h.yNorm, side: h.side })));
+    }
+  }, [serverHints, hintsDirty]);
+  const saveHintsMutation = useMutation({
+    mutationFn: async (hints: SideHint[]) => {
+      const payload = { hints: hints.map(h => ({ pavimento: h.pavimento || "all", xNorm: h.xNorm, yNorm: h.yNorm, side: h.side })) };
+      const res = await apiRequest("PUT", `/api/projects/${projectId}/side-hints`, payload);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setHintsDirty(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "side-hints"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      toast({
+        title: "Marcadores salvos",
+        description: data?.reclassified > 0
+          ? `${data.reclassified} parede(s) reclassificada(s) pelos marcadores.`
+          : "Marcadores aplicados (nenhuma parede precisou ser reclassificada).",
+      });
+    },
+    onError: (err: any) => {
+      toast({ title: "Erro ao salvar marcadores", description: err?.message || "Tente novamente.", variant: "destructive" });
+    },
+  });
+  const addHint = (xNorm: number, yNorm: number, side: "exterior" | "interior", pavimento: string) => {
+    setPendingHints(prev => [...prev, { xNorm, yNorm, side, pavimento }]);
+    setHintsDirty(true);
+  };
+  const removeHint = (hint: SideHint) => {
+    setPendingHints(prev => prev.filter(h => !(h.xNorm === hint.xNorm && h.yNorm === hint.yNorm && h.side === hint.side && (h.pavimento || "all") === (hint.pavimento || "all"))));
+    setHintsDirty(true);
+  };
+  const clearHintsForPav = (pav: string) => {
+    setPendingHints(prev => prev.filter(h => (h.pavimento || "all") !== pav));
+    setHintsDirty(true);
+  };
   const panelProducts = (catalogProducts || []).filter(p => p.category === "painel");
 
   useEffect(() => {
@@ -1909,39 +1999,116 @@ export default function ProjectDetails() {
                             const cycleWall = (wallId: string) => editorRef.current?.cycleWallClasse(wallId);
                             const wallsForPav = (pav: string) =>
                               planWalls.filter((w: any) => pav === "all" || w.nivel === pav);
-                            return isMultiFloor ? (
-                              <Tabs defaultValue={floorImages[0].pavimento} className="w-full">
-                                <TabsList className="w-full justify-start">
-                                  {floorImages.map((fi) => (
-                                    <TabsTrigger key={fi.pavimento} value={fi.pavimento}>
-                                      {floorLabel(fi.pavimento)}
-                                    </TabsTrigger>
-                                  ))}
-                                </TabsList>
-                                {floorImages.map((fi) => (
-                                  <TabsContent key={fi.pavimento} value={fi.pavimento}>
-                                    <InteractiveAnnotatedPlan
-                                      src={fi.image}
-                                      alt={`Planta anotada - ${floorLabel(fi.pavimento)}`}
-                                      testId={`img-ai-annotated-plan-${fi.pavimento}`}
-                                      walls={wallsForPav(fi.pavimento)}
-                                      onClickWall={cycleWall}
-                                      onHoverWall={setHighlightedWallId}
-                                      highlightedWallId={highlightedWallId}
-                                    />
-                                  </TabsContent>
-                                ))}
-                              </Tabs>
-                            ) : (
-                              <InteractiveAnnotatedPlan
-                                src={floorImages[0].image}
-                                alt="Planta anotada pela IA"
-                                testId="img-ai-annotated-plan"
-                                walls={wallsForPav(floorImages[0].pavimento)}
-                                onClickWall={cycleWall}
-                                onHoverWall={setHighlightedWallId}
-                                highlightedWallId={highlightedWallId}
-                              />
+                            const hintsForPav = (pav: string) =>
+                              pendingHints.filter(h => (h.pavimento || "all") === pav);
+                            const activePav = isMultiFloor ? activeAnnotPav : floorImages[0].pavimento;
+                            const hintCountActive = hintsForPav(activePav).length;
+                            const toolbar = (
+                              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-2">
+                                <span className="text-xs text-muted-foreground mr-1">Clique:</span>
+                                <Button
+                                  size="sm"
+                                  variant={clickMode === "wall" ? "default" : "outline"}
+                                  onClick={() => setClickMode("wall")}
+                                  data-testid="button-mode-wall"
+                                >
+                                  Reclassificar parede
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant={clickMode === "exterior" ? "default" : "outline"}
+                                  className={clickMode === "exterior" ? "bg-orange-600 hover:bg-orange-700" : "border-orange-500 text-orange-700 hover:bg-orange-50"}
+                                  onClick={() => setClickMode("exterior")}
+                                  data-testid="button-mode-exterior"
+                                >
+                                  Marcar EXTERIOR
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant={clickMode === "interior" ? "default" : "outline"}
+                                  className={clickMode === "interior" ? "bg-cyan-600 hover:bg-cyan-700" : "border-cyan-600 text-cyan-700 hover:bg-cyan-50"}
+                                  onClick={() => setClickMode("interior")}
+                                  data-testid="button-mode-interior"
+                                >
+                                  Marcar INTERIOR
+                                </Button>
+                                <span className="text-xs text-muted-foreground ml-2">
+                                  {clickMode === "wall"
+                                    ? "Clique numa parede pra ciclar EXT/INT/MURO."
+                                    : `Clique no ${clickMode === "exterior" ? "lado de fora" : "lado de dentro"} de um comodo. Clique no marcador pra remover.`}
+                                </span>
+                                <div className="ml-auto flex items-center gap-2">
+                                  {hintCountActive > 0 && (
+                                    <span className="text-xs text-muted-foreground">
+                                      {hintCountActive} marcador(es)
+                                    </span>
+                                  )}
+                                  {hintCountActive > 0 && (
+                                    <Button size="sm" variant="ghost" onClick={() => clearHintsForPav(activePav)} data-testid="button-clear-hints">
+                                      Limpar
+                                    </Button>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    disabled={!hintsDirty || saveHintsMutation.isPending}
+                                    onClick={() => saveHintsMutation.mutate(pendingHints)}
+                                    data-testid="button-save-hints"
+                                  >
+                                    {saveHintsMutation.isPending ? "Aplicando..." : "Aplicar marcadores"}
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                            return (
+                              <>
+                                {toolbar}
+                                {isMultiFloor ? (
+                                  <Tabs
+                                    value={activeAnnotPav === "all" || !floorImages.some(f => f.pavimento === activeAnnotPav) ? floorImages[0].pavimento : activeAnnotPav}
+                                    onValueChange={setActiveAnnotPav}
+                                    className="w-full"
+                                  >
+                                    <TabsList className="w-full justify-start">
+                                      {floorImages.map((fi) => (
+                                        <TabsTrigger key={fi.pavimento} value={fi.pavimento}>
+                                          {floorLabel(fi.pavimento)}
+                                        </TabsTrigger>
+                                      ))}
+                                    </TabsList>
+                                    {floorImages.map((fi) => (
+                                      <TabsContent key={fi.pavimento} value={fi.pavimento}>
+                                        <InteractiveAnnotatedPlan
+                                          src={fi.image}
+                                          alt={`Planta anotada - ${floorLabel(fi.pavimento)}`}
+                                          testId={`img-ai-annotated-plan-${fi.pavimento}`}
+                                          walls={wallsForPav(fi.pavimento)}
+                                          onClickWall={cycleWall}
+                                          onHoverWall={setHighlightedWallId}
+                                          highlightedWallId={highlightedWallId}
+                                          mode={clickMode}
+                                          hints={hintsForPav(fi.pavimento)}
+                                          onAddHint={(x, y, s) => addHint(x, y, s, fi.pavimento)}
+                                          onRemoveHint={removeHint}
+                                        />
+                                      </TabsContent>
+                                    ))}
+                                  </Tabs>
+                                ) : (
+                                  <InteractiveAnnotatedPlan
+                                    src={floorImages[0].image}
+                                    alt="Planta anotada pela IA"
+                                    testId="img-ai-annotated-plan"
+                                    walls={wallsForPav(floorImages[0].pavimento)}
+                                    onClickWall={cycleWall}
+                                    onHoverWall={setHighlightedWallId}
+                                    highlightedWallId={highlightedWallId}
+                                    mode={clickMode}
+                                    hints={hintsForPav(floorImages[0].pavimento)}
+                                    onAddHint={(x, y, s) => addHint(x, y, s, floorImages[0].pavimento)}
+                                    onRemoveHint={removeHint}
+                                  />
+                                )}
+                              </>
                             );
                           })()}
                           {renderLegend()}

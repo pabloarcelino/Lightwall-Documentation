@@ -250,6 +250,25 @@ export const insertWallFeedbackSchema = createInsertSchema(wallFeedback).omit({
 export type WallFeedback = typeof wallFeedback.$inferSelect;
 export type InsertWallFeedback = z.infer<typeof insertWallFeedbackSchema>;
 
+// Marcadores humanos de "lado exterior" / "lado interior" desenhados pelo
+// orcamentista sobre a planta anotada. Usados pelo engine pra reclassificar
+// paredes (externa vs interna) com base na regiao em que o marcador caiu.
+export const floorSideHints = pgTable("floor_side_hints", {
+  id: serial("id").primaryKey(),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  pavimento: varchar("pavimento", { length: 100 }).notNull(),
+  xNorm: integer("x_norm").notNull(), // 0-1000 (mesmo sistema do bbox da IA)
+  yNorm: integer("y_norm").notNull(),
+  side: varchar("side", { length: 20 }).notNull(), // "exterior" | "interior"
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertFloorSideHintSchema = createInsertSchema(floorSideHints).omit({
+  id: true,
+  createdAt: true,
+});
+export type FloorSideHint = typeof floorSideHints.$inferSelect;
+export type InsertFloorSideHint = z.infer<typeof insertFloorSideHintSchema>;
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 

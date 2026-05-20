@@ -44,6 +44,7 @@ import {
   calculateBudget,
   budgetToLegacy,
   inconsistenciasToAlerts,
+  applySideHintsOverride,
 } from "./services/calculation/engine";
 import { validateGeometry, summarizeValidation } from "./services/calculation/geometryValidator";
 import { inspectFile, summarizePreflight } from "./services/preflight/inspector";
@@ -1445,7 +1446,23 @@ export async function registerRoutes(
       } catch (fbErr) {
         console.warn("[FEEDBACK] Falha ao carregar feedbacks:", fbErr);
       }
-      const fused = fusionMultiView(allGeometries, hasTableData ? mergedTableData : null, effectiveBuildingType(), wallFeedbacksForFusion, currentProjectClient);
+      // Carrega side hints humanos pra este projeto (marcadores de lado exterior/interior).
+      let sideHintsForFusion: any[] = [];
+      try {
+        const sh = await storage.getFloorSideHints(projectId);
+        sideHintsForFusion = sh.map(h => ({
+          pavimento: h.pavimento,
+          xNorm: h.xNorm,
+          yNorm: h.yNorm,
+          side: h.side as "exterior" | "interior",
+        }));
+        if (sideHintsForFusion.length > 0) {
+          console.log(`[SIDE_HINTS] Carregados ${sideHintsForFusion.length} marcador(es) pra este projeto`);
+        }
+      } catch (shErr) {
+        console.warn("[SIDE_HINTS] Falha ao carregar marcadores:", shErr);
+      }
+      const fused = fusionMultiView(allGeometries, hasTableData ? mergedTableData : null, effectiveBuildingType(), wallFeedbacksForFusion, currentProjectClient, sideHintsForFusion);
       sendProgress(projectId, 4, "Fusao Multivista", "done", `${fused.walls.length} paredes, ${fused.slabs.length} lajes, ${fused.corners.length} cantos (apos deduplicacao)`);
 
       const maxThickRaw = await storage.getSetting("wall_thickness_max_m");
@@ -2582,6 +2599,82 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("Erro ao salvar feedback em lote:", err);
       res.status(500).json({ message: "Erro ao salvar feedback em lote" });
+    }
+  });
+
+  // ===== Side hints (lado externo / interno marcado pelo humano) =====
+  const sideHintBodySchema = z.object({
+    pavimento: z.string().min(1).max(100),
+    xNorm: z.number().int().min(0).max(1000),
+    yNorm: z.number().int().min(0).max(1000),
+    side: z.enum(["exterior", "interior"]),
+  });
+  const sideHintsReplaceSchema = z.object({
+    hints: z.array(sideHintBodySchema).max(500),
+  });
+
+  app.get("/api/projects/:id/side-hints", requireAuth, async (req, res) => {
+    try {
+      const projectId = Number(req.params.id);
+      if (!Number.isFinite(projectId)) return res.status(400).json({ message: "id invalido" });
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto nao encontrado" });
+      const rows = await storage.getFloorSideHints(projectId);
+      res.json(rows);
+    } catch {
+      res.status(500).json({ message: "Erro ao listar marcadores" });
+    }
+  });
+
+  app.put("/api/projects/:id/side-hints", requireAuth, async (req, res) => {
+    try {
+      const projectId = Number(req.params.id);
+      if (!Number.isFinite(projectId)) return res.status(400).json({ message: "id invalido" });
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto nao encontrado" });
+      const parsed = sideHintsReplaceSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Payload invalido", issues: parsed.error.flatten() });
+      const inserts = parsed.data.hints.map(h => ({ projectId, ...h }));
+      const saved = await storage.replaceFloorSideHints(projectId, inserts);
+
+      // Aplica os marcadores nas paredes ja extraidas/editadas e persiste a
+      // reclassificacao no fusao + recalcula orcamento. Assim o usuario ve o
+      // efeito imediato sem precisar reprocessar o PDF inteiro.
+      let reclassified = 0;
+      try {
+        const fusao = await storage.getExtractedDataByType(projectId, "etapa4_fusao");
+        const currentWalls = (fusao?.data as any)?.resultado?.walls;
+        if (Array.isArray(currentWalls) && currentWalls.length > 0) {
+          const hintsForEngine = saved.map(h => ({
+            pavimento: h.pavimento,
+            xNorm: h.xNorm,
+            yNorm: h.yNorm,
+            side: h.side as "exterior" | "interior",
+          }));
+          const r = applySideHintsOverride(currentWalls, hintsForEngine);
+          reclassified = r.overridden;
+          if (r.overridden > 0) {
+            const newData = {
+              ...(fusao!.data as Record<string, unknown>),
+              resultado: {
+                ...((fusao!.data as any).resultado || {}),
+                walls: r.walls,
+              },
+              editedAt: new Date().toISOString(),
+              _side_hints_applied_at: new Date().toISOString(),
+              _side_hints_count: saved.length,
+            };
+            await storage.updateExtractedDataByType(projectId, "etapa4_fusao", newData);
+          }
+        }
+      } catch (applyErr) {
+        console.warn("[SIDE_HINTS] Falha ao aplicar marcadores nas paredes existentes:", applyErr);
+      }
+
+      res.json({ count: saved.length, reclassified, items: saved });
+    } catch (err: any) {
+      console.error("Erro ao salvar marcadores:", err);
+      res.status(500).json({ message: "Erro ao salvar marcadores" });
     }
   });
 
