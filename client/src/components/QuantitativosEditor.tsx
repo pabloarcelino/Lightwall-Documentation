@@ -543,7 +543,19 @@ export default function QuantitativosEditor({ projectId, extractedData, onRecalc
                   />
                   <Badge
                     variant={wall.classe === "externa" ? "default" : wall.classe === "muro" ? "outline" : "secondary"}
-                    className="text-xs"
+                    className="text-xs cursor-pointer hover-elevate select-none"
+                    title="Clique para alternar entre Externa → Interna → Muro"
+                    data-testid={`badge-classe-${idx}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const cycle: Array<EditableWall["classe"]> = ["externa", "interna", "muro"];
+                      const next = cycle[(cycle.indexOf(wall.classe) + 1) % cycle.length];
+                      const prev = wall.classe;
+                      // updateWall ja dispara sendFeedback("correct") automaticamente
+                      // quando o campo "classe" muda (vide updateWall ~linha 186).
+                      updateWall(idx, "classe", next);
+                      toast({ title: "Reclassificada", description: `${wall.id}: ${prev} → ${next}` });
+                    }}
                   >
                     {wall.classe === "externa" ? "EXT" : wall.classe === "muro" ? "MURO" : "INT"}
                   </Badge>

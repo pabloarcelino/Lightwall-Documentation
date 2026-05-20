@@ -289,31 +289,33 @@ function buildAnnotationPrompt(walls: any[], slabs: any[]): string {
 
   const hasBbox = enabledWalls.some((w: any) => w.bbox || w.box_2d);
 
-  return `Pinte contornos coloridos semi-transparentes sobre esta planta arquitetonica para identificar elementos Lightwall, no estilo de uma prancha de quantitativo profissional.
+  return `Pinte marcacoes coloridas sobre esta planta arquitetonica para identificar elementos Lightwall, no estilo de uma prancha de quantitativo profissional.
 
-REGRAS:
-- NAO altere o desenho tecnico por baixo. Apenas sobreponha cores.
-- Use contornos GROSSOS (3-5px) e fill semi-transparente (~25%).
-- A planta original deve continuar perfeitamente visivel.
+REGRAS (CRITICAS — siga sem desvio):
+- NAO altere o desenho tecnico por baixo. Apenas sobreponha as marcacoes.
+- A planta original deve continuar perfeitamente legivel.
 ${hasBbox ? `- Cada parede inclui coordenadas [bbox: ymin-ymax, xmin-xmax] normalizadas 0-1000. Use estas coordenadas para localizar EXATAMENTE cada parede na imagem.` : ""}
+- PAREDES: Desenhe UMA UNICA LINHA COLORIDA GROSSA (8-12px) sobreposta exatamente ao EIXO DA PAREDE, percorrendo o comprimento dela. NAO desenhe contorno de retangulo, NAO desenhe duas linhas paralelas, NAO use fill semi-transparente. Apenas UM TRACO solido por parede. Pense em destacar com um marcador de texto grosso sobre o desenho original.
+- LAJES: Para lajes (piso/coberta), use um leve fill colorido semi-transparente (10-15%) sobre toda a area da laje — laje e elemento de area, parede e elemento linear.
+- REGRA DE COR POR CLASSIFICACAO: cada parede tem UMA cor obrigatoria conforme sua classe (lista abaixo). NAO use a mesma cor para classes diferentes; se na duvida sobre a classe, use exatamente a cor que esta nesta instrucao para aquela classe especifica.
 - REGRA ANTI-SOBREPOSICAO: Se uma parede EXTERNA e uma INTERNA compartilham uma borda, pinte SOMENTE a cor EXTERNA (vermelha). Externas tem precedencia visual.
-- TAGS OBRIGATORIAS: Em CADA parede e laje desenhe uma TAG no formato:
+- TAGS OBRIGATORIAS: Em CADA parede e laje desenhe uma TAG pequena no formato:
     W01
     9,20 m
   (duas linhas: codigo na primeira, comprimento/area na segunda).
-  Use fundo branco com borda colorida (cor do elemento) e texto preto, posicionada PERTO da parede sem cobri-la (acima de paredes horizontais, ao lado de paredes verticais).
+  Use fundo branco com borda colorida (cor do elemento) e texto preto, posicionada PERTO do traco sem cobri-lo (acima de paredes horizontais, ao lado de paredes verticais).
 - LEGENDA OBRIGATORIA no rodape da imagem (caixa branca com 3 linhas):
     Vermelho = paredes externas
     Verde = paredes internas
     Azul = muros
   Use bolinhas coloridas + texto preto.
 
-CORES (siga RIGOROSAMENTE):
-- Paredes EXTERNAS → VERMELHO (#dc2626) contorno + fill 25%
-- Paredes INTERNAS → VERDE (#16a34a) contorno + fill 25%
-- MUROS → AZUL (#1d4ed8) contorno + fill 25%
-- LAJE PISO → VERDE-AGUA (#10b981) fill 20%
-- LAJE COBERTA → LARANJA (#f97316) fill 20%
+CORES POR CLASSE (use EXATAMENTE a cor listada — NAO pinte todas as paredes da mesma cor):
+- Paredes EXTERNAS → VERMELHO (#dc2626) — traco unico grosso
+- Paredes INTERNAS → VERDE (#16a34a) — traco unico grosso
+- MUROS → AZUL (#1d4ed8) — traco unico grosso
+- LAJE PISO → VERDE-AGUA (#10b981) — fill 10-15% sobre a area
+- LAJE COBERTA → LARANJA (#f97316) — fill 10-15% sobre a area
 
 PAREDES EXTERNAS (${externas.length}):
 ${externas.map(wallLine).join("\n") || "(nenhuma)"}
@@ -3097,7 +3099,25 @@ export async function registerRoutes(
         const floorSlabs = slabs.filter((s: any) => src.pavimento === "all" || s.nivel === src.pavimento);
         const enabledFloorWalls = floorWalls.filter((w: any) => w.enabled !== false);
         const enabledFloorSlabs = floorSlabs.filter((s: any) => s.enabled !== false);
-        if (enabledFloorWalls.length === 0 && enabledFloorSlabs.length === 0) continue;
+
+        // Quando o pavimento NAO tem paredes/lajes classificadas, ainda
+        // emitimos a pagina original (sem anotacao IA) para o operador poder
+        // marcar manualmente. Evita "desaparecer" pavimentos da UI.
+        if (enabledFloorWalls.length === 0 && enabledFloorSlabs.length === 0) {
+          console.log(`[ANNOTATED-IMG] ${src.pavimento} (pg ${src.pageIndex}) sem elementos classificados — emitindo pagina original pra validacao manual`);
+          const dataUrl = `data:${src.mimeType};base64,${src.base64}`;
+          annotatedImages.push({
+            pavimento: src.pavimento,
+            pageIndex: src.pageIndex,
+            image: dataUrl,
+            summary: {
+              externas: 0, internas: 0, muros: 0, lajePiso: 0, lajeCoberta: 0,
+              unannotated: true,
+              note: "Sem paredes/lajes extraidas para este pavimento. Use o editor para marcar manualmente.",
+            },
+          });
+          continue;
+        }
 
         console.log(`[ANNOTATED-IMG] Gerando imagem ${src.pavimento} (pg ${src.pageIndex}) | ${enabledFloorWalls.length} paredes, ${enabledFloorSlabs.length} lajes`);
 
