@@ -996,6 +996,78 @@ export function fusionMultiView(
     console.warn(`[FUSAO] Auditoria de perimetro falhou: ${auditErr?.message || auditErr}`);
   }
 
+  // ===== Regra geometrica: interna paralela+sobreposta a externa = duplicata =====
+  // Paredes internas e externas NUNCA ocupam o mesmo trecho fisico. Se uma INT
+  // esta paralela e sobreposta a uma EXT, e provavelmente uma duplicata da
+  // extracao (duas fontes/iteracoes pegaram a mesma parede com classes
+  // diferentes). Marca a INT como needs_review pro orcamentista decidir.
+  try {
+    type WB = { ymin: number; xmin: number; ymax: number; xmax: number };
+    const bboxOf = (w: ExtractedWall): WB | null => {
+      if (!w.bbox || w.bbox.length < 4) return null;
+      const [ymin, xmin, ymax, xmax] = w.bbox;
+      return { ymin, xmin, ymax, xmax };
+    };
+    const orientOf = (b: WB): "h" | "v" => (b.xmax - b.xmin) >= (b.ymax - b.ymin) ? "h" : "v";
+
+    const byNivel = new Map<string, ExtractedWall[]>();
+    for (const w of deduplicatedWalls) {
+      const key = w.nivel || "__sem_nivel__";
+      if (!byNivel.has(key)) byNivel.set(key, []);
+      byNivel.get(key)!.push(w);
+    }
+
+    const PERP_TOL = 30; // bbox normalizado 0-1000: 30 ~= 3% da pagina
+    const OVERLAP_RATIO_MIN = 0.30; // sobreposicao >= 30% do menor lado paralelo
+
+    let flagged = 0;
+    for (const wallsAtNivel of byNivel.values()) {
+      const ext = wallsAtNivel.filter(w => w.classe === "externa");
+      const int = wallsAtNivel.filter(w => w.classe === "interna");
+      if (ext.length === 0 || int.length === 0) continue;
+
+      for (const wi of int) {
+        const bi = bboxOf(wi); if (!bi) continue;
+        const oi = orientOf(bi);
+        const lenI = oi === "h" ? (bi.xmax - bi.xmin) : (bi.ymax - bi.ymin);
+        if (lenI <= 0) continue;
+
+        for (const we of ext) {
+          const be = bboxOf(we); if (!be) continue;
+          if (orientOf(be) !== oi) continue; // precisam ser paralelas
+          const lenE = oi === "h" ? (be.xmax - be.xmin) : (be.ymax - be.ymin);
+          if (lenE <= 0) continue;
+
+          // distancia perpendicular entre os eixos centrais
+          const cI = oi === "h" ? (bi.ymin + bi.ymax) / 2 : (bi.xmin + bi.xmax) / 2;
+          const cE = oi === "h" ? (be.ymin + be.ymax) / 2 : (be.xmin + be.xmax) / 2;
+          if (Math.abs(cI - cE) > PERP_TOL) continue;
+
+          // sobreposicao no eixo paralelo
+          const a0 = oi === "h" ? bi.xmin : bi.ymin;
+          const a1 = oi === "h" ? bi.xmax : bi.ymax;
+          const b0 = oi === "h" ? be.xmin : be.ymin;
+          const b1 = oi === "h" ? be.xmax : be.ymax;
+          const overlap = Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+          if (overlap / Math.min(lenI, lenE) < OVERLAP_RATIO_MIN) continue;
+
+          if (!wi.needs_review) {
+            wi.needs_review = true;
+            wi.review_reason = `Parede interna paralela e sobreposta a parede externa ${we.id} (${(overlap / Math.min(lenI, lenE) * 100).toFixed(0)}% de sobreposicao). Provavel duplicata — confirme se deve ser EXTERNA, INTERNA ou se nao deve existir.`;
+            wi.confidence = Math.min(wi.confidence, 0.5);
+            flagged++;
+          }
+          break;
+        }
+      }
+    }
+    if (flagged > 0) {
+      console.log(`[FUSAO] Dedup geometrica: ${flagged} parede(s) interna(s) flagadas como duplicata de externa paralela`);
+    }
+  } catch (dedupErr: any) {
+    console.warn(`[FUSAO] Dedup geometrica falhou: ${dedupErr?.message || dedupErr}`);
+  }
+
   // ===== Feedback overrides (human-in-the-loop) =====
   // Aplicado por ultimo: depois da fusao, dedup, auditoria — para que a decisao
   // humana de projetos anteriores tenha a palavra final sobre a classificacao.

@@ -1773,6 +1773,27 @@ export default function ProjectDetails() {
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-4">
+                          <div
+                            className="text-xs border rounded-md p-3 bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-100 space-y-1"
+                            data-testid="banner-reclassify-help"
+                          >
+                            <p className="font-semibold">Como corrigir o que a IA marcou:</p>
+                            <p>
+                              <strong>Paredes (vermelho/verde/azul):</strong> role ate a tabela
+                              <em> Paredes Detectadas </em> abaixo e <strong>clique no badge EXT/INT/MURO</strong>
+                              {" "}da parede pra alternar a classe. Cada clique cicla
+                              externa → interna → muro.
+                            </p>
+                            <p>
+                              <strong>Areas (laje piso / laje coberta):</strong> use a secao
+                              <em> Lajes Detectadas </em>e troque o tipo no seletor da laje.
+                            </p>
+                            <p>
+                              Regra: parede interna (verde) <strong>nao pode ficar paralela e em cima </strong>
+                              de uma externa (vermelha) — quando isso acontece, a interna ja vem marcada como
+                              <em> revisar </em>pra voce confirmar/remover.
+                            </p>
+                          </div>
                           {renderSummary()}
                           {isMultiFloor ? (
                             <Tabs defaultValue={floorImages[0].pavimento} className="w-full">
