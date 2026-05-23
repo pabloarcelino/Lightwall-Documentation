@@ -51,6 +51,7 @@ import { inspectFile, summarizePreflight } from "./services/preflight/inspector"
 import { extractFromVectorPdf } from "./services/preflight/pdfVectorExtractor";
 import { auditAiCall } from "./services/audit/aiAuditor";
 import { addAiEventClient } from "./services/audit/aiEvents";
+import { resolveProjectFilePath } from "./utils/filePaths";
 import { runGlobalCrossValidation } from "./services/gemini/globalValidator";
 import type { ExtractedWall, ExtractedSlab, ExtractedCorner } from "./services/gemini/planAnalyzer";
 import {
@@ -124,7 +125,9 @@ async function getAnnotationImageSources(
   // 1. Prefer real image files (PNG/JPG/WebP) — single entry, pavimento="all"
   const imageFile = files.find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""));
   if (imageFile) {
-    const buf = await fs.readFile(path.resolve(imageFile.filePath));
+    const imagePath = resolveProjectFilePath(imageFile.filePath);
+    if (!imagePath) return [];
+    const buf = await fs.readFile(imagePath);
     const ext = path.extname(imageFile.originalName || imageFile.filePath).toLowerCase();
     const mimeType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
     return [{ pageIndex: 0, pavimento: "all", base64: buf.toString("base64"), mimeType }];
@@ -134,7 +137,9 @@ async function getAnnotationImageSources(
   const pdfFile = files.find((f: any) => f.fileType === "pdf" || /\.pdf$/i.test(f.originalName || ""));
   if (!pdfFile) return [];
 
-  const pages = await splitPdfPages(path.resolve(pdfFile.filePath));
+  const pdfPath = resolveProjectFilePath(pdfFile.filePath);
+  if (!pdfPath) return [];
+  const pages = await splitPdfPages(pdfPath);
   if (pages.length === 0) return [];
 
   // Find all planta_baixa pages with their pavimento
@@ -203,7 +208,9 @@ async function getReferencePageSources(
   const refClassifications = classifications.filter(c => REFERENCE_PAGE_TYPES.has(c.classificacao));
   if (refClassifications.length === 0) return [];
 
-  const pages = await splitPdfPages(path.resolve(pdfFile.filePath));
+  const pdfPath = resolveProjectFilePath(pdfFile.filePath);
+  if (!pdfPath) return [];
+  const pages = await splitPdfPages(pdfPath);
   if (pages.length === 0) return [];
 
   return refClassifications
@@ -1020,10 +1027,15 @@ export async function registerRoutes(
           const ext = path.extname(file.originalname).toLowerCase();
           const fileType = ext === ".pdf" ? "pdf" : ext === ".ifc" ? "ifc" : "image";
 
+          // Salva caminho ABSOLUTO no DB. O `file.path` do multer e relativo
+          // ao cwd no momento da escrita — se o cwd mudar em um restart
+          // futuro (deploy, container Docker novo, etc.) o reprocess nao
+          // consegue mais localizar o arquivo. Resolver no momento do upload
+          // garante imunidade a essa variacao.
           const saved = await storage.addProjectFile({
             projectId,
             originalName: file.originalname,
-            filePath: file.path,
+            filePath: path.resolve(file.path),
             fileType,
             fileSize: file.size,
             pageType: null,
@@ -1142,11 +1154,25 @@ export async function registerRoutes(
 
       for (const file of files) {
         try {
+          // Resolve o caminho do arquivo em disco. Projetos antigos podem ter
+          // salvo path relativo; em deploys com cwd diferente isso quebrava.
+          // O helper tenta varios formatos (absoluto, relativo ao cwd,
+          // UPLOADS_DIR/basename) e retorna null se o arquivo realmente sumiu.
+          const filePath = resolveProjectFilePath(file.filePath);
+          if (!filePath) {
+            const msg = `Arquivo "${file.originalName}" nao foi encontrado em disco. ` +
+              `Provavelmente foi removido apos o upload. Exclua-o do projeto e faca upload novamente.`;
+            console.error(`[PIPELINE] ${msg} (filePath salvo: "${file.filePath}")`);
+            sendProgress(projectId, 0.5, "Pre-flight", "error", msg);
+            pipelineFailedPages.push({ fileId: file.id, fileName: file.originalName, pageIndex: -1 });
+            continue;
+          }
+
           // ===== Pre-flight inspection: detect file type, vector vs raster, recommend mode =====
           let preflight: Awaited<ReturnType<typeof inspectFile>> | null = null;
           try {
             sendProgress(projectId, 0.5, "Pre-flight", "running", `Inspecionando ${file.originalName}...`);
-            preflight = await inspectFile(path.resolve(file.filePath), file.fileType);
+            preflight = await inspectFile(filePath, file.fileType);
             const summary = summarizePreflight(preflight);
             console.log(`[PREFLIGHT] ${file.originalName}: ${summary}`);
             for (const n of preflight.notes) console.log(`[PREFLIGHT]   - ${n}`);
@@ -1160,7 +1186,7 @@ export async function registerRoutes(
           if (file.fileType === "ifc") {
             sendProgress(projectId, 1, "Leitura IFC", "running", `Lendo modelo BIM ${file.originalName}...`);
             try {
-              const ifcResult = await parseIfcFile(file.filePath, peDireito);
+              const ifcResult = await parseIfcFile(filePath, peDireito);
               const summary = `${ifcResult.wallCount} paredes, ${ifcResult.slabCount} lajes, ${ifcResult.doorCount} portas, ${ifcResult.windowCount} janelas (${ifcResult.storeyCount} pavimento(s))`;
               sendProgress(projectId, 1, "Leitura IFC", "done", summary);
 
@@ -1196,7 +1222,7 @@ export async function registerRoutes(
               inputSummary: `file=${file.originalName} type=${file.fileType} maxPages=3 userBuildingType=${!!userBuildingType}`,
               inputFileId: String(file.id),
             },
-            () => classifyAndExtractTables(file.filePath, file.fileType, 3, !!userBuildingType),
+            () => classifyAndExtractTables(filePath, file.fileType, 3, !!userBuildingType),
             (out: any) => ({
               classCount: out?.classifications?.length ?? 0,
               tableWalls: out?.tableData?.paredes_de_tabela?.length ?? 0,
@@ -1265,7 +1291,7 @@ export async function registerRoutes(
                   inputSummary: `file=${file.originalName} type=${file.fileType} pages=${classifications.length} buildingType=${effectiveBuildingType() || "n/a"} peDireito=${peDireito}`,
                   inputFileId: String(file.id),
                 },
-                () => extractGeometryParallel(file.filePath, file.fileType, classifications, 3, effectiveBuildingType(), peDireito),
+                () => extractGeometryParallel(filePath, file.fileType, classifications, 3, effectiveBuildingType(), peDireito),
                 (out: any) => ({
                   walls: out?.walls?.length ?? 0,
                   slabs: out?.slabs?.length ?? 0,
@@ -1289,7 +1315,7 @@ export async function registerRoutes(
               if (plantaPages.length === 0) return geo;
               const service = new AiTakeoffService();
               // Supports both PDF (multi-page) and single-page images
-              const pages = await getFilePages(path.resolve(file.filePath), file.fileType);
+              const pages = await getFilePages(filePath, file.fileType);
               for (const pc of plantaPages) {
                 const page = pages.find(p => p.pageIndex === pc.page_index);
                 if (!page) continue;
@@ -1383,7 +1409,7 @@ export async function registerRoutes(
                 // Restrict to planta_baixa pages only (avoid facades/cortes/details)
                 const pavMap = new Map<number, string>();
                 for (const pc of plantaPages) pavMap.set(pc.page_index, pc.pavimento || "Terreo");
-                const vec = await extractFromVectorPdf(path.resolve(file.filePath), pavMap, peDireito);
+                const vec = await extractFromVectorPdf(filePath, pavMap, peDireito);
                 // GATE: quando a escala e fallback (cotas com alta dispersao ou
                 // sem cotas confiaveis), os comprimentos reais das paredes sao
                 // palpite e o vetorizador inunda o orcamento com paredes
@@ -1568,7 +1594,12 @@ export async function registerRoutes(
             const fileClassifications = classificationsByFile.get(String(file.id)) || [];
             if (fileClassifications.length === 0) continue;
             if (!fileClassifications.some(isVerticalView)) continue;
-            const sections = await extractSectionInfo(file.filePath, file.fileType, fileClassifications);
+            const sectionFilePath = resolveProjectFilePath(file.filePath);
+            if (!sectionFilePath) {
+              console.warn(`[CORTE] Pulando ${file.originalName}: arquivo nao encontrado em disco`);
+              continue;
+            }
+            const sections = await extractSectionInfo(sectionFilePath, file.fileType, fileClassifications);
             allSections.push(...sections);
           }
           const sectionResult = applySectionData(fused.walls, allSections);
