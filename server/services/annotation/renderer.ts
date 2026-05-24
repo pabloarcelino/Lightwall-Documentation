@@ -1,5 +1,4 @@
 import sharp from "sharp";
-import { pdfToPng } from "pdf-to-png-converter";
 
 /**
  * Renderer deterministico de plantas anotadas. Substitui a geracao anterior
@@ -93,7 +92,17 @@ async function ensureRaster(
 ): Promise<{ buf: Buffer; width: number; height: number }> {
   if (mimeType === "application/pdf") {
     // Rasteriza a pagina alvo do PDF em alta resolucao via pdf-to-png-converter.
+    // Importado dinamicamente para que o servidor suba mesmo se a dep nao
+    // estiver instalada (a anotacao falha graciosamente neste caso).
     // viewportScale ~3 produz ~216 DPI para folhas A3 — suficiente pra cotas pequenas.
+    let pdfToPng: (typeof import("pdf-to-png-converter"))["pdfToPng"];
+    try {
+      ({ pdfToPng } = await import("pdf-to-png-converter"));
+    } catch (e: any) {
+      throw new Error(
+        `pdf-to-png-converter nao instalado. Rode 'npm install' no servidor. (${e?.message || e})`,
+      );
+    }
     const pages = await pdfToPng(buffer, {
       viewportScale: 3,
       pagesToProcess: [pageIndex + 1], // pdf-to-png usa 1-based
