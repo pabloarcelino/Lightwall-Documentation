@@ -63,6 +63,15 @@ export interface ExtractedWall {
   // marca pavimentos multi-andar sem corte (revisão recomendada).
   confirmed_by_section?: boolean;
   needs_section_confirmation?: boolean;
+  // Fase A da metodologia: classe original sugerida pela IA antes da
+  // reclassificacao topologica deterministica (point-in-polygon contra o
+  // envelope da edificacao). Util para auditoria.
+  aiClasse?: "externa" | "interna" | "muro";
+  // Justificativa da classificacao topologica aplicada em S5.
+  topologyReason?: string;
+  // Indices das paginas (planta_baixa) que originaram esta parede. Cortes,
+  // fachadas e vistas 3D NUNCA adicionam paredes, apenas enriquecem.
+  source_page_indices?: number[];
 }
 
 // Task #9: informação extraída de um corte (height por pavimento)
@@ -133,7 +142,7 @@ function getMimeType(filePath: string, fileType?: string): string {
   return "image/png";
 }
 
-function repairJSON(jsonStr: string): any {
+export function repairJSON(jsonStr: string): any {
   try {
     return JSON.parse(jsonStr);
   } catch {

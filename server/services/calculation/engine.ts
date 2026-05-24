@@ -456,6 +456,27 @@ export function fusionMultiView(
     allCorners.push(...geo.corners);
   }
 
+  // Fase A da metodologia (S11): dedup por origem.
+  // Toda parede/laje deve ter vindo de planta_baixa ou planta_cobertura — o
+  // pipeline ja garante isso em extractGeometryParallel (so itera plantas).
+  // Aqui populamos `source_page_indices` em cada wall/slab para auditoria
+  // e log explicitamente a procedencia. Cortes/fachadas/3D NUNCA aparecem
+  // como fonte (sao usados apenas para enriquecer altura/visual).
+  for (const w of allWalls) {
+    if (!w.source_page_indices || w.source_page_indices.length === 0) {
+      w.source_page_indices = typeof w.page_index === "number" ? [w.page_index] : [];
+    }
+  }
+  for (const s of allSlabs as any[]) {
+    if (!s.source_page_indices || s.source_page_indices.length === 0) {
+      s.source_page_indices = typeof s.page_index === "number" ? [s.page_index] : [];
+    }
+  }
+  console.log(
+    `[FUSAO/DEDUP] Entrada: ${allWalls.length} paredes, ${allSlabs.length} lajes, ` +
+    `${allCorners.length} cantos vindos de ${geometries.length} extracao(oes) de plantas.`,
+  );
+
   if (tableData) {
     for (const tw of tableData.paredes_de_tabela) {
       const twComprimento = num(tw.comprimento_m, 0);

@@ -67,6 +67,8 @@ import bcrypt from "bcryptjs";
 // substituido por server/services/annotation/renderer.ts (sharp + SVG). O arquivo
 // continua exportando a funcao caso seja util em outro fluxo no futuro.
 import { renderAnnotatedImage } from "./services/annotation/renderer";
+import { extractEnvelopes, type EnvelopePolygon } from "./services/extraction/envelopeExtractor";
+import { classifyWallsByTopology } from "./services/extraction/topology";
 import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
@@ -1506,6 +1508,79 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Nenhum dado extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas." });
       }
 
+      // ===== Etapa 3.7 — Topologia (envelope + classificacao deterministica) =====
+      // Metodologia passo-a-passo, Fase A:
+      // (S2) Pede ao Gemini APENAS o poligono da edificacao coberta — sem mistura
+      //      com classificacao/cotas/etc. Prompt curto + thinking budget alto.
+      // (S5) Classifica cada parede por point-in-polygon contra o envelope.
+      //      Determinıstico, sem IA — verdade topologica, nao "achismo" do LLM.
+      // (S6) floorSideHints humanos podem corrigir antes de aplicar.
+      // Pulado silenciosamente quando nao ha plantas baixas (ex: so IFC).
+      let envelopes: EnvelopePolygon[] = [];
+      try {
+        const wallsPreTopology = allGeometries.flatMap(g => g.walls);
+        if (wallsPreTopology.length > 0) {
+          sendProgress(projectId, 3.7, "Topologia", "running", "Extraindo envelope da edificacao por pavimento...");
+          // Reusa o mesmo extrator de fontes que a renderizacao usa — entrega
+          // 1 imagem por pavimento (planta_baixa) ja na resolucao certa.
+          const envelopeSources = await getAnnotationImageSources(files, allClassifications);
+          if (envelopeSources.length > 0) {
+            envelopes = await extractEnvelopes({
+              projectId,
+              pages: envelopeSources.map(s => ({
+                pageIndex: s.pageIndex,
+                pavimento: s.pavimento,
+                base64: s.base64,
+                mimeType: s.mimeType,
+              })),
+            });
+          }
+
+          if (envelopes.length === 0) {
+            sendProgress(projectId, 3.7, "Topologia", "done", "Nenhum envelope detectado — pulando reclassificacao topologica");
+          } else {
+            sendProgress(
+              projectId, 3.7, "Topologia", "running",
+              `${envelopes.length} envelope(s) detectado(s). Reclassificando paredes por point-in-polygon...`,
+            );
+            const topo = classifyWallsByTopology(wallsPreTopology, envelopes);
+            const wallById = new Map(wallsPreTopology.map(w => [w.id, w]));
+            for (const c of topo.classifications) {
+              const w = wallById.get(c.wallId);
+              if (!w) continue;
+              if (w.classe !== c.classe) {
+                w.aiClasse = w.classe;
+              }
+              w.classe = c.classe;
+              w.topologyReason = c.reason;
+              if (c.needsReview) {
+                w.needs_review = true;
+                w.review_reason = `topologia: ${c.reason}`;
+              }
+            }
+            // Persistir envelopes para a UI poder mostrar e o usuario auditar.
+            await storage.addExtractedData({
+              projectId,
+              elementType: "envelopes",
+              data: { envelopes },
+              hasAssumption: 0,
+            });
+            sendProgress(
+              projectId, 3.7, "Topologia", "done",
+              `${topo.classifications.length} paredes classificadas, ${topo.reclassified} reclassificadas, ${topo.skipped} sem envelope/bbox`,
+            );
+            console.log(
+              `[TOPOLOGIA] ${envelopes.length} envelope(s); ${topo.classifications.length} paredes processadas; ` +
+              `${topo.reclassified} mudaram de classe; ${topo.skipped} sem dado para classificar.`,
+            );
+          }
+        }
+      } catch (envErr: any) {
+        // Falha aqui NAO derruba a pipeline — apenas mantemos a classe da IA.
+        console.warn(`[TOPOLOGIA] Pulada por erro: ${envErr?.message || envErr}`);
+        sendProgress(projectId, 3.7, "Topologia", "done", `pulada (erro: ${envErr?.message || "desconhecido"})`);
+      }
+
       sendProgress(projectId, 4, "Fusao Multivista", "running", "Cruzando dados de todas as paginas...");
       const hasTableData = mergedTableData.paredes_de_tabela.length > 0 || mergedTableData.esquadrias_de_tabela.length > 0;
       // Carrega feedbacks humanos ativos com clientName do projeto que originou cada feedback.
@@ -1956,13 +2031,22 @@ export async function registerRoutes(
           const annotationResults = await Promise.allSettled(
             annotationJobs.map(async (job) => {
               const baseBuffer = Buffer.from(job.src.base64, "base64");
+              // Envelope desse pavimento (se foi detectado na Etapa 3.7).
+              const env = envelopes.find(
+                e => e.pavimento === job.src.pavimento ||
+                     (job.src.pavimento === "all" && envelopes.length === 1),
+              );
               const { pngBuffer } = await renderAnnotatedImage(
                 baseBuffer,
                 job.src.mimeType,
                 job.src.pageIndex,
                 job.enabledFloorWalls,
                 job.enabledFloorSlabs,
-                { pavimentoLabel: job.src.pavimento === "all" ? "" : `Pavimento: ${job.src.pavimento}` },
+                {
+                  pavimentoLabel: job.src.pavimento === "all" ? "" : `Pavimento: ${job.src.pavimento}`,
+                  envelopePolygon: env?.polygon,
+                  lotPolygon: env?.lotPolygon,
+                },
               );
               const dataUrl = `data:image/png;base64,${pngBuffer.toString("base64")}`;
               console.log(`[ETAPA 4.5] Anotada ${job.src.pavimento} pg ${job.src.pageIndex}: ${Math.round(dataUrl.length / 1024)}KB`);
@@ -3266,6 +3350,11 @@ export async function registerRoutes(
       const classificacoesData = extracted.find((d: any) => d.elementType === "etapa1_classificacoes");
       const classifications: PageClassification[] = (classificacoesData?.data as any)?.resultado || [];
 
+      // Envelopes salvos pela Etapa 3.7 — usados para desenhar o contorno
+      // tracejado por tras das paredes.
+      const envelopesData = extracted.find((d: any) => d.elementType === "envelopes");
+      const cachedEnvelopes: EnvelopePolygon[] = (envelopesData?.data as any)?.envelopes || [];
+
       const imgSources = await getAnnotationImageSources(files, classifications);
       if (imgSources.length === 0) {
         return res.status(400).json({ message: "Nenhum arquivo de planta encontrado (PDF ou imagem)." });
@@ -3328,13 +3417,21 @@ export async function registerRoutes(
         console.log(`[ANNOTATED-IMG] Gerando imagem ${src.pavimento} (pg ${src.pageIndex}) | ${enabledFloorWalls.length} paredes, ${enabledFloorSlabs.length} lajes`);
 
         const baseBuffer = Buffer.from(src.base64, "base64");
+        const envForPav = cachedEnvelopes.find(
+          e => e.pavimento === src.pavimento ||
+               (src.pavimento === "all" && cachedEnvelopes.length === 1),
+        );
         const { pngBuffer } = await renderAnnotatedImage(
           baseBuffer,
           src.mimeType,
           src.pageIndex,
           enabledFloorWalls,
           enabledFloorSlabs,
-          { pavimentoLabel: src.pavimento === "all" ? "" : `Pavimento: ${src.pavimento}` },
+          {
+            pavimentoLabel: src.pavimento === "all" ? "" : `Pavimento: ${src.pavimento}`,
+            envelopePolygon: envForPav?.polygon,
+            lotPolygon: envForPav?.lotPolygon,
+          },
         );
         const dataUrl = `data:image/png;base64,${pngBuffer.toString("base64")}`;
 

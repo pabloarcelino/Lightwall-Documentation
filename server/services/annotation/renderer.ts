@@ -43,6 +43,15 @@ export interface RenderOptions {
   pavimentoLabel?: string;
   /** Mostrar legenda no rodape. Default true. */
   showLegend?: boolean;
+  /**
+   * Poligono do envelope da edificacao (Fase A da metodologia). Quando
+   * presente, e desenhado como contorno cinza tracejado por tras das
+   * paredes para o usuario poder auditar se a IA acertou o contorno.
+   * Vertices em coordenadas normalizadas 0-1000.
+   */
+  envelopePolygon?: Array<[number, number]>;
+  /** Poligono do lote (muros de divisa), se houver. */
+  lotPolygon?: Array<[number, number]>;
 }
 
 export interface RenderResult {
@@ -78,6 +87,8 @@ const DEFAULT_OPTS: Required<RenderOptions> = {
   maxWidth: 2048,
   pavimentoLabel: "",
   showLegend: true,
+  envelopePolygon: [],
+  lotPolygon: [],
 };
 
 // ============================================================
@@ -172,6 +183,16 @@ function bboxToPx(
   return { x, y, w, h };
 }
 
+function polygonToSvgPoints(
+  poly: Array<[number, number]>,
+  imgW: number,
+  imgH: number,
+): string {
+  return poly
+    .map(([x, y]) => `${((x / 1000) * imgW).toFixed(1)},${((y / 1000) * imgH).toFixed(1)}`)
+    .join(" ");
+}
+
 // ============================================================
 // SVG overlay
 // ============================================================
@@ -235,10 +256,28 @@ function buildSvgOverlay(
         <text x="32" y="${20 + labelFs * 1.3}" font-family="Arial, sans-serif" font-size="${labelFs}" font-weight="700" fill="#111827">${escXml(opts.pavimentoLabel)}</text></g>`
     : "";
 
+  // Envelope da edificacao (Fase A): contorno cinza tracejado, sem fill,
+  // desenhado por TRAS de tudo. Permite ao usuario auditar se a IA acertou
+  // o contorno da casa que foi usado pela classificacao topologica.
+  let envelopeShape = "";
+  if (opts.envelopePolygon && opts.envelopePolygon.length >= 3) {
+    const pts = polygonToSvgPoints(opts.envelopePolygon, width, height);
+    const envStroke = Math.max(2, Math.round(width / 800));
+    envelopeShape = `<polygon points="${pts}" fill="none" stroke="#475569" stroke-width="${envStroke}" stroke-dasharray="${envStroke * 6},${envStroke * 4}" stroke-linejoin="round" opacity="0.65"/>`;
+  }
+  let lotShape = "";
+  if (opts.lotPolygon && opts.lotPolygon.length >= 3) {
+    const pts = polygonToSvgPoints(opts.lotPolygon, width, height);
+    const lotStroke = Math.max(1, Math.round(width / 1200));
+    lotShape = `<polygon points="${pts}" fill="none" stroke="#94a3b8" stroke-width="${lotStroke}" stroke-dasharray="${lotStroke * 3},${lotStroke * 3}" stroke-linejoin="round" opacity="0.5"/>`;
+  }
+
   // Legenda no rodapé (gerada por código, conta os elementos visíveis)
   const legend = opts.showLegend ? buildLegend(walls, slabs, width, height, labelFs) : "";
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <g>${lotShape}</g>
+  <g>${envelopeShape}</g>
   <g>${slabShapes.join("\n")}</g>
   <g>${wallShapes.join("\n")}</g>
   <g>${slabLabels.join("\n")}</g>
