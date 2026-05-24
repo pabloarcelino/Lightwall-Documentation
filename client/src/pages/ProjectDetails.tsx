@@ -233,7 +233,15 @@ function InteractiveAnnotatedPlan({
             const isHighlighted = highlightedWallId === w.id;
             const isDimmed = highlightedWallId && highlightedWallId !== w.id;
             const enabled = w.enabled !== false;
-            const opacity = isDimmed ? 0.2 : enabled ? 1 : 0.4;
+            const groupOpacity = isDimmed ? 0.45 : enabled ? 1 : 0.55;
+            // O servidor agora desenha retangulos + labels diretamente na imagem
+            // (renderAnnotatedImage). Esta camada SVG existe apenas para
+            // interacao (hover/click/highlight) — por isso o retangulo e
+            // INVISIVEL por padrao, aparecendo somente em hover/highlight ou
+            // quando a parede precisa de revisao.
+            const needsReview = w.needs_review === true;
+            const showFill = isHighlighted;
+            const showStroke = isHighlighted || needsReview;
             return (
               <g
                 key={w.id}
@@ -246,18 +254,18 @@ function InteractiveAnnotatedPlan({
                   onClickWall(w.id);
                 }}
                 data-testid={`overlay-ai-wall-${w.id}`}
-                style={{ opacity }}
+                style={{ opacity: groupOpacity }}
               >
                 <rect
                   x={x}
                   y={y}
                   width={width}
                   height={height}
-                  fill={color}
-                  fillOpacity={isHighlighted ? 0.45 : 0.05}
-                  stroke={color}
-                  strokeWidth={isHighlighted ? 4 : 2}
-                  strokeDasharray={w.needs_review ? "6 4" : undefined}
+                  fill={showFill ? color : "transparent"}
+                  fillOpacity={showFill ? 0.32 : 0}
+                  stroke={showStroke ? color : "transparent"}
+                  strokeWidth={isHighlighted ? 4 : needsReview ? 2 : 0}
+                  strokeDasharray={needsReview && !isHighlighted ? "6 4" : undefined}
                 />
               </g>
             );

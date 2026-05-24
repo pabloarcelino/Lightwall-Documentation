@@ -63,7 +63,10 @@ import {
 import type { Response } from "express";
 import { requireAuth, requireAdmin } from "./auth";
 import bcrypt from "bcryptjs";
-import { editImage } from "./replit_integrations/image/client";
+// editImage (Gemini/OpenAI image edit) era usado para anotar plantas, mas foi
+// substituido por server/services/annotation/renderer.ts (sharp + SVG). O arquivo
+// continua exportando a funcao caso seja util em outro fluxo no futuro.
+import { renderAnnotatedImage } from "./services/annotation/renderer";
 import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
@@ -235,46 +238,82 @@ async function getReferencePageSources(
  * The new labels match the visual style of professional takeoff overlays
  * (W01..Wnn for walls, M01..Mnn for muros, L01..Lnn for slabs).
  */
+/**
+ * Atribui rotulos de exibicao GLOBAIS no projeto inteiro (W001..Wn / M001..Mn /
+ * L001..Ln). A numeracao por pavimento que vigorava antes gerava duplicatas
+ * quando a imagem anotada incluia mais de um pavimento — W01 do Terreo e
+ * W01 do Superior apareciam juntos com valores diferentes.
+ *
+ * Ordem de numeracao (deterministica):
+ *   1. Pavimento (Terreo → Superior → Subsolo → Coberta → demais alfabetico).
+ *   2. Classe (para walls: externa antes de interna).
+ *   3. Tamanho descendente (comprimento_m para walls/muros; area_m2 para slabs).
+ *
+ * Tres digitos por padrao para acomodar projetos grandes sem reformatar
+ * (W001..W999); usuarios pequenos veem apenas o prefixo zerado, que e claro
+ * e consistente.
+ */
 function assignDisplayLabels(walls: any[], slabs: any[]): void {
-  const byPav = new Map<string, { walls: any[]; muros: any[]; slabs: any[] }>();
-  for (const w of walls) {
-    const pav = w.nivel || "Terreo";
-    if (!byPav.has(pav)) byPav.set(pav, { walls: [], muros: [], slabs: [] });
-    if (w.classe === "muro") byPav.get(pav)!.muros.push(w);
-    else byPav.get(pav)!.walls.push(w);
-  }
-  for (const s of slabs) {
-    const pav = s.nivel || "Terreo";
-    if (!byPav.has(pav)) byPav.set(pav, { walls: [], muros: [], slabs: [] });
-    byPav.get(pav)!.slabs.push(s);
-  }
-  for (const [, group] of byPav) {
-    // Walls (externa first, then interna) get W01.. sequentially
-    group.walls.sort((a: any, b: any) => {
-      if (a.classe !== b.classe) return a.classe === "externa" ? -1 : 1;
-      return (b.comprimento_m || 0) - (a.comprimento_m || 0);
-    });
-    group.walls.forEach((w: any, i: number) => {
-      w.displayLabel = `W${String(i + 1).padStart(2, "0")}`;
-    });
-    group.muros.sort((a: any, b: any) => (b.comprimento_m || 0) - (a.comprimento_m || 0));
-    group.muros.forEach((m: any, i: number) => {
-      m.displayLabel = `M${String(i + 1).padStart(2, "0")}`;
-    });
-    // Slabs: classe order (coberta first, then piso, then radier) then desc area
-    // for stable, deterministic L## numbering across runs.
-    const slabRank = (c: string) => (c === "coberta" ? 0 : c === "piso" ? 1 : 2);
-    group.slabs.sort((a: any, b: any) => {
-      const r = slabRank(a.classe) - slabRank(b.classe);
-      if (r !== 0) return r;
-      return (b.area_m2 || 0) - (a.area_m2 || 0);
-    });
-    group.slabs.forEach((s: any, i: number) => {
-      s.displayLabel = `L${String(i + 1).padStart(2, "0")}`;
-    });
-  }
+  const pavRank = (pav: string): number => {
+    const p = (pav || "Terreo").toLowerCase();
+    if (p.includes("terreo") || p.includes("térreo")) return 0;
+    if (p.includes("superior") || p.includes("1") || p.includes("primeiro")) return 1;
+    if (p.includes("subsolo")) return 2;
+    if (p.includes("coberta") || p.includes("cobertura")) return 3;
+    return 100; // outros pavimentos vem depois, ordenados alfabeticamente
+  };
+  const pavCompare = (a: string, b: string): number => {
+    const ra = pavRank(a);
+    const rb = pavRank(b);
+    if (ra !== rb) return ra - rb;
+    return (a || "").localeCompare(b || "");
+  };
+
+  // ----- Walls (externa + interna) -----
+  const wallsNonMuro = walls.filter((w: any) => w.classe !== "muro");
+  wallsNonMuro.sort((a: any, b: any) => {
+    const pc = pavCompare(a.nivel, b.nivel);
+    if (pc !== 0) return pc;
+    if (a.classe !== b.classe) return a.classe === "externa" ? -1 : 1;
+    return (b.comprimento_m || 0) - (a.comprimento_m || 0);
+  });
+  wallsNonMuro.forEach((w: any, i: number) => {
+    w.displayLabel = `W${String(i + 1).padStart(3, "0")}`;
+  });
+
+  // ----- Muros -----
+  const muros = walls.filter((w: any) => w.classe === "muro");
+  muros.sort((a: any, b: any) => {
+    const pc = pavCompare(a.nivel, b.nivel);
+    if (pc !== 0) return pc;
+    return (b.comprimento_m || 0) - (a.comprimento_m || 0);
+  });
+  muros.forEach((m: any, i: number) => {
+    m.displayLabel = `M${String(i + 1).padStart(3, "0")}`;
+  });
+
+  // ----- Slabs -----
+  const slabRank = (c: string) => (c === "coberta" ? 0 : c === "piso" ? 1 : 2);
+  const slabsCopy = [...slabs];
+  slabsCopy.sort((a: any, b: any) => {
+    const pc = pavCompare(a.nivel, b.nivel);
+    if (pc !== 0) return pc;
+    const r = slabRank(a.classe) - slabRank(b.classe);
+    if (r !== 0) return r;
+    return (b.area_m2 || 0) - (a.area_m2 || 0);
+  });
+  slabsCopy.forEach((s: any, i: number) => {
+    s.displayLabel = `L${String(i + 1).padStart(3, "0")}`;
+  });
 }
 
+/**
+ * @deprecated Substituida por renderAnnotatedImage() em
+ * server/services/annotation/renderer.ts. Mantida temporariamente caso seja
+ * util resgatar texto/regras de classes/cores, mas nao tem mais chamadores
+ * ativos. Pode ser removida em uma proxima limpeza.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function buildAnnotationPrompt(walls: any[], slabs: any[]): string {
   const enabledWalls = walls.filter((w: any) => w.enabled !== false);
   const externas = enabledWalls.filter((w: any) => w.classe === "externa");
@@ -1890,9 +1929,16 @@ export async function registerRoutes(
         let annotationSource: "ia" | "none" = "none";
 
         {
-          // IA path: image editing on planta_baixa pages only.
-          // PARALLELIZED: all pavimentos are generated concurrently instead of sequentially.
-          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Extraindo paginas da planta baixa e gerando imagens anotadas com IA (paralelo)...");
+          // Renderizacao DETERMINISTICA (sharp + SVG) no servidor. Substitui a
+          // antiga IA de edicao de imagem (editImage/buildAnnotationPrompt) que
+          // gerava anotacoes inconsistentes (IDs duplicados, retangulos em
+          // comodos, unidades misturadas). Custo zero, ~100-500ms por pavimento.
+          sendProgress(projectId, 7.5, "Imagem Anotada", "running", "Renderizando anotacoes (servidor, sem IA)...");
+
+          // Atribui rotulos globais UMA UNICA VEZ antes do loop, garantindo que
+          // W001..Wn sejam unicos em todo o projeto.
+          assignDisplayLabels(fusaoWallsWithScope, fusaoSlabsWithScope);
+
           const imgSources = await getAnnotationImageSources(files, allClassifications);
           const annotationJobs = imgSources.map(src => {
             const floorWalls = fusaoWallsWithScope.filter((w: any) =>
@@ -1909,9 +1955,17 @@ export async function registerRoutes(
 
           const annotationResults = await Promise.allSettled(
             annotationJobs.map(async (job) => {
-              const prompt = buildAnnotationPrompt(job.floorWalls, job.floorSlabs);
-              const dataUrl = await editImage(prompt, [{ data: job.src.base64, mimeType: job.src.mimeType }]);
-              console.log(`[ETAPA 4.5] Imagem anotada ${job.src.pavimento} (pg ${job.src.pageIndex}): ${Math.round(dataUrl.length / 1024)}KB`);
+              const baseBuffer = Buffer.from(job.src.base64, "base64");
+              const { pngBuffer } = await renderAnnotatedImage(
+                baseBuffer,
+                job.src.mimeType,
+                job.src.pageIndex,
+                job.enabledFloorWalls,
+                job.enabledFloorSlabs,
+                { pavimentoLabel: job.src.pavimento === "all" ? "" : `Pavimento: ${job.src.pavimento}` },
+              );
+              const dataUrl = `data:image/png;base64,${pngBuffer.toString("base64")}`;
+              console.log(`[ETAPA 4.5] Anotada ${job.src.pavimento} pg ${job.src.pageIndex}: ${Math.round(dataUrl.length / 1024)}KB`);
               return {
                 pavimento: job.src.pavimento,
                 pageIndex: job.src.pageIndex,
@@ -3219,6 +3273,10 @@ export async function registerRoutes(
 
       const annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
 
+      // Atribui labels GLOBAIS uma vez antes de qualquer renderizacao, garantindo
+      // W001..Wn unicos no projeto inteiro.
+      assignDisplayLabels(walls, slabs);
+
       // Task #9: dedupe — UMA imagem anotada por pavimento. Se ha multiplas
       // paginas do mesmo pavimento (raro mas possivel), mantemos a primeira.
       const seenPavimentos = new Set<string>();
@@ -3269,8 +3327,16 @@ export async function registerRoutes(
 
         console.log(`[ANNOTATED-IMG] Gerando imagem ${src.pavimento} (pg ${src.pageIndex}) | ${enabledFloorWalls.length} paredes, ${enabledFloorSlabs.length} lajes`);
 
-        const prompt = buildAnnotationPrompt(floorWalls, floorSlabs);
-        const dataUrl = await editImage(prompt, [{ data: src.base64, mimeType: src.mimeType }]);
+        const baseBuffer = Buffer.from(src.base64, "base64");
+        const { pngBuffer } = await renderAnnotatedImage(
+          baseBuffer,
+          src.mimeType,
+          src.pageIndex,
+          enabledFloorWalls,
+          enabledFloorSlabs,
+          { pavimentoLabel: src.pavimento === "all" ? "" : `Pavimento: ${src.pavimento}` },
+        );
+        const dataUrl = `data:image/png;base64,${pngBuffer.toString("base64")}`;
 
         annotatedImages.push({
           pavimento: src.pavimento,
