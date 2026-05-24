@@ -69,6 +69,7 @@ import bcrypt from "bcryptjs";
 import { renderAnnotatedImage } from "./services/annotation/renderer";
 import { extractEnvelopes, type EnvelopePolygon } from "./services/extraction/envelopeExtractor";
 import { classifyWallsByTopology } from "./services/extraction/topology";
+import { inventoryWalls, mergeEndpointsIntoWalls } from "./services/extraction/wallInventory";
 import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
@@ -1506,6 +1507,45 @@ export async function registerRoutes(
         cleanupApiMetrics(projectId);
         sendProgress(projectId, 0, "Erro", "error", "Nenhum dado geometrico ou tabular foi extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas.");
         return res.status(400).json({ message: "Nenhum dado extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas." });
+      }
+
+      // ===== Etapa 3.5 — Inventario de paredes com endpoints (Fase B / S4) =====
+      // Roda APOS a Etapa 3 monolitica e enriquece cada parede ja extraida
+      // com endpoints (p1, p2) — o EIXO real do segmento da parede. Isso
+      // permite (a) o renderer desenhar uma linha sobre a parede em vez
+      // de retangulo, e (b) a topologia em S5 usar o midpoint REAL do
+      // segmento e a direcao para derivar os pontos de teste ortogonais.
+      // Falha aqui NAO impede o resto do pipeline (graceful degrade).
+      try {
+        const wallsForInventory = allGeometries.flatMap(g => g.walls);
+        if (wallsForInventory.length > 0) {
+          sendProgress(projectId, 3.5, "Inventario (endpoints)", "running", "Detectando eixos das paredes...");
+          const invSources = await getAnnotationImageSources(files, allClassifications);
+          if (invSources.length > 0) {
+            const inv = await inventoryWalls({
+              projectId,
+              pages: invSources.map(s => ({
+                pageIndex: s.pageIndex,
+                pavimento: s.pavimento,
+                base64: s.base64,
+                mimeType: s.mimeType,
+              })),
+            });
+            if (inv.segments.length > 0) {
+              const enrichedCount = mergeEndpointsIntoWalls(wallsForInventory, inv.segments);
+              sendProgress(
+                projectId, 3.5, "Inventario (endpoints)", "done",
+                `${enrichedCount} de ${wallsForInventory.length} paredes ganharam endpoints (de ${inv.segments.length} segmentos detectados)`,
+              );
+              console.log(`[INVENTARIO] Match: ${enrichedCount}/${wallsForInventory.length} paredes; ${inv.segments.length} segmentos detectados.`);
+            } else {
+              sendProgress(projectId, 3.5, "Inventario (endpoints)", "done", "Inventario nao retornou segmentos");
+            }
+          }
+        }
+      } catch (invErr: any) {
+        console.warn(`[INVENTARIO] Pulado por erro: ${invErr?.message || invErr}`);
+        sendProgress(projectId, 3.5, "Inventario (endpoints)", "done", `pulado (erro: ${invErr?.message || "desconhecido"})`);
       }
 
       // ===== Etapa 3.7 — Topologia (envelope + classificacao deterministica) =====

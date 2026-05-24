@@ -72,6 +72,13 @@ export interface ExtractedWall {
   // Indices das paginas (planta_baixa) que originaram esta parede. Cortes,
   // fachadas e vistas 3D NUNCA adicionam paredes, apenas enriquecem.
   source_page_indices?: number[];
+  // Fase B (S4): endpoints do segmento da parede em coordenadas
+  // normalizadas 0-1000 (x, y). Quando presentes, o renderer desenha
+  // uma linha sobre o EIXO da parede (em vez de retangulo via bbox) e
+  // a classificacao topologica usa o midpoint real do segmento + a
+  // direcao para derivar os pontos de teste ortogonais. Tornam a
+  // anotacao tecnicamente correta e a classificacao muito mais robusta.
+  endpoints?: { p1: [number, number]; p2: [number, number] };
 }
 
 // Task #9: informação extraída de um corte (height por pavimento)

@@ -26,6 +26,9 @@ export interface RenderableWall {
   comprimento_m?: number;
   altura_m?: number;
   bbox?: [number, number, number, number]; // ymin, xmin, ymax, xmax (0-1000)
+  /** Fase B: quando presentes, o renderer desenha linha sobre o eixo
+   *  (p1 → p2) em vez de retangulo via bbox. */
+  endpoints?: { p1: [number, number]; p2: [number, number] };
 }
 
 export interface RenderableSlab {
@@ -222,32 +225,69 @@ function buildSvgOverlay(
     slabLabels.push(renderLabel(s.displayLabel || s.id, `${fmt(s.area_m2 || 0)} m²`, x + w / 2, y + h / 2, color, labelFs, labelPad, "center"));
   }
 
-  // Paredes (stroke colorido, sem fill)
+  // Paredes:
+  //  - Se a parede tem endpoints (p1, p2) — Fase B do pipeline — desenhamos
+  //    uma LINHA grossa sobre o EIXO real da parede. Tecnicamente correto.
+  //  - Senao, fallback para retangulo via bbox (Fase A). Util para projetos
+  //    legados ou paredes que nao casaram com o inventario.
+  // Em ambos os casos, o stroke usa a cor da classe (vermelho/verde/azul).
+  const wallStroke = Math.max(stroke + 1, Math.round(width / 350));
   const wallShapes: string[] = [];
   const wallLabels: string[] = [];
   for (const w of walls) {
-    if (!w.bbox) continue;
-    const px = bboxToPx(w.bbox, width, height);
     const color = COLORS[w.classe] ?? COLORS.externa;
-    wallShapes.push(
-      `<rect x="${px.x.toFixed(1)}" y="${px.y.toFixed(1)}" width="${px.w.toFixed(1)}" height="${px.h.toFixed(1)}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linejoin="round"/>`,
-    );
-    // Anchor label: acima da parede se for horizontal, ao lado se vertical
-    const horizontal = px.w >= px.h;
-    const anchorX = horizontal ? px.x + px.w / 2 : px.x + px.w + labelFs * 0.6;
-    const anchorY = horizontal ? px.y - labelFs * 0.6 : px.y + px.h / 2;
-    wallLabels.push(
-      renderLabel(
-        w.displayLabel || w.id,
-        `${fmt(w.comprimento_m || 0)} m`,
-        anchorX,
-        anchorY,
-        color,
-        labelFs,
-        labelPad,
-        horizontal ? "center" : "start",
-      ),
-    );
+    if (w.endpoints) {
+      const x1 = (w.endpoints.p1[0] / 1000) * width;
+      const y1 = (w.endpoints.p1[1] / 1000) * height;
+      const x2 = (w.endpoints.p2[0] / 1000) * width;
+      const y2 = (w.endpoints.p2[1] / 1000) * height;
+      wallShapes.push(
+        `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="${wallStroke}" stroke-linecap="round" stroke-opacity="0.92"/>`,
+      );
+      // Label perto do midpoint, deslocado ortogonalmente para nao cobrir a linha.
+      const cx = (x1 + x2) / 2;
+      const cy = (y1 + y2) / 2;
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const off = labelFs * 1.4;
+      const ax = cx + nx * off;
+      const ay = cy + ny * off;
+      wallLabels.push(
+        renderLabel(
+          w.displayLabel || w.id,
+          `${fmt(w.comprimento_m || 0)} m`,
+          ax,
+          ay,
+          color,
+          labelFs,
+          labelPad,
+          "center",
+        ),
+      );
+    } else if (w.bbox) {
+      const px = bboxToPx(w.bbox, width, height);
+      wallShapes.push(
+        `<rect x="${px.x.toFixed(1)}" y="${px.y.toFixed(1)}" width="${px.w.toFixed(1)}" height="${px.h.toFixed(1)}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linejoin="round" stroke-opacity="0.85"/>`,
+      );
+      const horizontal = px.w >= px.h;
+      const anchorX = horizontal ? px.x + px.w / 2 : px.x + px.w + labelFs * 0.6;
+      const anchorY = horizontal ? px.y - labelFs * 0.6 : px.y + px.h / 2;
+      wallLabels.push(
+        renderLabel(
+          w.displayLabel || w.id,
+          `${fmt(w.comprimento_m || 0)} m`,
+          anchorX,
+          anchorY,
+          color,
+          labelFs,
+          labelPad,
+          horizontal ? "center" : "start",
+        ),
+      );
+    }
   }
 
   // Pavimento no canto superior esquerdo

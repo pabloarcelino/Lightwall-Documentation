@@ -51,14 +51,11 @@ function pointInPolygon(point: Pt, polygon: Pt[]): boolean {
 }
 
 // ============================================================
-// Heuristics: derivar dois pontos vizinhos da parede, um de cada
+// Heuristica: derivar dois pontos vizinhos da parede, um de cada
 // lado do "eixo" do segmento, com offset ortogonal pequeno.
 //
-// Como nao temos endpoints p1/p2 (so bbox), usamos o midpoint do
-// bbox e a orientacao do bbox (lado maior define a direcao do
-// segmento). Offset ortogonal = 1/2 da menor dimensao + 2% do
-// tamanho da imagem, garantindo que os pontos caiam de fato em
-// lados opostos da parede.
+// Preferencia: usar endpoints (p1, p2) se a parede os tiver (Fase B).
+// Caso contrario, fallback para bbox + orientacao (Fase A).
 // ============================================================
 
 interface NeighborPoints {
@@ -66,23 +63,64 @@ interface NeighborPoints {
   mB: Pt;
 }
 
-function neighborPoints(bbox: [number, number, number, number]): NeighborPoints {
+function neighborPointsFromEndpoints(
+  p1: [number, number],
+  p2: [number, number],
+  thicknessHint: number,
+): NeighborPoints {
+  // Midpoint REAL da parede.
+  const cx = (p1[0] + p2[0]) / 2;
+  const cy = (p1[1] + p2[1]) / 2;
+  // Direcao do segmento (p1 → p2) e normal ortogonal (rotaciona 90 graus).
+  const dx = p2[0] - p1[0];
+  const dy = p2[1] - p1[1];
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len; // normal unitaria
+  const ny = dx / len;
+  // Offset = espessura/2 + 2.5% (epsilon contra walls finissimas).
+  // thicknessHint vem normalizado 0-1000 (mesmas unidades dos pontos).
+  const off = Math.max(thicknessHint / 2 + 20, 25);
+  return {
+    mA: [cx + nx * off, cy + ny * off],
+    mB: [cx - nx * off, cy - ny * off],
+  };
+}
+
+function neighborPointsFromBbox(bbox: [number, number, number, number]): NeighborPoints {
   const [ymin, xmin, ymax, xmax] = bbox;
   const cx = (xmin + xmax) / 2;
   const cy = (ymin + ymax) / 2;
   const w = xmax - xmin;
   const h = ymax - ymin;
 
-  // Eixo da parede = lado maior.
+  // Eixo da parede = lado maior do bbox (heuristica menos precisa que endpoints).
   // Offset = 1/2 do lado menor + 2% (epsilon contra walls finissimas).
   const isHorizontal = w >= h;
   if (isHorizontal) {
-    const off = Math.max(h / 2 + 20, 25); // pelo menos 2.5% (em coords 0-1000)
+    const off = Math.max(h / 2 + 20, 25);
     return { mA: [cx, cy - off], mB: [cx, cy + off] };
   } else {
     const off = Math.max(w / 2 + 20, 25);
     return { mA: [cx - off, cy], mB: [cx + off, cy] };
   }
+}
+
+function neighborPoints(wall: ExtractedWall): NeighborPoints | null {
+  if (wall.endpoints) {
+    // Estimativa de espessura em coords 0-1000: o caller passa via bbox quando
+    // disponivel (parede fina ≈ 10-25 unidades; parede grossa ≈ 30-50).
+    let thickHint = 20;
+    if (wall.bbox) {
+      const w = wall.bbox[3] - wall.bbox[1];
+      const h = wall.bbox[2] - wall.bbox[0];
+      thickHint = Math.min(w, h);
+    }
+    return neighborPointsFromEndpoints(wall.endpoints.p1, wall.endpoints.p2, thickHint);
+  }
+  if (wall.bbox) {
+    return neighborPointsFromBbox(wall.bbox);
+  }
+  return null;
 }
 
 // ============================================================
@@ -102,17 +140,27 @@ function classifyOne(
   envelope: EnvelopePolygon | undefined,
 ): TopologyClassification {
   const wallId = wall.id;
-  if (!envelope || !wall.bbox) {
+  if (!envelope) {
     return {
       wallId,
       classe: (wall.classe as WallClass) || "interna",
-      reason: !envelope ? "envelope ausente — mantém classe da IA" : "bbox ausente — mantém classe da IA",
+      reason: "envelope ausente — mantém classe da IA",
       needsReview: false,
       evidence: { inEnvelopeA: false, inEnvelopeB: false },
     };
   }
 
-  const { mA, mB } = neighborPoints(wall.bbox);
+  const np = neighborPoints(wall);
+  if (!np) {
+    return {
+      wallId,
+      classe: (wall.classe as WallClass) || "interna",
+      reason: "sem endpoints nem bbox — mantém classe da IA",
+      needsReview: false,
+      evidence: { inEnvelopeA: false, inEnvelopeB: false },
+    };
+  }
+  const { mA, mB } = np;
   const inA = pointInPolygon(mA, envelope.polygon);
   const inB = pointInPolygon(mB, envelope.polygon);
 
@@ -176,7 +224,7 @@ export function classifyWallsByTopology(
 
   for (const wall of walls) {
     const env = findEnvelope(envelopes, wall.nivel || "Terreo");
-    if (!env || !wall.bbox) {
+    if (!env || (!wall.bbox && !wall.endpoints)) {
       skipped++;
       continue;
     }
