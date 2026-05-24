@@ -70,6 +70,10 @@ import { renderAnnotatedImage } from "./services/annotation/renderer";
 import { extractEnvelopes, type EnvelopePolygon } from "./services/extraction/envelopeExtractor";
 import { classifyWallsByTopology } from "./services/extraction/topology";
 import { inventoryWalls, mergeEndpointsIntoWalls } from "./services/extraction/wallInventory";
+import { readCotas, mergeCotasIntoWalls } from "./services/extraction/cotaReader";
+import { linkEsquadriasWithTable } from "./services/extraction/esquadriasLinker";
+import { derivePisoSlabsFromEnvelopes, mergeSlabPolygons } from "./services/extraction/slabRefiner";
+import { runSelfCheck } from "./services/extraction/selfCheck";
 import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
@@ -1548,6 +1552,44 @@ export async function registerRoutes(
         sendProgress(projectId, 3.5, "Inventario (endpoints)", "done", `pulado (erro: ${invErr?.message || "desconhecido"})`);
       }
 
+      // ===== Etapa 3.6 — Leitura focada de cotas (Fase B / S7) =====
+      // Pede ao Gemini APENAS para listar todas as cotas anotadas na planta
+      // (texto numerico + posicao). Depois codigo deterministico associa cada
+      // cota a parede compativel pela direcao + proximidade. Quando casa,
+      // sobrescreve comprimento_m com measurement_source="cota_text_focused".
+      try {
+        const wallsForCotas = allGeometries.flatMap(g => g.walls);
+        if (wallsForCotas.length > 0) {
+          sendProgress(projectId, 3.6, "Cotas (focado)", "running", "Lendo cotas dimensionais da planta...");
+          const cotaSources = await getAnnotationImageSources(files, allClassifications);
+          if (cotaSources.length > 0) {
+            const cotas = await readCotas({
+              projectId,
+              pages: cotaSources.map(s => ({
+                pageIndex: s.pageIndex,
+                pavimento: s.pavimento,
+                base64: s.base64,
+                mimeType: s.mimeType,
+              })),
+            });
+            const totalCotas = Array.from(cotas.byPavimento.values()).reduce((s, arr) => s + arr.length, 0);
+            if (totalCotas > 0) {
+              const match = mergeCotasIntoWalls(wallsForCotas, cotas.byPavimento);
+              sendProgress(
+                projectId, 3.6, "Cotas (focado)", "done",
+                `${totalCotas} cota(s) lidas; ${match.matched} parede(s) atualizadas; ${match.unmatched} sem match`,
+              );
+              console.log(`[COTAS] ${match.matched}/${wallsForCotas.length} paredes atualizadas com cotas focadas.`);
+            } else {
+              sendProgress(projectId, 3.6, "Cotas (focado)", "done", "Nenhuma cota detectada");
+            }
+          }
+        }
+      } catch (cotaErr: any) {
+        console.warn(`[COTAS] Pulado por erro: ${cotaErr?.message || cotaErr}`);
+        sendProgress(projectId, 3.6, "Cotas (focado)", "done", `pulado (erro: ${cotaErr?.message || "desconhecido"})`);
+      }
+
       // ===== Etapa 3.7 — Topologia (envelope + classificacao deterministica) =====
       // Metodologia passo-a-passo, Fase A:
       // (S2) Pede ao Gemini APENAS o poligono da edificacao coberta — sem mistura
@@ -1621,6 +1663,30 @@ export async function registerRoutes(
         sendProgress(projectId, 3.7, "Topologia", "done", `pulada (erro: ${envErr?.message || "desconhecido"})`);
       }
 
+      // ===== Etapa 3.8 — Refino de lajes (Fase B / S10) =====
+      // Usa o poligono do envelope como poligono da laje piso (e da coberta
+      // em casas terreas). Quando bem-sucedido, marca measurement_source=
+      // "polygon_focused" nas lajes correspondentes. Sem chamada Gemini extra.
+      try {
+        if (envelopes.length > 0) {
+          sendProgress(projectId, 3.8, "Lajes (polygon)", "running", "Refinando lajes pelo envelope...");
+          const pisoSlabs = derivePisoSlabsFromEnvelopes(envelopes);
+          const slabsForRefine = allGeometries.flatMap(g => g.slabs);
+          if (pisoSlabs.length > 0 && slabsForRefine.length > 0) {
+            const r = mergeSlabPolygons(slabsForRefine, pisoSlabs);
+            sendProgress(
+              projectId, 3.8, "Lajes (polygon)", "done",
+              `${r.refined} de ${slabsForRefine.length} lajes refinadas com poligono do envelope`,
+            );
+          } else {
+            sendProgress(projectId, 3.8, "Lajes (polygon)", "done", "sem dados para refinar");
+          }
+        }
+      } catch (slabErr: any) {
+        console.warn(`[LAJES] Refino pulado por erro: ${slabErr?.message || slabErr}`);
+        sendProgress(projectId, 3.8, "Lajes (polygon)", "done", `pulado (erro: ${slabErr?.message || "desconhecido"})`);
+      }
+
       sendProgress(projectId, 4, "Fusao Multivista", "running", "Cruzando dados de todas as paginas...");
       const hasTableData = mergedTableData.paredes_de_tabela.length > 0 || mergedTableData.esquadrias_de_tabela.length > 0;
       // Carrega feedbacks humanos ativos com clientName do projeto que originou cada feedback.
@@ -1692,6 +1758,35 @@ export async function registerRoutes(
       console.log(`[VALIDATOR] ${valSummary}`);
       for (const n of validated.stats.notes) console.log(`[VALIDATOR]   - ${n}`);
       sendProgress(projectId, 4.5, "Validacao Geometrica", "done", valSummary);
+
+      // ===== Etapa 4.55 — Link esquadrias com quadro (Fase B / S8) =====
+      // Cruza quadro_esquadrias com aberturas detectadas nas paredes:
+      //  - Atualiza dimensoes de portas/janelas para os valores do quadro
+      //    (ground truth, mais preciso que leitura visual).
+      //  - Recalcula opening_area_m2 por parede.
+      //  - Sinaliza needs_review quando ha porta/janela visual sem codigo
+      //    OU quando aberturas excedem a area da parede.
+      try {
+        sendProgress(projectId, 4.55, "Esquadrias (linker)", "running", "Cruzando quadro de esquadrias com paredes...");
+        const linkResult = linkEsquadriasWithTable(
+          fused.walls,
+          mergedTableData.esquadrias_de_tabela?.map(e => ({
+            codigo: e.codigo,
+            tipo: e.tipo,
+            largura_m: e.largura_m,
+            altura_m: e.altura_m,
+            quantidade: e.quantidade,
+          })),
+        );
+        sendProgress(
+          projectId, 4.55, "Esquadrias (linker)", "done",
+          `${linkResult.updated} parede(s) com dimensoes atualizadas; ${linkResult.unresolved} sem codigo; ${linkResult.conflicts} conflitos`,
+        );
+        console.log(`[ESQUADRIAS] updated=${linkResult.updated} unresolved=${linkResult.unresolved} conflicts=${linkResult.conflicts}`);
+      } catch (esqErr: any) {
+        console.warn(`[ESQUADRIAS] Linker pulado por erro: ${esqErr?.message || esqErr}`);
+        sendProgress(projectId, 4.55, "Esquadrias (linker)", "done", `pulado (erro: ${esqErr?.message || "desconhecido"})`);
+      }
 
       // ===== Global cross-validation pass (Etapa 4.6) — opt-in =====
       // Sends ALL planta_baixa pages + the fused JSON to the AI in a single
@@ -1796,6 +1891,39 @@ export async function registerRoutes(
         for (const w of scopedWalls) {
           if (!w.altura_m || w.altura_m <= 0) w.altura_m = peDireito;
         }
+      }
+
+      // ===== Etapa 4.9 — SelfCheck deterministico (Fase D / S12) =====
+      // Rodada de validacoes cruzadas em codigo puro:
+      //  - area de aberturas vs area da parede;
+      //  - pe-direito plausivel; espessura razoavel;
+      //  - razao externas:internas; envelope com vertices suficientes;
+      //  - lajes piso vs coberta. Cada violacao vira audit_note persistida
+      //  em extracted_data e mostrada na UI.
+      try {
+        const selfCheckResult = runSelfCheck({
+          walls: fused.walls,
+          slabs: fused.slabs,
+          envelopes,
+          buildingType: effectiveBuildingType(),
+        });
+        if (selfCheckResult.notes.length > 0) {
+          await storage.addExtractedData({
+            projectId,
+            elementType: "audit_notes",
+            data: { notes: selfCheckResult.notes, summary: selfCheckResult.summary },
+            hasAssumption: 0,
+          });
+        }
+        const s = selfCheckResult.summary;
+        console.log(`[SELFCHECK] ${s.total} notas (${s.error} erros, ${s.warning} avisos, ${s.info} info)`);
+        sendProgress(
+          projectId, 4.9, "SelfCheck", "done",
+          `${s.total} nota(s): ${s.error} erro(s), ${s.warning} aviso(s), ${s.info} info`,
+        );
+      } catch (scErr: any) {
+        console.warn(`[SELFCHECK] Pulado por erro: ${scErr?.message || scErr}`);
+        sendProgress(projectId, 4.9, "SelfCheck", "done", `pulado (erro: ${scErr?.message || "desconhecido"})`);
       }
 
       sendProgress(projectId, 5, "Calculo de Quantitativos", "running", "Calculando paineis por pavimento...");

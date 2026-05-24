@@ -1849,6 +1849,9 @@ export default function ProjectDetails() {
             {(() => {
               const fusao = (extractedData || []).find((d: any) => d.elementType === "etapa4_fusao");
               const annotatedPlan = (extractedData || []).find((d: any) => d.elementType === "etapa3_annotated_plan");
+              const auditNotesData = (extractedData || []).find((d: any) => d.elementType === "audit_notes");
+              const auditNotes: Array<{ severity: "info" | "warning" | "error"; code: string; message: string; relatedIds?: string[] }> =
+                (auditNotesData?.data as any)?.notes || [];
               const planWalls = liveWalls || fusao?.data?.resultado?.walls || [];
               const planSlabs = fusao?.data?.resultado?.slabs || [];
               const handleClickWall = (wallId: string) => {
@@ -1875,6 +1878,49 @@ export default function ProjectDetails() {
 
               return (
                 <div className="mb-6 space-y-6">
+                  {/* Auditoria automatica (Fase D / S12) — mostra inconsistencias detectadas */}
+                  {auditNotes.length > 0 && (
+                    <div className="rounded-xl border border-card-border bg-card overflow-hidden" data-testid="card-audit-notes">
+                      <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+                        <div>
+                          <h3 className="text-base font-semibold flex items-center gap-2">
+                            🔍 Auditoria automatica
+                          </h3>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {auditNotes.filter(n => n.severity === "error").length} erro(s),{" "}
+                            {auditNotes.filter(n => n.severity === "warning").length} aviso(s),{" "}
+                            {auditNotes.filter(n => n.severity === "info").length} info — checagens deterministicas em codigo (sem IA).
+                          </p>
+                        </div>
+                      </div>
+                      <ul className="divide-y divide-border max-h-72 overflow-y-auto">
+                        {auditNotes.map((note, i) => {
+                          const tone = note.severity === "error"
+                            ? "bg-error-soft text-error border-error/30"
+                            : note.severity === "warning"
+                              ? "bg-warning-soft text-warning border-warning/30"
+                              : "bg-info-soft text-info border-info/30";
+                          const label = note.severity === "error" ? "ERRO" : note.severity === "warning" ? "AVISO" : "INFO";
+                          return (
+                            <li key={i} className="px-5 py-3 flex items-start gap-3" data-testid={`audit-note-${note.code}-${i}`}>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-bold tracking-wider shrink-0 ${tone}`}>
+                                {label}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm text-foreground">{note.message}</p>
+                                {note.relatedIds && note.relatedIds.length > 0 && (
+                                  <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                                    Elementos: {note.relatedIds.slice(0, 6).join(", ")}{note.relatedIds.length > 6 ? "..." : ""}
+                                  </p>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+
                   {/* Annotated floor plan image - shown prominently like Gemini output */}
                   {(() => {
                     // Support both new multi-floor format (data.images) and legacy single image (data.image)
