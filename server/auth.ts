@@ -4,6 +4,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import bcrypt from "bcryptjs";
 import { db } from "./db";
+import { env } from "./config/env";
 import { users } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import type { Express, RequestHandler } from "express";
@@ -28,17 +29,17 @@ export function setupAuth(app: Express) {
 
   const sessionMiddleware = session({
     store: new PgSession({
-      conString: process.env.DATABASE_URL,
+      conString: env.DATABASE_URL,
       createTableIfMissing: true,
       tableName: "user_sessions",
     }),
-    secret: process.env.SESSION_SECRET!,
+    secret: env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: {
       maxAge: 7 * 24 * 60 * 60 * 1000,
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: env.NODE_ENV === "production",
       sameSite: "lax",
     },
   });
@@ -163,7 +164,7 @@ export async function ensureDefaultUser() {
     .where(eq(users.username, "admin"));
 
   if (!existing) {
-    const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || "admin123";
+    const defaultPassword = env.DEFAULT_ADMIN_PASSWORD || "admin123";
     const hashedPassword = await bcrypt.hash(defaultPassword, 10);
     await db.insert(users).values({
       username: "admin",

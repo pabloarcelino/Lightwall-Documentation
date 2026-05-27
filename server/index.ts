@@ -1,9 +1,20 @@
 import express, { type Request, Response, NextFunction } from "express";
+import { env } from "./config/env";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupAuth, ensureDefaultUser } from "./auth";
 import { ensureProductCatalog } from "./seed-startup";
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[fatal] unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[fatal] uncaughtException:", err);
+  // Nao derrubamos o processo aqui — em producao o supervisor (PM2/Docker)
+  // reinicia se precisar, e logamos pra investigar. Caso surja um padrao de
+  // estados corrompidos pos-erro, trocar por process.exit(1).
+});
 
 const app = express();
 const httpServer = createServer(app);
@@ -90,7 +101,7 @@ app.use((req, res, next) => {
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
-  if (process.env.NODE_ENV === "production") {
+  if (env.NODE_ENV === "production") {
     serveStatic(app);
   } else {
     const { setupVite } = await import("./vite");
@@ -101,14 +112,13 @@ app.use((req, res, next) => {
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
   httpServer.listen(
     {
-      port,
+      port: env.PORT,
       host: "0.0.0.0",
     },
     () => {
-      log(`serving on port ${port}`);
+      log(`serving on port ${env.PORT}`);
     },
   );
 })();

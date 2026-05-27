@@ -1,14 +1,15 @@
 import { GoogleGenAI } from "@google/genai";
+import { env } from "../../config/env";
 
-if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY) {
-  console.warn("AI_INTEGRATIONS_GEMINI_API_KEY not found - AI features will be unavailable");
+if (!env.AI_INTEGRATIONS_GEMINI_API_KEY) {
+  console.warn("AI_INTEGRATIONS_GEMINI_API_KEY not set - falling back to user-configured key (Settings page)");
 }
 
 export const genAI = new GoogleGenAI({
-  apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "",
+  apiKey: env.AI_INTEGRATIONS_GEMINI_API_KEY || "",
   httpOptions: {
     apiVersion: "v1beta",
-    baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL || undefined,
+    baseUrl: env.AI_INTEGRATIONS_GEMINI_BASE_URL || undefined,
   },
 });
 
