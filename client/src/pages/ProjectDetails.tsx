@@ -1943,36 +1943,85 @@ export default function ProjectDetails() {
                     const renderSummary = () => enabledWalls.length > 0 ? (
                       <div className="text-sm space-y-2 p-4 bg-muted/20 rounded-lg border">
                         <p className="font-semibold text-foreground">Resumo do Levantamento:</p>
-                        {externas.length > 0 && (
-                          <div className="flex items-start gap-2">
-                            <span className="w-2 h-2 rounded-full bg-cyan-500 mt-1.5 shrink-0" />
-                            <p className="text-slate-700 dark:text-slate-300">
-                              <strong className="text-foreground">Paredes Externas ({externas.length}):</strong>{" "}
-                              {externas.map((w: any) => `${w.id} (${fmt(w.comprimento_m)}m)`).join(", ")}.
-                              {" "}<span className="text-muted-foreground text-xs">Total: {fmt(totalExt)}m lineares</span>
-                            </p>
-                          </div>
-                        )}
-                        {internas.length > 0 && (
-                          <div className="flex items-start gap-2">
-                            <span className="w-2 h-2 rounded-full bg-orange-500 mt-1.5 shrink-0" />
-                            <p className="text-slate-700 dark:text-slate-300">
-                              <strong className="text-foreground">Paredes Internas ({internas.length}):</strong>{" "}
-                              {internas.map((w: any) => `${w.id} (${fmt(w.comprimento_m)}m)`).join(", ")}.
-                              {" "}<span className="text-muted-foreground text-xs">Total: {fmt(totalInt)}m lineares</span>
-                            </p>
-                          </div>
-                        )}
-                        {muros.length > 0 && (
-                          <div className="flex items-start gap-2">
-                            <span className="w-2 h-2 rounded-full bg-purple-500 mt-1.5 shrink-0" />
-                            <p className="text-slate-700 dark:text-slate-300">
-                              <strong className="text-foreground">Muros de Divisa ({muros.length}):</strong>{" "}
-                              {muros.map((w: any) => `${w.id} (${fmt(w.comprimento_m)}m)`).join(", ")}.
-                              {" "}<span className="text-muted-foreground text-xs">Total: {fmt(totalMuros)}m lineares</span>
-                            </p>
-                          </div>
-                        )}
+                        {(() => {
+                          // Fase E.6: badge "✓ CV" / "⚠ CV divergente" baseado em sourceContribution.enrichments
+                          const cvStatus = (w: any): null | { kind: "match" | "disagree"; reason?: string } => {
+                            const enrichments = w?.sourceContribution?.enrichments;
+                            if (!Array.isArray(enrichments)) return null;
+                            const dis = enrichments.find((e: any) => e?.view === "cv_disagreement");
+                            if (dis) return { kind: "disagree", reason: dis.reason };
+                            const match = enrichments.find((e: any) => e?.view === "cv_match");
+                            if (match) return { kind: "match", reason: match.reason };
+                            return null;
+                          };
+                          const renderWallList = (walls: any[]) => (
+                            <span className="inline">
+                              {walls.map((w: any, i: number) => {
+                                const cv = cvStatus(w);
+                                return (
+                                  <span key={w.id || i}>
+                                    {i > 0 && ", "}
+                                    <span className="whitespace-nowrap">
+                                      {w.id} ({fmt(w.comprimento_m)}m)
+                                      {cv?.kind === "match" && (
+                                        <span
+                                          className="ml-1 inline-flex items-center px-1 py-0 rounded text-[10px] font-medium border bg-success-soft text-success border-success/30 align-middle"
+                                          title={cv.reason || "CV concordou com LLM"}
+                                          data-testid={`badge-cv-match-${w.id}`}
+                                        >
+                                          ✓ CV
+                                        </span>
+                                      )}
+                                      {cv?.kind === "disagree" && (
+                                        <span
+                                          className="ml-1 inline-flex items-center px-1 py-0 rounded text-[10px] font-medium border bg-warning-soft text-warning border-warning/30 align-middle"
+                                          title={cv.reason || "CV discordou da classificacao do LLM"}
+                                          data-testid={`badge-cv-disagree-${w.id}`}
+                                        >
+                                          ⚠ CV
+                                        </span>
+                                      )}
+                                    </span>
+                                  </span>
+                                );
+                              })}
+                            </span>
+                          );
+                          return (
+                            <>
+                              {externas.length > 0 && (
+                                <div className="flex items-start gap-2">
+                                  <span className="w-2 h-2 rounded-full bg-cyan-500 mt-1.5 shrink-0" />
+                                  <p className="text-slate-700 dark:text-slate-300">
+                                    <strong className="text-foreground">Paredes Externas ({externas.length}):</strong>{" "}
+                                    {renderWallList(externas)}.
+                                    {" "}<span className="text-muted-foreground text-xs">Total: {fmt(totalExt)}m lineares</span>
+                                  </p>
+                                </div>
+                              )}
+                              {internas.length > 0 && (
+                                <div className="flex items-start gap-2">
+                                  <span className="w-2 h-2 rounded-full bg-orange-500 mt-1.5 shrink-0" />
+                                  <p className="text-slate-700 dark:text-slate-300">
+                                    <strong className="text-foreground">Paredes Internas ({internas.length}):</strong>{" "}
+                                    {renderWallList(internas)}.
+                                    {" "}<span className="text-muted-foreground text-xs">Total: {fmt(totalInt)}m lineares</span>
+                                  </p>
+                                </div>
+                              )}
+                              {muros.length > 0 && (
+                                <div className="flex items-start gap-2">
+                                  <span className="w-2 h-2 rounded-full bg-purple-500 mt-1.5 shrink-0" />
+                                  <p className="text-slate-700 dark:text-slate-300">
+                                    <strong className="text-foreground">Muros de Divisa ({muros.length}):</strong>{" "}
+                                    {renderWallList(muros)}.
+                                    {" "}<span className="text-muted-foreground text-xs">Total: {fmt(totalMuros)}m lineares</span>
+                                  </p>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
                         {slabPiso.length > 0 && (
                           <div className="flex items-start gap-2">
                             <span className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />

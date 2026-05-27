@@ -98,7 +98,12 @@ export type EnrichmentView =
   | "quadro_esquadrias"
   | "tabela_quantitativo"
   | "detalhe_construtivo"
-  | "planta_baixa"; // outra planta_baixa pode confirmar (multi-arquivo)
+  | "planta_baixa" // outra planta_baixa pode confirmar (multi-arquivo)
+  // Fase E.6: pipeline CV (cv-service Python) concorda OU discorda do LLM.
+  // Usados pela reconciliacao conservadora — LLM continua source-of-truth;
+  // CV apenas confirma (boost confidence) ou alerta (needs_review).
+  | "cv_match"
+  | "cv_disagreement";
 
 export type EnrichmentField =
   | "altura_m"

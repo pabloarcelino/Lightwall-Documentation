@@ -74,6 +74,7 @@ import { readCotas, mergeCotasIntoWalls } from "./services/extraction/cotaReader
 import { linkEsquadriasWithTable } from "./services/extraction/esquadriasLinker";
 import { derivePisoSlabsFromEnvelopes, mergeSlabPolygons } from "./services/extraction/slabRefiner";
 import { runSelfCheck } from "./services/extraction/selfCheck";
+import { reconcileCvWithLlm } from "./services/extraction/cvReconciliation";
 import {
   checkCvServiceHealth,
   cvServiceCapability,
@@ -1865,6 +1866,55 @@ export async function registerRoutes(
       } catch (esqErr: any) {
         console.warn(`[ESQUADRIAS] Linker pulado por erro: ${esqErr?.message || esqErr}`);
         sendProgress(projectId, 4.55, "Esquadrias (linker)", "done", `pulado (erro: ${esqErr?.message || "desconhecido"})`);
+      }
+
+      // ===== Etapa 4.65 — Reconciliacao CV ↔ LLM (Fase E.6) =====
+      // Le cv_extraction (persistido pela Etapa 3.4) e reconcilia com as
+      // paredes do LLM seguindo politica CONSERVADORA:
+      //   - Match + mesma classe → confidence boost (+0.1).
+      //   - Match + classe diferente → needs_review (sem sobrescrever).
+      //   - CV detectou parede que LLM nao viu → audit_note ONLY_IN_CV (info).
+      // LLM continua sendo source-of-truth do orcamento. Falha aqui NAO derruba.
+      try {
+        const extractedSoFar = await storage.getExtractedData(projectId);
+        const cvExtractionRow = extractedSoFar.find((d: any) => d.elementType === "cv_extraction");
+        const cvResults = (cvExtractionRow?.data as any)?.results;
+        if (Array.isArray(cvResults) && cvResults.length > 0) {
+          sendProgress(projectId, 4.65, "Reconciliacao CV-LLM", "running", "Cruzando paredes CV vs LLM...");
+          const recon = reconcileCvWithLlm(fused.walls as any, cvResults);
+
+          // Anexa alertNotes ao audit_notes ja existente (ou cria).
+          if (recon.alertNotes.length > 0) {
+            const existing = extractedSoFar.find((d: any) => d.elementType === "audit_notes");
+            const prevNotes: any[] = (existing?.data as any)?.notes || [];
+            const allNotes = [...prevNotes, ...recon.alertNotes];
+            await storage.addExtractedData({
+              projectId,
+              elementType: "audit_notes",
+              data: {
+                notes: allNotes,
+                summary: {
+                  total: allNotes.length,
+                  info: allNotes.filter((n: any) => n.severity === "info").length,
+                  warning: allNotes.filter((n: any) => n.severity === "warning").length,
+                  error: allNotes.filter((n: any) => n.severity === "error").length,
+                },
+              },
+              hasAssumption: 0,
+            });
+          }
+
+          sendProgress(
+            projectId, 4.65, "Reconciliacao CV-LLM", "done",
+            `${recon.matched} concordancias, ${recon.disagreed} divergencias, ` +
+            `${recon.onlyLlm} so LLM, ${recon.onlyCv} so CV`,
+          );
+        } else {
+          sendProgress(projectId, 4.65, "Reconciliacao CV-LLM", "done", "sem cv_extraction (cv-service offline) — pulando");
+        }
+      } catch (rcErr: any) {
+        console.warn(`[CV-RECONCILE] Pulada por erro: ${rcErr?.message || rcErr}`);
+        sendProgress(projectId, 4.65, "Reconciliacao CV-LLM", "done", `pulada (erro: ${rcErr?.message || "desconhecido"})`);
       }
 
       // ===== Global cross-validation pass (Etapa 4.6) — opt-in =====
