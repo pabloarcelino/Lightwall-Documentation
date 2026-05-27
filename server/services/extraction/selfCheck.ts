@@ -1,5 +1,6 @@
 import type { ExtractedWall, ExtractedSlab } from "../gemini/planAnalyzer";
 import type { EnvelopePolygon } from "./envelopeExtractor";
+import type { ProjectCharacterization } from "./projectCharacterization";
 import { polygonAreaNorm, polygonPerimeterNorm } from "./geometryUtils";
 
 /**
@@ -37,6 +38,12 @@ export interface SelfCheckInput {
   slabs: ExtractedSlab[];
   envelopes: EnvelopePolygon[];
   buildingType?: string;
+  /**
+   * Caracterizacao precoce (Etapa 1.5). Quando presente, sobrepoe os ranges
+   * hardcoded de pe-direito/espessura/contagem por ranges especificos do
+   * projeto. Quando ausente, fallback para ranges por buildingType.
+   */
+  characterization?: ProjectCharacterization | null;
 }
 
 export interface SelfCheckResult {
@@ -81,12 +88,27 @@ function checkOpeningsVsWallArea(walls: ExtractedWall[]): AuditNote[] {
   return notes;
 }
 
-function checkPeDireito(walls: ExtractedWall[], buildingType?: string): AuditNote[] {
+function checkPeDireito(
+  walls: ExtractedWall[],
+  buildingType?: string,
+  characterization?: ProjectCharacterization | null,
+): AuditNote[] {
   const notes: AuditNote[] = [];
-  const isCommercial =
-    buildingType === "comercial" || buildingType === "industrial" || buildingType === "institucional";
-  const maxOk = isCommercial ? 6.0 : 4.5;
-  const minOk = 2.0;
+  // Ranges dinamicos da caracterizacao quando disponiveis (com folga de
+  // +/-20% pra nao gerar warnings em borda). Fallback: ranges hardcoded por
+  // buildingType.
+  let minOk: number;
+  let maxOk: number;
+  if (characterization) {
+    const [lo, hi] = characterization.estimativas.peDireitoM;
+    minOk = Math.max(1.8, lo * 0.8);
+    maxOk = hi * 1.2;
+  } else {
+    const isCommercial =
+      buildingType === "comercial" || buildingType === "industrial" || buildingType === "institucional";
+    maxOk = isCommercial ? 6.0 : 4.5;
+    minOk = 2.0;
+  }
   for (const w of walls) {
     if (!w.altura_m) continue;
     if (w.altura_m < minOk) {
@@ -110,11 +132,21 @@ function checkPeDireito(walls: ExtractedWall[], buildingType?: string): AuditNot
   return notes;
 }
 
-function checkEspessura(walls: ExtractedWall[]): AuditNote[] {
+function checkEspessura(
+  walls: ExtractedWall[],
+  characterization?: ProjectCharacterization | null,
+): AuditNote[] {
   const notes: AuditNote[] = [];
+  // Limite duro fica em 5cm (especificacao Lightwall) — caracterizacao nao
+  // pode aceitar paredes mais finas. Limite superior, sim: caracterizacao
+  // refina (popular suporta 12cm, alto pode chegar a 20cm).
+  const minLightwallM = 0.05;
+  const espessuraMax = characterization
+    ? characterization.estimativas.espessuraParedeM[1] * 1.3
+    : 0.40;
   for (const w of walls) {
     if (!w.espessura_m) continue;
-    if (w.espessura_m < 0.05) {
+    if (w.espessura_m < minLightwallM) {
       notes.push({
         severity: "warning",
         code: "ESPESSURA_FINA",
@@ -122,17 +154,76 @@ function checkEspessura(walls: ExtractedWall[]): AuditNote[] {
         context: { espessura_cm: w.espessura_m * 100 },
         relatedIds: [w.id],
       });
-    } else if (w.espessura_m > 0.40) {
+    } else if (w.espessura_m > espessuraMax) {
       notes.push({
         severity: "info",
         code: "ESPESSURA_GROSSA",
-        message: `Parede ${(w as any).displayLabel || w.id}: espessura ${(w.espessura_m * 100).toFixed(1)}cm acima do tipico. Pode ser mobiliario ou shaft.`,
-        context: { espessura_cm: w.espessura_m * 100 },
+        message: `Parede ${(w as any).displayLabel || w.id}: espessura ${(w.espessura_m * 100).toFixed(1)}cm acima do tipico (${(espessuraMax * 100).toFixed(1)}cm). Pode ser mobiliario ou shaft.`,
+        context: { espessura_cm: w.espessura_m * 100, max_esperado_cm: espessuraMax * 100 },
         relatedIds: [w.id],
       });
     }
   }
   return notes;
+}
+
+function checkWallCountVsExpected(
+  walls: ExtractedWall[],
+  characterization?: ProjectCharacterization | null,
+): AuditNote[] {
+  if (!characterization) return [];
+  const enabled = walls.filter(w => (w as any).enabled !== false);
+  const count = enabled.length;
+  const [lo, hi] = characterization.estimativas.paredeCountRange;
+  // Folga +/-30% pra nao gerar alarmismo em projetos limítrofes.
+  const loSoft = Math.floor(lo * 0.7);
+  const hiSoft = Math.ceil(hi * 1.3);
+  if (count < loSoft) {
+    return [{
+      severity: "warning",
+      code: "PAREDE_COUNT_BAIXO",
+      message: `Detectadas ${count} paredes — abaixo do range esperado para ${characterization.typology} ${characterization.padrao} (${lo}-${hi}). Possivel subextracao; confira se todas as paredes internas foram detectadas.`,
+      context: { detected: count, expected: [lo, hi], typology: characterization.typology, padrao: characterization.padrao },
+    }];
+  }
+  if (count > hiSoft) {
+    return [{
+      severity: "warning",
+      code: "PAREDE_COUNT_OUTLIER",
+      message: `Detectadas ${count} paredes — acima do range esperado para ${characterization.typology} ${characterization.padrao} (${lo}-${hi}). Possivel duplicacao ou mobiliario classificado como parede.`,
+      context: { detected: count, expected: [lo, hi], typology: characterization.typology, padrao: characterization.padrao },
+    }];
+  }
+  return [];
+}
+
+function checkEsquadriaCountVsExpected(
+  walls: ExtractedWall[],
+  characterization?: ProjectCharacterization | null,
+): AuditNote[] {
+  if (!characterization) return [];
+  // Conta esquadrias somando has_door + has_window sinalizados nas paredes ativas.
+  // Subestima quando ha multiplas em uma mesma parede, mas serve como ordem de
+  // grandeza pra checar a extracao.
+  const enabled = walls.filter(w => (w as any).enabled !== false);
+  let doors = 0;
+  let windows = 0;
+  for (const w of enabled) {
+    if ((w as any).has_door) doors++;
+    if ((w as any).has_window) windows++;
+  }
+  const count = doors + windows;
+  const [lo, hi] = characterization.estimativas.esquadriaCountRange;
+  const loSoft = Math.floor(lo * 0.5);
+  if (count < loSoft) {
+    return [{
+      severity: "info",
+      code: "ESQUADRIA_COUNT_BAIXO",
+      message: `Detectadas ${count} esquadrias (${doors} portas + ${windows} janelas) — abaixo do esperado (${lo}-${hi}). Confira se aberturas foram extraidas.`,
+      context: { detected: count, doors, windows, expected: [lo, hi] },
+    }];
+  }
+  return [];
 }
 
 function checkExternaInternaRatio(walls: ExtractedWall[], buildingType?: string): AuditNote[] {
@@ -330,12 +421,14 @@ export function runSelfCheck(input: SelfCheckInput): SelfCheckResult {
   all.push(...checkOrphansFromNonPlanta(input.walls, input.slabs));
   all.push(...checkProvenanceSummary(input.walls));
   all.push(...checkOpeningsVsWallArea(input.walls));
-  all.push(...checkPeDireito(input.walls, input.buildingType));
-  all.push(...checkEspessura(input.walls));
+  all.push(...checkPeDireito(input.walls, input.buildingType, input.characterization));
+  all.push(...checkEspessura(input.walls, input.characterization));
   all.push(...checkExternaInternaRatio(input.walls, input.buildingType));
   all.push(...checkEnvelopeClosed(input.envelopes));
   all.push(...checkPerimetroVsExternas(input.walls, input.envelopes));
   all.push(...checkPisoVsCoberta(input.slabs));
+  all.push(...checkWallCountVsExpected(input.walls, input.characterization));
+  all.push(...checkEsquadriaCountVsExpected(input.walls, input.characterization));
 
   return {
     notes: all,

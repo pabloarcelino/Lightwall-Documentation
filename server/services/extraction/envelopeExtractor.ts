@@ -32,12 +32,26 @@ interface EnvelopeJob {
   pavimento: string;
   base64: string;
   mimeType: string;
+  formaHint?: FormaEnvelopeHint;
 }
 
 const ENVELOPE_MODEL = "gemini-2.5-pro";
 
-function buildEnvelopePrompt(pavimento: string): string {
-  return `TAREFA UNICA: trace o poligono fechado que separa a EDIFICACAO COBERTA do exterior nesta planta arquitetonica do pavimento "${pavimento}".
+export type FormaEnvelopeHint = "retangular_simples" | "L" | "U" | "irregular";
+
+function formaHintBlock(hint?: FormaEnvelopeHint): string {
+  if (!hint) return "";
+  const map: Record<FormaEnvelopeHint, string> = {
+    retangular_simples: "DICA: caracterizacao previa indicou envelope RETANGULAR SIMPLES (4 vertices ortogonais). Privilegie vertices ortogonais; se voce ve 6+ vertices, reavalie.",
+    L: "DICA: caracterizacao previa indicou envelope em formato L (6 vertices, 1 reentrancia). Espere 6 vertices ortogonais.",
+    U: "DICA: caracterizacao previa indicou envelope em formato U (8 vertices, 2 reentrancias). Espere 8 vertices ortogonais.",
+    irregular: "DICA: caracterizacao previa indicou envelope IRREGULAR. Sem expectativa de quantidade — siga o contorno real.",
+  };
+  return `\n\n${map[hint]}\n`;
+}
+
+function buildEnvelopePrompt(pavimento: string, hint?: FormaEnvelopeHint): string {
+  return `TAREFA UNICA: trace o poligono fechado que separa a EDIFICACAO COBERTA do exterior nesta planta arquitetonica do pavimento "${pavimento}".${formaHintBlock(hint)}
 
 NAO classifique paredes.
 NAO conte comodos.
@@ -82,7 +96,7 @@ function validatePolygon(raw: any): Array<[number, number]> | null {
 }
 
 async function extractOneEnvelope(job: EnvelopeJob): Promise<EnvelopePolygon | null> {
-  const prompt = buildEnvelopePrompt(job.pavimento);
+  const prompt = buildEnvelopePrompt(job.pavimento, job.formaHint);
   const parts = [{ inlineData: { mimeType: job.mimeType, data: job.base64 } }, { text: prompt }];
 
   const text = await auditAiCall(
@@ -151,6 +165,8 @@ async function extractOneEnvelope(job: EnvelopeJob): Promise<EnvelopePolygon | n
 export interface ExtractEnvelopesInput {
   projectId: number;
   pages: Array<{ pageIndex: number; pavimento: string; base64: string; mimeType: string }>;
+  /** Dica vinda da caracterizacao (Etapa 1.5). Quando presente, vira parte do prompt. */
+  formaHint?: FormaEnvelopeHint;
 }
 
 /**
@@ -172,6 +188,7 @@ export async function extractEnvelopes(input: ExtractEnvelopesInput): Promise<En
       pavimento: p.pavimento,
       base64: p.base64,
       mimeType: p.mimeType,
+      formaHint: input.formaHint,
     });
   }
 

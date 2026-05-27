@@ -1482,6 +1482,28 @@ export async function describeProject(
   classifications: PageClassification[],
   geometrySummary: { wallCount: number; slabCount: number; cornerCount: number; floors: string[] },
   budgetSummary: { totalPanels: number; totalCost: number; floors: Array<{ name: string; panels: number }> },
+  characterization?: {
+    typology: string;
+    pavimentos: string[];
+    programa: Array<{ ambiente: string; qty: number }>;
+    padrao: string;
+    estimativas: {
+      paredeCountRange: [number, number];
+      esquadriaCountRange: [number, number];
+      espessuraParedeM: [number, number];
+      peDireitoM: [number, number];
+      areaTotalRangeM2: [number, number];
+    };
+    caracteristicas: {
+      temCobertura: boolean;
+      temGaragem: boolean;
+      temMuros: boolean;
+      temPergolado: boolean;
+      formaEnvelopePrincipal: string;
+    };
+    confidence: string;
+    notes: string;
+  } | null,
 ): Promise<string> {
   try {
     const parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = [];
@@ -1499,7 +1521,27 @@ export async function describeProject(
 
     const floorDesc = budgetSummary.floors.map(f => `  - ${f.name}: ${f.panels} paineis`).join("\n");
 
-    parts.push({ text: `Voce e um orcamentista especializado em construcao com paineis de concreto Lightwall.
+    const characterizationBlock = characterization
+      ? `\n\nCARACTERIZACAO PREVIA (Etapa 1.5 — JSON estruturado ja confirmado pela IA):
+- Tipologia: ${characterization.typology} (padrao: ${characterization.padrao}, confianca: ${characterization.confidence})
+- Pavimentos identificados: ${characterization.pavimentos.join(", ")}
+- Programa: ${characterization.programa.map(p => `${p.qty} ${p.ambiente}`).join(", ") || "(nao identificado)"}
+- Forma do envelope: ${characterization.caracteristicas.formaEnvelopePrincipal}
+- Caracteristicas: ${[
+          characterization.caracteristicas.temCobertura && "cobertura",
+          characterization.caracteristicas.temGaragem && "garagem",
+          characterization.caracteristicas.temMuros && "muros",
+          characterization.caracteristicas.temPergolado && "pergolado",
+        ].filter(Boolean).join(", ") || "nenhuma especial"}
+- Range esperado de paredes: ${characterization.estimativas.paredeCountRange.join("-")}
+- Range esperado de esquadrias: ${characterization.estimativas.esquadriaCountRange.join("-")}
+- Pe-direito esperado: ${characterization.estimativas.peDireitoM[0].toFixed(2)}-${characterization.estimativas.peDireitoM[1].toFixed(2)}m
+- Observacao da caracterizacao: ${characterization.notes || "(sem observacao)"}
+
+Use esta caracterizacao como base — voce nao precisa re-identificar o tipo de projeto. Foque em DETALHAR e VALIDAR o que ja foi caracterizado, comparando com os dados extraidos.\n`
+      : "";
+
+    parts.push({ text: `Voce e um orcamentista especializado em construcao com paineis de concreto Lightwall.${characterizationBlock}
 
 Analise todas as imagens/paginas deste projeto arquitetonico COM FOCO EM ORCAMENTO E QUANTITATIVO. Sua analise deve ser PRATICA e DIRETA, voltada para quem precisa entender o que vai ser orcado.
 

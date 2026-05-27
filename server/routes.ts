@@ -69,6 +69,7 @@ import bcrypt from "bcryptjs";
 // continua exportando a funcao caso seja util em outro fluxo no futuro.
 import { renderAnnotatedImage } from "./services/annotation/renderer";
 import { extractEnvelopes, type EnvelopePolygon } from "./services/extraction/envelopeExtractor";
+import { characterizeProject, type ProjectCharacterization } from "./services/extraction/projectCharacterization";
 import { classifyWallsByTopology } from "./services/extraction/topology";
 import { inventoryWalls, mergeEndpointsIntoWalls } from "./services/extraction/wallInventory";
 import { readCotas, mergeCotasIntoWalls } from "./services/extraction/cotaReader";
@@ -1600,6 +1601,51 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Nenhum dado extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas." });
       }
 
+      // ===== Etapa 1.5 — Caracterizacao do projeto =====
+      // Roda DEPOIS da Etapa 1 (classificacao + tabelas) e ANTES das etapas
+      // 3.5+ (inventory, envelope, selfCheck, describe). Produz JSON estruturado
+      // com tipologia, padrao, programa de ambientes e ranges esperados.
+      // O resultado alimenta as etapas subsequentes (ranges dinamicos em
+      // selfCheck, sanity check de count em wallInventory, hint de forma no
+      // envelopeExtractor, input rico para describeProject).
+      // Custo: 1 chamada Gemini (~$0.003). Falha = continua sem ranges
+      // refinados, fallback para buildingTypePrompts hardcoded.
+      let characterization: ProjectCharacterization | null = null;
+      try {
+        sendProgress(projectId, 1.5, "Caracterizacao", "running", "Identificando tipologia, programa e padrao construtivo...");
+        const charSources = await getAnnotationImageSources(files, allClassifications);
+        if (charSources.length > 0) {
+          characterization = await characterizeProject({
+            projectId,
+            pages: charSources.map(s => ({
+              pageIndex: s.pageIndex,
+              pavimento: s.pavimento,
+              base64: s.base64,
+              mimeType: s.mimeType,
+            })),
+            buildingTypeHint: effectiveBuildingType() as any,
+          });
+        }
+        if (characterization) {
+          await storage.addExtractedData({
+            projectId,
+            elementType: "etapa1_5_characterization",
+            data: characterization as any,
+            hasAssumption: 0,
+          });
+          sendProgress(
+            projectId, 1.5, "Caracterizacao", "done",
+            `${characterization.typology} ${characterization.padrao} | ${characterization.pavimentos.join(", ")} | ` +
+            `paredes esperadas ${characterization.estimativas.paredeCountRange.join("-")} | conf=${characterization.confidence}`,
+          );
+        } else {
+          sendProgress(projectId, 1.5, "Caracterizacao", "done", "nao foi possivel caracterizar — usando defaults por buildingType");
+        }
+      } catch (charErr: any) {
+        console.warn(`[CARACTERIZACAO] Pulada por erro: ${charErr?.message || charErr}`);
+        sendProgress(projectId, 1.5, "Caracterizacao", "done", `pulada (erro: ${charErr?.message || "desconhecido"})`);
+      }
+
       // ===== Etapa 3.4 — CV Pipeline (Fase E) =====
       // Roda o pipeline OpenCV/Shapely do cv-service em PARALELO com o pipeline
       // Gemini ja executado. Se cv-service esta ready e retorna status="ok":
@@ -1760,6 +1806,7 @@ export async function registerRoutes(
                 base64: s.base64,
                 mimeType: s.mimeType,
               })),
+              formaHint: characterization?.caracteristicas.formaEnvelopePrincipal,
             });
           }
 
@@ -2100,6 +2147,7 @@ export async function registerRoutes(
           slabs: fused.slabs,
           envelopes,
           buildingType: effectiveBuildingType(),
+          characterization,
         });
         if (selfCheckResult.notes.length > 0) {
           await storage.addExtractedData({
@@ -2333,7 +2381,7 @@ export async function registerRoutes(
             model: descModel,
             inputSummary: `files=${filePaths.length} pages=${allClassifications.length}`,
           },
-          () => describeProject(filePaths, allClassifications, geometrySummary, budgetSummaryForDesc),
+          () => describeProject(filePaths, allClassifications, geometrySummary, budgetSummaryForDesc, characterization),
           (out: any) => ({ length: typeof out === "string" ? out.length : 0 }),
         );
         const failed = text.startsWith("Nao foi possivel");
