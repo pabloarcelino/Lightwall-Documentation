@@ -51,7 +51,16 @@ import { validateGeometry, summarizeValidation } from "./services/calculation/ge
 import { inspectFile, summarizePreflight } from "./services/preflight/inspector";
 import { extractFromVectorPdf } from "./services/preflight/pdfVectorExtractor";
 import { auditAiCall } from "./services/audit/aiAuditor";
-import { addAiEventClient } from "./services/audit/aiEvents";
+import {
+  addAiEventClient,
+  setEventPersister,
+  emitStage,
+  emitImageRender,
+  emitPdfSplit,
+  emitAuditFinding,
+  emitCvSubstep,
+  type AiEvent,
+} from "./services/audit/aiEvents";
 import { resolveProjectFilePath } from "./utils/filePaths";
 import { runGlobalCrossValidation } from "./services/gemini/globalValidator";
 import type { ExtractedWall, ExtractedSlab, ExtractedCorner } from "./services/gemini/planAnalyzer";
@@ -81,6 +90,7 @@ import {
   checkCvServiceHealth,
   cvServiceCapability,
   fullExtractionCV,
+  fullExtractionCVStreamed,
 } from "./services/cv-service/client";
 import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
@@ -139,6 +149,7 @@ function computeTotaisPorSku(itens: Array<{ discriminacao: string; sku?: string;
 async function getAnnotationImageSources(
   files: any[],
   classifications?: PageClassification[],
+  projectId?: number,
 ): Promise<Array<{ pageIndex: number; pavimento: string; base64: string; mimeType: string }>> {
   // 1. Prefer real image files (PNG/JPG/WebP) — single entry, pavimento="all"
   const imageFile = files.find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""));
@@ -157,7 +168,11 @@ async function getAnnotationImageSources(
 
   const pdfPath = resolveProjectFilePath(pdfFile.filePath);
   if (!pdfPath) return [];
-  const pages = await splitPdfPages(pdfPath);
+  const pages = await splitPdfPages(pdfPath, {
+    projectId,
+    fileId: pdfFile.id,
+    fileName: pdfFile.originalName,
+  });
   if (pages.length === 0) return [];
 
   // Find all planta_baixa pages with their pavimento
@@ -453,6 +468,17 @@ function sendProgress(projectId: number, step: number, label: string, status: "r
   for (const client of clients) {
     try { client.write(`data: ${data}\n\n`); } catch {}
   }
+  // Espelha como evento "stage" no canal SSE unificado pra timeline ao-vivo.
+  // Mapeia status -> phase: "running"=started, "done"=completed, "error"=failed.
+  const phase = status === "running" ? "started" : status === "done" ? "completed" : "failed";
+  emitStage({
+    projectId,
+    stage: String(step),
+    label,
+    phase,
+    detail: phase !== "failed" ? detail : undefined,
+    errorMessage: phase === "failed" ? detail : undefined,
+  });
 }
 
 const upload = multer({
@@ -497,6 +523,25 @@ export async function registerRoutes(
   app.use("/api", (req, res, next) => {
     if (req.path.startsWith("/auth/")) return next();
     return requireAuth(req, res, next);
+  });
+
+  // Registra o persister de eventos: cada broadcast tambem grava em
+  // pipeline_events quando for um evento "importante" (stage, audit_finding,
+  // image_render, ai_call terminal). pdf_split e cv_substep ficam so em
+  // memoria — sao verbosos demais pra valer a pena persistir.
+  setEventPersister((event: AiEvent) => {
+    const k = event.kind ?? "ai_call";
+    if (k === "pdf_split" || k === "cv_substep") return;
+    if (k === "ai_call" && event.phase === "started") return; // so persiste terminais
+    storage
+      .createPipelineEvent({
+        projectId: event.projectId,
+        kind: k,
+        stage: k === "stage" ? (event as any).stage : (event as any).stage ?? null,
+        phase: event.phase,
+        payload: event as any,
+      })
+      .catch((err) => console.warn("[PIPELINE_EVENTS] Persist falhou:", err?.message || err));
   });
 
   // Resolucao de keys: env tem prioridade absoluta. Quando ausente,
@@ -1120,6 +1165,24 @@ export async function registerRoutes(
     }
   });
 
+  // Historico de eventos do pipeline — entrega persistente pra a UI
+  // reconstruir a timeline ao abrir um projeto depois do processamento.
+  // Combina com /ai-events (SSE) que streama os eventos novos.
+  app.get("/api/projects/:id/pipeline-events", async (req, res) => {
+    try {
+      const projectId = parseInt(String(req.params.id));
+      if (!Number.isFinite(projectId)) {
+        return res.status(400).json({ message: "ID invalido" });
+      }
+      const events = await storage.getPipelineEvents(projectId);
+      // Devolve apenas o payload — o resto e metadado de tabela.
+      res.json(events.map(e => e.payload));
+    } catch (err: any) {
+      console.error("Erro ao buscar pipeline events:", err);
+      res.status(500).json({ message: "Erro ao buscar eventos" });
+    }
+  });
+
   app.get("/api/projects/:id/ai-events", (req, res) => {
     const projectId = parseInt(String(req.params.id));
     res.setHeader("Content-Type", "text/event-stream");
@@ -1613,7 +1676,7 @@ export async function registerRoutes(
       let characterization: ProjectCharacterization | null = null;
       try {
         sendProgress(projectId, 1.5, "Caracterizacao", "running", "Identificando tipologia, programa e padrao construtivo...");
-        const charSources = await getAnnotationImageSources(files, allClassifications);
+        const charSources = await getAnnotationImageSources(files, allClassifications, projectId);
         if (charSources.length > 0) {
           characterization = await characterizeProject({
             projectId,
@@ -1663,11 +1726,27 @@ export async function registerRoutes(
           const cvResults: Array<{ pavimento: string; result: any }> = [];
           for (const src of cvSources) {
             try {
-              const cvResult = await fullExtractionCV({
-                imageBase64: src.base64,
-                mimeType: src.mimeType,
-                pavimento: src.pavimento,
-              });
+              // Usa streaming pra emitir cv_substep por etapa interna
+              // (preprocess, envelope, ocr, wall_detect, classify). Em caso de
+              // 404/erro, fullExtractionCVStreamed automaticamente cai pro
+              // endpoint sincrono — compat total.
+              const cvResult = await fullExtractionCVStreamed(
+                {
+                  imageBase64: src.base64,
+                  mimeType: src.mimeType,
+                  pavimento: src.pavimento,
+                },
+                (p) => {
+                  emitCvSubstep({
+                    projectId,
+                    pavimento: src.pavimento,
+                    substep: (p.substep as any) || "other",
+                    phase: p.phase,
+                    detail: typeof p.error === "string" ? p.error : undefined,
+                    errorMessage: p.phase === "failed" && typeof p.error === "string" ? p.error : undefined,
+                  });
+                },
+              );
               cvResults.push({ pavimento: src.pavimento, result: cvResult });
               console.log(
                 `[CV] Pav "${src.pavimento}": status=${cvResult.status} ` +
@@ -2156,6 +2235,17 @@ export async function registerRoutes(
             data: { notes: selfCheckResult.notes, summary: selfCheckResult.summary },
             hasAssumption: 0,
           });
+          // Emite cada nota como evento — UI mostra cards expansiveis na timeline.
+          for (const note of selfCheckResult.notes) {
+            emitAuditFinding({
+              projectId,
+              severity: note.severity,
+              code: note.code,
+              message: note.message,
+              relatedIds: note.relatedIds,
+              stage: "4.9",
+            });
+          }
         }
         const s = selfCheckResult.summary;
         console.log(`[SELFCHECK] ${s.total} notas (${s.error} erros, ${s.warning} avisos, ${s.info} info)`);
@@ -2448,38 +2538,65 @@ export async function registerRoutes(
 
           const annotationResults = await Promise.allSettled(
             annotationJobs.map(async (job) => {
-              const baseBuffer = Buffer.from(job.src.base64, "base64");
-              // Envelope desse pavimento (se foi detectado na Etapa 3.7).
-              const env = envelopes.find(
-                e => e.pavimento === job.src.pavimento ||
-                     (job.src.pavimento === "all" && envelopes.length === 1),
-              );
-              const { pngBuffer } = await renderAnnotatedImage(
-                baseBuffer,
-                job.src.mimeType,
-                job.src.pageIndex,
-                job.enabledFloorWalls,
-                job.enabledFloorSlabs,
-                {
-                  pavimentoLabel: job.src.pavimento === "all" ? "" : `Pavimento: ${job.src.pavimento}`,
-                  envelopePolygon: env?.polygon,
-                  lotPolygon: env?.lotPolygon,
-                },
-              );
-              const dataUrl = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-              console.log(`[ETAPA 4.5] Anotada ${job.src.pavimento} pg ${job.src.pageIndex}: ${Math.round(dataUrl.length / 1024)}KB`);
-              return {
+              // Emit started per pavimento — antes a Promise.allSettled era
+              // silenciosa ate todas terminarem; agora a UI pode mostrar grid
+              // ao vivo conforme cada imagem fica pronta.
+              emitImageRender({
+                projectId,
                 pavimento: job.src.pavimento,
                 pageIndex: job.src.pageIndex,
-                image: dataUrl,
-                summary: {
-                  externas: job.enabledFloorWalls.filter((w: any) => w.classe === "externa").length,
-                  internas: job.enabledFloorWalls.filter((w: any) => w.classe === "interna").length,
-                  muros: job.enabledFloorWalls.filter((w: any) => w.classe === "muro").length,
-                  lajePiso: job.enabledFloorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
-                  lajeCoberta: job.enabledFloorSlabs.filter((s: any) => s.classe === "coberta").length,
-                },
-              };
+                phase: "started",
+              });
+              try {
+                const baseBuffer = Buffer.from(job.src.base64, "base64");
+                const env = envelopes.find(
+                  e => e.pavimento === job.src.pavimento ||
+                       (job.src.pavimento === "all" && envelopes.length === 1),
+                );
+                const { pngBuffer } = await renderAnnotatedImage(
+                  baseBuffer,
+                  job.src.mimeType,
+                  job.src.pageIndex,
+                  job.enabledFloorWalls,
+                  job.enabledFloorSlabs,
+                  {
+                    pavimentoLabel: job.src.pavimento === "all" ? "" : `Pavimento: ${job.src.pavimento}`,
+                    envelopePolygon: env?.polygon,
+                    lotPolygon: env?.lotPolygon,
+                  },
+                );
+                const dataUrl = `data:image/png;base64,${pngBuffer.toString("base64")}`;
+                console.log(`[ETAPA 4.5] Anotada ${job.src.pavimento} pg ${job.src.pageIndex}: ${Math.round(dataUrl.length / 1024)}KB`);
+                emitImageRender({
+                  projectId,
+                  pavimento: job.src.pavimento,
+                  pageIndex: job.src.pageIndex,
+                  phase: "completed",
+                  imageUrl: dataUrl,
+                  byteSize: pngBuffer.length,
+                });
+                return {
+                  pavimento: job.src.pavimento,
+                  pageIndex: job.src.pageIndex,
+                  image: dataUrl,
+                  summary: {
+                    externas: job.enabledFloorWalls.filter((w: any) => w.classe === "externa").length,
+                    internas: job.enabledFloorWalls.filter((w: any) => w.classe === "interna").length,
+                    muros: job.enabledFloorWalls.filter((w: any) => w.classe === "muro").length,
+                    lajePiso: job.enabledFloorSlabs.filter((s: any) => s.classe === "piso" || s.classe === "radier").length,
+                    lajeCoberta: job.enabledFloorSlabs.filter((s: any) => s.classe === "coberta").length,
+                  },
+                };
+              } catch (err: any) {
+                emitImageRender({
+                  projectId,
+                  pavimento: job.src.pavimento,
+                  pageIndex: job.src.pageIndex,
+                  phase: "failed",
+                  errorMessage: err?.message || String(err),
+                });
+                throw err;
+              }
             }),
           );
           // Captura erros por pavimento pra UI dar visibilidade (Parte 1 do bugfix).

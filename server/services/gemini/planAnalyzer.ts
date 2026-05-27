@@ -404,7 +404,17 @@ export function clearSplitCache(): void {
   _splitCache.clear();
 }
 
-export async function splitPdfPages(pdfPath: string): Promise<Array<{ pageIndex: number; base64: string }>> {
+export interface SplitPdfOptions {
+  /** Quando definido, emite eventos "pdf_split" por pagina via event bus. */
+  projectId?: number;
+  fileId?: number;
+  fileName?: string;
+}
+
+export async function splitPdfPages(
+  pdfPath: string,
+  opts: SplitPdfOptions = {},
+): Promise<Array<{ pageIndex: number; base64: string }>> {
   const absPath = path.resolve(pdfPath);
   const cached = _splitCache.get(absPath);
   if (cached) {
@@ -417,15 +427,57 @@ export async function splitPdfPages(pdfPath: string): Promise<Array<{ pageIndex:
   const pageCount = pdfDoc.getPageCount();
   const pages: Array<{ pageIndex: number; base64: string }> = [];
 
+  // Carregamento sob demanda do emitter pra evitar dep circular se um modulo
+  // generico um dia importar este sem usar eventos.
+  let emitter: typeof import("../audit/aiEvents") | null = null;
+  if (opts.projectId !== undefined) {
+    try { emitter = await import("../audit/aiEvents"); } catch { /* sem eventos */ }
+  }
+
   for (let i = 0; i < pageCount; i++) {
-    const singleDoc = await PDFDocument.create();
-    const [copiedPage] = await singleDoc.copyPages(pdfDoc, [i]);
-    singleDoc.addPage(copiedPage);
-    const singleBytes = await singleDoc.save();
-    pages.push({
-      pageIndex: i,
-      base64: Buffer.from(singleBytes).toString("base64"),
-    });
+    if (emitter && opts.projectId !== undefined) {
+      emitter.emitPdfSplit({
+        projectId: opts.projectId,
+        fileId: opts.fileId ?? null,
+        fileName: opts.fileName,
+        pageIndex: i,
+        totalPages: pageCount,
+        phase: "started",
+      });
+    }
+    try {
+      const singleDoc = await PDFDocument.create();
+      const [copiedPage] = await singleDoc.copyPages(pdfDoc, [i]);
+      singleDoc.addPage(copiedPage);
+      const singleBytes = await singleDoc.save();
+      pages.push({
+        pageIndex: i,
+        base64: Buffer.from(singleBytes).toString("base64"),
+      });
+      if (emitter && opts.projectId !== undefined) {
+        emitter.emitPdfSplit({
+          projectId: opts.projectId,
+          fileId: opts.fileId ?? null,
+          fileName: opts.fileName,
+          pageIndex: i,
+          totalPages: pageCount,
+          phase: "completed",
+        });
+      }
+    } catch (err: any) {
+      if (emitter && opts.projectId !== undefined) {
+        emitter.emitPdfSplit({
+          projectId: opts.projectId,
+          fileId: opts.fileId ?? null,
+          fileName: opts.fileName,
+          pageIndex: i,
+          totalPages: pageCount,
+          phase: "failed",
+          errorMessage: err?.message || String(err),
+        });
+      }
+      throw err;
+    }
   }
 
   console.log(`[PDF] Dividido em ${pageCount} paginas individuais`);
@@ -433,11 +485,15 @@ export async function splitPdfPages(pdfPath: string): Promise<Array<{ pageIndex:
   return pages;
 }
 
-export async function getFilePages(filePath: string, fileType?: string): Promise<Array<{ pageIndex: number; base64: string; mimeType: string }>> {
+export async function getFilePages(
+  filePath: string,
+  fileType?: string,
+  opts: SplitPdfOptions = {},
+): Promise<Array<{ pageIndex: number; base64: string; mimeType: string }>> {
   const mimeType = getMimeType(filePath, fileType);
 
   if (mimeType === "application/pdf") {
-    const pages = await splitPdfPages(filePath);
+    const pages = await splitPdfPages(filePath, opts);
     return pages.map(p => ({ ...p, mimeType: "application/pdf" }));
   }
 
