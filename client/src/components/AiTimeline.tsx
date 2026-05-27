@@ -27,12 +27,28 @@ interface AiEventBase {
   model: string;
   inputSummary: string;
   timestamp: number;
+  /** Discriminator — eventos legados nao tem; assume "ai_call" nesse caso. */
+  kind?: "ai_call";
 }
 
 type AiEvent =
   | (AiEventBase & { phase: "started" })
   | (AiEventBase & { phase: "completed"; durationMs: number; usage?: TokenUsage; costUsd?: number })
   | (AiEventBase & { phase: "failed"; durationMs: number; errorMessage: string });
+
+/**
+ * Type guard: o canal /ai-events agora carrega varios kinds (stage, image_render,
+ * cv_substep, pdf_split, audit_finding) alem de ai_call. Esses outros nao tem
+ * `model` ou `callId`, e tentavam ser processados como AiCall — quebravam em
+ * `model.toLowerCase()`. Aqui filtramos pra processar apenas ai_call.
+ */
+function isAiCallEvent(raw: unknown): raw is AiEvent {
+  if (!raw || typeof raw !== "object") return false;
+  const e = raw as Record<string, unknown>;
+  const kind = (e.kind ?? "ai_call") as string;
+  if (kind !== "ai_call") return false;
+  return typeof e.callId === "string" && typeof e.model === "string";
+}
 
 interface AiCall extends AiEventBase {
   status: "running" | "completed" | "failed";
@@ -62,7 +78,8 @@ const PROMPT_LABEL: Record<string, string> = {
   buildingType:       "Tipo de edificação",
 };
 
-function modelChip(model: string): { label: string; tone: "primary" | "secondary" | "neutral" } {
+function modelChip(model: string | undefined | null): { label: string; tone: "primary" | "secondary" | "neutral" } {
+  if (!model) return { label: "—", tone: "neutral" };
   const m = model.toLowerCase();
   if (m.startsWith("openai:") || m.startsWith("gpt-") || m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4")) {
     return { label: model.replace(/^openai:/, ""), tone: "secondary" };
@@ -106,8 +123,9 @@ export function AiTimeline({ projectId, enabled = true, maxItems = 50, className
 
     const handler = (raw: MessageEvent) => {
       try {
-        const event: AiEvent = JSON.parse(raw.data);
-        setCalls(prev => upsertCall(prev, event, lastIdRef.current));
+        const parsed = JSON.parse(raw.data);
+        if (!isAiCallEvent(parsed)) return; // ignora stage/image_render/cv_substep/etc
+        setCalls(prev => upsertCall(prev, parsed, lastIdRef.current));
       } catch { /* ignora payload mal formado */ }
     };
     es.addEventListener("started",   handler);
