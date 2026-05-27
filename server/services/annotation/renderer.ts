@@ -29,6 +29,11 @@ export interface RenderableWall {
   /** Fase B: quando presentes, o renderer desenha linha sobre o eixo
    *  (p1 → p2) em vez de retangulo via bbox. */
   endpoints?: { p1: [number, number]; p2: [number, number] };
+  /** Espessura aparente da parede em % do lado maior da imagem (0..100).
+   *  Quando presente + endpoints, e quando wallStyle="filled", o renderer
+   *  pinta um poligono retangular real (faixa) da parede em vez de uma
+   *  linha sobre o eixo. */
+  thickness_pct?: number;
 }
 
 export interface RenderableSlab {
@@ -55,6 +60,24 @@ export interface RenderOptions {
   envelopePolygon?: Array<[number, number]>;
   /** Poligono do lote (muros de divisa), se houver. */
   lotPolygon?: Array<[number, number]>;
+  /**
+   * "filled" (default) pinta paredes como faixas retangulares semi-transparentes
+   * (estilo documento entregavel: vermelho preenchido = externa, verde preenchido
+   * = interna). "outline" (legado) desenha linha sobre o eixo ou retangulo vazio
+   * sobre a bbox — bom pra auditoria tecnica mas visualmente "debug".
+   */
+  wallStyle?: "filled" | "outline";
+  /**
+   * Mostrar labels W001..Wn + comprimento por cima das paredes. Default false
+   * (limpo, estilo entregavel). Quando true, comportamento legado (auditoria).
+   */
+  showWallLabels?: boolean;
+  /**
+   * Espessura default em % (0..100) usada quando uma parede tem endpoints
+   * mas nao tem thickness_pct (nao casou no wallInventory, veio so de Gemini).
+   * Default 1.5%. Pode vir da caracterizacao (Etapa 1.5).
+   */
+  defaultThicknessPct?: number;
 }
 
 export interface RenderResult {
@@ -92,6 +115,9 @@ const DEFAULT_OPTS: Required<RenderOptions> = {
   showLegend: true,
   envelopePolygon: [],
   lotPolygon: [],
+  wallStyle: "filled",
+  showWallLabels: false,
+  defaultThicknessPct: 1.5,
 };
 
 // ============================================================
@@ -200,6 +226,34 @@ function polygonToSvgPoints(
 // SVG overlay
 // ============================================================
 
+/**
+ * Dado um segmento (p1 → p2) e a espessura aparente em % (do lado maior da
+ * imagem em coordenadas 0-1000), devolve os 4 cantos de um retangulo
+ * centrado no eixo, com a largura igual a espessura.
+ *
+ * Usado pelo wallStyle="filled" pra pintar a faixa da parede.
+ */
+function endpointsToWallPolygon(
+  p1: [number, number],
+  p2: [number, number],
+  thicknessPct: number,
+): Array<[number, number]> {
+  const [x1, y1] = p1;
+  const [x2, y2] = p2;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const halfThick = (thicknessPct / 100) * 1000 / 2;
+  return [
+    [x1 + nx * halfThick, y1 + ny * halfThick],
+    [x2 + nx * halfThick, y2 + ny * halfThick],
+    [x2 - nx * halfThick, y2 - ny * halfThick],
+    [x1 - nx * halfThick, y1 - ny * halfThick],
+  ];
+}
+
 function buildSvgOverlay(
   walls: RenderableWall[],
   slabs: RenderableSlab[],
@@ -225,68 +279,118 @@ function buildSvgOverlay(
     slabLabels.push(renderLabel(s.displayLabel || s.id, `${fmt(s.area_m2 || 0)} m²`, x + w / 2, y + h / 2, color, labelFs, labelPad, "center"));
   }
 
-  // Paredes:
-  //  - Se a parede tem endpoints (p1, p2) — Fase B do pipeline — desenhamos
-  //    uma LINHA grossa sobre o EIXO real da parede. Tecnicamente correto.
-  //  - Senao, fallback para retangulo via bbox (Fase A). Util para projetos
-  //    legados ou paredes que nao casaram com o inventario.
-  // Em ambos os casos, o stroke usa a cor da classe (vermelho/verde/azul).
+  // Paredes — duas estrategias visuais:
+  //
+  //  - wallStyle="filled" (default novo, estilo documento entregavel):
+  //      * Com endpoints + thickness: pinta poligono retangular preenchido,
+  //        com a faixa da parede coberta de vermelho (externa) ou verde
+  //        (interna) semi-transparente — mesma estetica que o Gemini Web
+  //        produz quando pedimos pra ele "pintar as paredes".
+  //      * Sem endpoints (so bbox): preenche o retangulo da bbox com fill
+  //        semi-transparente. Pior aproximacao mas ainda visualmente claro.
+  //
+  //  - wallStyle="outline" (legado, auditoria tecnica):
+  //      * Com endpoints: linha grossa sobre o eixo real (p1 -> p2).
+  //      * Sem endpoints: retangulo vazio (fill="none") com borda colorida.
+  //
+  // Labels W001..Wn so saem se opts.showWallLabels === true (default false).
   const wallStroke = Math.max(stroke + 1, Math.round(width / 350));
+  const fillStroke = Math.max(1, Math.round(stroke / 2));
   const wallShapes: string[] = [];
   const wallLabels: string[] = [];
   for (const w of walls) {
     const color = COLORS[w.classe] ?? COLORS.externa;
+
+    // Coordenadas de eixo (uteis pra label position quando ha endpoints)
+    let axisCenter: { x: number; y: number; nx: number; ny: number } | null = null;
     if (w.endpoints) {
       const x1 = (w.endpoints.p1[0] / 1000) * width;
       const y1 = (w.endpoints.p1[1] / 1000) * height;
       const x2 = (w.endpoints.p2[0] / 1000) * width;
       const y2 = (w.endpoints.p2[1] / 1000) * height;
-      wallShapes.push(
-        `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="${wallStroke}" stroke-linecap="round" stroke-opacity="0.92"/>`,
-      );
-      // Label perto do midpoint, deslocado ortogonalmente para nao cobrir a linha.
-      const cx = (x1 + x2) / 2;
-      const cy = (y1 + y2) / 2;
       const dx = x2 - x1;
       const dy = y2 - y1;
       const len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len;
-      const ny = dx / len;
-      const off = labelFs * 1.4;
-      const ax = cx + nx * off;
-      const ay = cy + ny * off;
-      wallLabels.push(
-        renderLabel(
-          w.displayLabel || w.id,
-          `${fmt(w.comprimento_m || 0)} m`,
-          ax,
-          ay,
-          color,
-          labelFs,
-          labelPad,
-          "center",
-        ),
-      );
-    } else if (w.bbox) {
-      const px = bboxToPx(w.bbox, width, height);
-      wallShapes.push(
-        `<rect x="${px.x.toFixed(1)}" y="${px.y.toFixed(1)}" width="${px.w.toFixed(1)}" height="${px.h.toFixed(1)}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linejoin="round" stroke-opacity="0.85"/>`,
-      );
-      const horizontal = px.w >= px.h;
-      const anchorX = horizontal ? px.x + px.w / 2 : px.x + px.w + labelFs * 0.6;
-      const anchorY = horizontal ? px.y - labelFs * 0.6 : px.y + px.h / 2;
-      wallLabels.push(
-        renderLabel(
-          w.displayLabel || w.id,
-          `${fmt(w.comprimento_m || 0)} m`,
-          anchorX,
-          anchorY,
-          color,
-          labelFs,
-          labelPad,
-          horizontal ? "center" : "start",
-        ),
-      );
+      axisCenter = {
+        x: (x1 + x2) / 2,
+        y: (y1 + y2) / 2,
+        nx: -dy / len,
+        ny: dx / len,
+      };
+    }
+
+    if (opts.wallStyle === "filled") {
+      let polygonPx: string | null = null;
+      if (w.endpoints) {
+        const thick = w.thickness_pct ?? opts.defaultThicknessPct;
+        const poly = endpointsToWallPolygon(w.endpoints.p1, w.endpoints.p2, thick);
+        polygonPx = poly
+          .map(([nx, ny]) => `${((nx / 1000) * width).toFixed(1)},${((ny / 1000) * height).toFixed(1)}`)
+          .join(" ");
+      }
+      if (polygonPx) {
+        wallShapes.push(
+          `<polygon points="${polygonPx}" fill="${color}" fill-opacity="0.55" stroke="${color}" stroke-opacity="0.85" stroke-width="${fillStroke}" stroke-linejoin="round"/>`,
+        );
+      } else if (w.bbox) {
+        const px = bboxToPx(w.bbox, width, height);
+        wallShapes.push(
+          `<rect x="${px.x.toFixed(1)}" y="${px.y.toFixed(1)}" width="${px.w.toFixed(1)}" height="${px.h.toFixed(1)}" fill="${color}" fill-opacity="0.55" stroke="${color}" stroke-opacity="0.85" stroke-width="${fillStroke}" stroke-linejoin="round"/>`,
+        );
+      }
+    } else {
+      // outline (legado)
+      if (w.endpoints) {
+        const x1 = (w.endpoints.p1[0] / 1000) * width;
+        const y1 = (w.endpoints.p1[1] / 1000) * height;
+        const x2 = (w.endpoints.p2[0] / 1000) * width;
+        const y2 = (w.endpoints.p2[1] / 1000) * height;
+        wallShapes.push(
+          `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="${wallStroke}" stroke-linecap="round" stroke-opacity="0.92"/>`,
+        );
+      } else if (w.bbox) {
+        const px = bboxToPx(w.bbox, width, height);
+        wallShapes.push(
+          `<rect x="${px.x.toFixed(1)}" y="${px.y.toFixed(1)}" width="${px.w.toFixed(1)}" height="${px.h.toFixed(1)}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linejoin="round" stroke-opacity="0.85"/>`,
+        );
+      }
+    }
+
+    if (opts.showWallLabels) {
+      if (axisCenter) {
+        const off = labelFs * 1.4;
+        const ax = axisCenter.x + axisCenter.nx * off;
+        const ay = axisCenter.y + axisCenter.ny * off;
+        wallLabels.push(
+          renderLabel(
+            w.displayLabel || w.id,
+            `${fmt(w.comprimento_m || 0)} m`,
+            ax,
+            ay,
+            color,
+            labelFs,
+            labelPad,
+            "center",
+          ),
+        );
+      } else if (w.bbox) {
+        const px = bboxToPx(w.bbox, width, height);
+        const horizontal = px.w >= px.h;
+        const anchorX = horizontal ? px.x + px.w / 2 : px.x + px.w + labelFs * 0.6;
+        const anchorY = horizontal ? px.y - labelFs * 0.6 : px.y + px.h / 2;
+        wallLabels.push(
+          renderLabel(
+            w.displayLabel || w.id,
+            `${fmt(w.comprimento_m || 0)} m`,
+            anchorX,
+            anchorY,
+            color,
+            labelFs,
+            labelPad,
+            horizontal ? "center" : "start",
+          ),
+        );
+      }
     }
   }
 

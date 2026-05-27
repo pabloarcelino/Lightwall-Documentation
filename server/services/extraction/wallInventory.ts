@@ -239,6 +239,9 @@ interface WallWithBbox {
   nivel?: string;
   bbox?: [number, number, number, number];
   endpoints?: { p1: [number, number]; p2: [number, number] };
+  /** Espessura aparente em % do lado maior (0..100). Enriquecido pelo merge
+   *  quando o segment do inventario casa com a wall. */
+  thickness_pct?: number;
 }
 
 function bboxCenter(bbox: [number, number, number, number]): [number, number] {
@@ -327,6 +330,11 @@ export function mergeEndpointsIntoWalls(
 
     if (bestSeg) {
       w.endpoints = { p1: [...bestSeg.p1] as [number, number], p2: [...bestSeg.p2] as [number, number] };
+      // Propaga a espessura aparente do segment pra wall — o renderer usa
+      // pra pintar a faixa retangular (wallStyle="filled") em vez de uma
+      // linha sobre o eixo. Quando nao casa, fica undefined e o renderer
+      // usa defaultThicknessPct.
+      w.thickness_pct = bestSeg.thickness_pct;
       usedSegmentIds.add(bestSeg.id);
       enriched++;
     }

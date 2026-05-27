@@ -90,6 +90,11 @@ export interface ExtractedWall {
   // direcao para derivar os pontos de teste ortogonais. Tornam a
   // anotacao tecnicamente correta e a classificacao muito mais robusta.
   endpoints?: { p1: [number, number]; p2: [number, number] };
+  // Espessura aparente em % do lado maior da imagem (0..100). Copiada do
+  // WallSegment do wallInventory quando casa via mergeEndpointsIntoWalls.
+  // Quando presente + endpoints, o renderer pinta um polígono retangular
+  // preenchido (faixa da parede), em vez de uma linha sobre o eixo.
+  thickness_pct?: number;
   // Fase E (E.0.5): contrato de procedencia multi-vista. REGRA DE OURO:
   // primary.view E SEMPRE "planta_baixa" ou "planta_cobertura". Cortes,
   // fachadas, vistas 3D e detalhes SO aparecem em enrichments[].view —

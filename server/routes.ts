@@ -2599,6 +2599,15 @@ export async function registerRoutes(
                   e => e.pavimento === job.src.pavimento ||
                        (job.src.pavimento === "all" && envelopes.length === 1),
                 );
+                // Estilo entregavel (faixa preenchida + sem labels W001) e o
+                // padrao novo. Espessura default vem da caracterizacao (Etapa
+                // 1.5) quando disponivel: o limite superior do range em metros
+                // e convertido grosseiramente para % usando 5m/1000un como
+                // proxy (ok pra plantas residenciais tipicas). Quando a wall
+                // tem thickness_pct proprio (via wallInventory) ele prevalece.
+                const defaultThicknessPct = characterization
+                  ? Math.max(0.5, Math.min(4, (characterization.estimativas.espessuraParedeM[1] / 5) * 100))
+                  : 1.5;
                 const { pngBuffer } = await renderAnnotatedImage(
                   baseBuffer,
                   job.src.mimeType,
@@ -2609,6 +2618,9 @@ export async function registerRoutes(
                     pavimentoLabel: job.src.pavimento === "all" ? "" : `Pavimento: ${job.src.pavimento}`,
                     envelopePolygon: env?.polygon,
                     lotPolygon: env?.lotPolygon,
+                    wallStyle: "filled",
+                    showWallLabels: false,
+                    defaultThicknessPct,
                   },
                 );
                 const dataUrl = `data:image/png;base64,${pngBuffer.toString("base64")}`;
