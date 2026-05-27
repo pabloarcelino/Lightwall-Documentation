@@ -171,9 +171,14 @@ function ApiKeyCard({
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
 
-  const { data: keyStatus, isLoading } = useQuery<{ hasKey: boolean; maskedKey: string | null }>({
+  const { data: keyStatus, isLoading } = useQuery<{
+    hasKey: boolean;
+    maskedKey: string | null;
+    managedBy?: "env" | "user";
+  }>({
     queryKey: [queryKey],
   });
+  const managedByEnv = keyStatus?.managedBy === "env";
 
   const saveMutation = useMutation({
     mutationFn: async (key: string) => {
@@ -258,28 +263,35 @@ function ApiKeyCard({
               <CheckCircle className="h-5 w-5 text-green-600 dark:text-green-400 flex-shrink-0" />
               <div>
                 <p className="font-medium text-green-800 dark:text-green-200" data-testid={`${testIdPrefix}-status`}>
-                  Chave configurada
+                  Chave configurada{managedByEnv ? " (gerenciada pelo deploy)" : ""}
                 </p>
                 <p className="text-sm text-green-600 dark:text-green-400" data-testid={`${testIdPrefix}-masked`}>
                   {keyStatus.maskedKey}
                 </p>
+                {managedByEnv && (
+                  <p className="text-xs text-green-700 dark:text-green-300 mt-1">
+                    Definida via variavel de ambiente — edicao desabilitada por seguranca.
+                  </p>
+                )}
               </div>
             </div>
-            <div className="flex gap-2">
-              <Button
-                variant="destructive"
-                onClick={() => removeMutation.mutate()}
-                disabled={removeMutation.isPending}
-                data-testid={`${testIdPrefix}-remove`}
-              >
-                {removeMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                ) : (
-                  <Trash2 className="h-4 w-4 mr-2" />
-                )}
-                Remover Chave
-              </Button>
-            </div>
+            {!managedByEnv && (
+              <div className="flex gap-2">
+                <Button
+                  variant="destructive"
+                  onClick={() => removeMutation.mutate()}
+                  disabled={removeMutation.isPending}
+                  data-testid={`${testIdPrefix}-remove`}
+                >
+                  {removeMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <Trash2 className="h-4 w-4 mr-2" />
+                  )}
+                  Remover Chave
+                </Button>
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex items-center gap-3 p-4 rounded-lg bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800">
@@ -295,6 +307,7 @@ function ApiKeyCard({
           </div>
         )}
 
+        {!managedByEnv && (
         <div className="border-t pt-6">
           <Label htmlFor={`${testIdPrefix}-api-key`} className="text-base font-medium">
             {keyStatus?.hasKey ? "Atualizar chave de API" : "Nova chave de API"}
@@ -349,6 +362,7 @@ function ApiKeyCard({
             </Button>
           </div>
         </div>
+        )}
       </CardContent>
     </Card>
   );

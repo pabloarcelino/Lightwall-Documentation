@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import multer from "multer";
 import path from "path";
 import fs from "fs/promises";
+import { env } from "./config/env";
 import { storage } from "./storage";
 import type { InsertExtractedData, InsertWallFeedback } from "@shared/schema";
 import { z } from "zod";
@@ -497,26 +498,59 @@ export async function registerRoutes(
     return requireAuth(req, res, next);
   });
 
-  const savedGeminiKey = await storage.getSetting("gemini_api_key");
-  if (savedGeminiKey && savedGeminiKey.length > 0) {
-    setUserApiKey(savedGeminiKey);
-    setGeminiApiKey(savedGeminiKey);
+  // Resolucao de keys: env tem prioridade absoluta. Quando ausente,
+  // cai no fallback de chaves persistidas no banco (configuradas via UI).
+  // Em producao, recomenda-se sempre usar env vars — backup do BD nao
+  // expoe secrets, e a UI fica read-only sinalizando "managed by env".
+  const geminiKeyFromEnv = env.AI_INTEGRATIONS_GEMINI_API_KEY;
+  if (geminiKeyFromEnv) {
+    setUserApiKey(geminiKeyFromEnv);
+    setGeminiApiKey(geminiKeyFromEnv);
+    console.log("[Gemini] Chave carregada via env var (UI bloqueada para escrita)");
+  } else {
+    const savedGeminiKey = await storage.getSetting("gemini_api_key");
+    if (savedGeminiKey && savedGeminiKey.length > 0) {
+      setUserApiKey(savedGeminiKey);
+      setGeminiApiKey(savedGeminiKey);
+    }
   }
 
-  const savedOpenAIKey = await storage.getSetting("openai_api_key");
-  if (savedOpenAIKey && savedOpenAIKey.length > 0) {
-    setOpenAIApiKey(savedOpenAIKey);
+  const openaiKeyFromEnv = env.AI_INTEGRATIONS_OPENAI_API_KEY;
+  if (openaiKeyFromEnv) {
+    setOpenAIApiKey(openaiKeyFromEnv);
+    console.log("[OpenAI] Chave carregada via env var (UI bloqueada para escrita)");
+  } else {
+    const savedOpenAIKey = await storage.getSetting("openai_api_key");
+    if (savedOpenAIKey && savedOpenAIKey.length > 0) {
+      setOpenAIApiKey(savedOpenAIKey);
+    }
   }
 
-  const savedOpenAIModel = await storage.getSetting("openai_model");
-  if (savedOpenAIModel && savedOpenAIModel.length > 0) {
-    setOpenAIModelName(savedOpenAIModel);
+  const openaiModelFromEnv = env.AI_INTEGRATIONS_OPENAI_MODEL;
+  if (openaiModelFromEnv) {
+    setOpenAIModelName(openaiModelFromEnv);
+  } else {
+    const savedOpenAIModel = await storage.getSetting("openai_model");
+    if (savedOpenAIModel && savedOpenAIModel.length > 0) {
+      setOpenAIModelName(savedOpenAIModel);
+    }
   }
 
   app.get("/api/settings/gemini-key", async (_req, res) => {
     try {
+      if (geminiKeyFromEnv) {
+        return res.json({
+          hasKey: true,
+          managedBy: "env",
+          maskedKey: `${geminiKeyFromEnv.substring(0, 6)}...${geminiKeyFromEnv.substring(geminiKeyFromEnv.length - 4)}`,
+        });
+      }
       const apiKey = await storage.getSetting("gemini_api_key");
-      res.json({ hasKey: !!apiKey, maskedKey: apiKey ? `${apiKey.substring(0, 6)}...${apiKey.substring(apiKey.length - 4)}` : null });
+      res.json({
+        hasKey: !!apiKey,
+        managedBy: "user",
+        maskedKey: apiKey ? `${apiKey.substring(0, 6)}...${apiKey.substring(apiKey.length - 4)}` : null,
+      });
     } catch (error) {
       console.error("Erro ao buscar configuracao:", error);
       res.status(500).json({ message: "Erro ao buscar configuracao" });
@@ -525,6 +559,11 @@ export async function registerRoutes(
 
   app.post("/api/settings/gemini-key", async (req, res) => {
     try {
+      if (geminiKeyFromEnv) {
+        return res.status(403).json({
+          message: "Chave Gemini definida via variavel de ambiente (AI_INTEGRATIONS_GEMINI_API_KEY). Edicao bloqueada — altere no deploy.",
+        });
+      }
       const { apiKey } = req.body;
       if (!apiKey || typeof apiKey !== "string" || apiKey.trim().length < 10) {
         return res.status(400).json({ message: "Chave de API invalida" });
@@ -541,6 +580,11 @@ export async function registerRoutes(
 
   app.delete("/api/settings/gemini-key", async (_req, res) => {
     try {
+      if (geminiKeyFromEnv) {
+        return res.status(403).json({
+          message: "Chave Gemini definida via variavel de ambiente. Remocao bloqueada — altere no deploy.",
+        });
+      }
       await storage.setSetting("gemini_api_key", "");
       clearUserApiKey();
       clearGeminiApiKey();
@@ -581,8 +625,19 @@ export async function registerRoutes(
 
   app.get("/api/settings/openai-key", async (_req, res) => {
     try {
+      if (openaiKeyFromEnv) {
+        return res.json({
+          hasKey: true,
+          managedBy: "env",
+          maskedKey: `sk-...${openaiKeyFromEnv.substring(openaiKeyFromEnv.length - 4)}`,
+        });
+      }
       const apiKey = await storage.getSetting("openai_api_key");
-      res.json({ hasKey: !!apiKey, maskedKey: apiKey ? `sk-...${apiKey.substring(apiKey.length - 4)}` : null });
+      res.json({
+        hasKey: !!apiKey,
+        managedBy: "user",
+        maskedKey: apiKey ? `sk-...${apiKey.substring(apiKey.length - 4)}` : null,
+      });
     } catch (error) {
       console.error("Erro ao buscar config OpenAI:", error);
       res.status(500).json({ message: "Erro ao buscar configuracao" });
@@ -591,6 +646,11 @@ export async function registerRoutes(
 
   app.post("/api/settings/openai-key", async (req, res) => {
     try {
+      if (openaiKeyFromEnv) {
+        return res.status(403).json({
+          message: "Chave OpenAI definida via variavel de ambiente (AI_INTEGRATIONS_OPENAI_API_KEY). Edicao bloqueada — altere no deploy.",
+        });
+      }
       const { apiKey } = req.body;
       if (!apiKey || typeof apiKey !== "string" || apiKey.trim().length < 10) {
         return res.status(400).json({ message: "Chave de API invalida" });
@@ -606,6 +666,11 @@ export async function registerRoutes(
 
   app.delete("/api/settings/openai-key", async (_req, res) => {
     try {
+      if (openaiKeyFromEnv) {
+        return res.status(403).json({
+          message: "Chave OpenAI definida via variavel de ambiente. Remocao bloqueada — altere no deploy.",
+        });
+      }
       await storage.setSetting("openai_api_key", "");
       clearOpenAIApiKey();
       res.json({ success: true, message: "Chave OpenAI removida" });
