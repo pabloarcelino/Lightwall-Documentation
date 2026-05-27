@@ -79,6 +79,57 @@ export interface ExtractedWall {
   // direcao para derivar os pontos de teste ortogonais. Tornam a
   // anotacao tecnicamente correta e a classificacao muito mais robusta.
   endpoints?: { p1: [number, number]; p2: [number, number] };
+  // Fase E (E.0.5): contrato de procedencia multi-vista. REGRA DE OURO:
+  // primary.view E SEMPRE "planta_baixa" ou "planta_cobertura". Cortes,
+  // fachadas, vistas 3D e detalhes SO aparecem em enrichments[].view —
+  // nunca criam elementos. Garante "sem confusao, sem duplicacao" entre
+  // vistas. Validado por selfCheck (ORPHAN_FROM_NON_PLANTA).
+  sourceContribution?: SourceContribution;
+}
+
+/** Vistas possiveis como FONTE PRIMARIA (criam o elemento). */
+export type PrimaryView = "planta_baixa" | "planta_cobertura";
+
+/** Vistas que apenas ENRIQUECEM (altura, confirmacao, dimensoes de quadro). */
+export type EnrichmentView =
+  | "corte"
+  | "fachada"
+  | "vista_3d"
+  | "quadro_esquadrias"
+  | "tabela_quantitativo"
+  | "detalhe_construtivo"
+  | "planta_baixa"; // outra planta_baixa pode confirmar (multi-arquivo)
+
+export type EnrichmentField =
+  | "altura_m"
+  | "espessura_m"
+  | "comprimento_m"
+  | "area_m2"
+  | "esquadria_dim"
+  | "esquadria_codigo"
+  | "classe"
+  | "confirmation";
+
+export interface SourceContribution {
+  /** Vista que CRIOU este elemento (sempre planta_baixa/planta_cobertura). */
+  primary: {
+    view: PrimaryView;
+    pageIndex: number;
+    /** Indice do tile quando ha multi-pavimento na mesma pagina. Default 0. */
+    tileIndex?: number;
+  };
+  /** Vistas que enriqueceram campos DEPOIS de criar o elemento na planta. */
+  enrichments: Array<{
+    view: EnrichmentView;
+    pageIndex: number;
+    contributedField: EnrichmentField;
+    /** Valor anterior (auditoria do que foi sobrescrito). */
+    previousValue?: number | string;
+    /** Valor novo aplicado. */
+    newValue?: number | string;
+    /** Razao curta (ex: "altura do corte AA"). */
+    reason?: string;
+  }>;
 }
 
 // Task #9: informação extraída de um corte (height por pavimento)
@@ -97,6 +148,16 @@ export interface ExtractedSlab {
   area_m2: number;
   measurement_source: string;
   confidence: number;
+  // Fase A (S11): paginas de planta_baixa/planta_cobertura que originaram a laje.
+  page_index?: number;
+  source_page_indices?: number[];
+  // Fase E (E.0.5): contrato de procedencia multi-vista (ver ExtractedWall).
+  sourceContribution?: SourceContribution;
+  // Fase B (B4): displayLabel atribuido por assignDisplayLabels.
+  displayLabel?: string;
+  // Fase B (B4): flag opcional de revisao.
+  needs_review?: boolean;
+  review_reason?: string;
 }
 
 export interface ExtractedCorner {

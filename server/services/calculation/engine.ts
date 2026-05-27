@@ -341,11 +341,33 @@ export function applySectionData(
       //  (c) origem ja era "corte" -> idempotente, so reafirma o flag.
       if (priorHeight > 0 && diff <= 0.05 && w.height_source !== "default") {
         w.confirmed_by_section = true;
+        // Fase E (E.0.5): registra confirmacao no contrato de procedencia.
+        if (w.sourceContribution) {
+          w.sourceContribution.enrichments.push({
+            view: "corte",
+            pageIndex: sec.page_index,
+            contributedField: "altura_m",
+            previousValue: priorHeight,
+            newValue: priorHeight,
+            reason: `altura confirmada por corte (pavimento ${sec.pavimento})`,
+          });
+        }
       } else {
         w.altura_m = sec.pe_direito_m;
         w.height_source = "corte";
         w.confirmed_by_section = true;
         heightsApplied += 1;
+        // Fase E (E.0.5): registra OVERRIDE no contrato de procedencia.
+        if (w.sourceContribution) {
+          w.sourceContribution.enrichments.push({
+            view: "corte",
+            pageIndex: sec.page_index,
+            contributedField: "altura_m",
+            previousValue: priorHeight,
+            newValue: sec.pe_direito_m,
+            reason: `altura aplicada do corte (pavimento ${sec.pavimento})`,
+          });
+        }
       }
       // Boost de confianca quando confirmado por corte/fachada — a altura
       // passa a ter corroboracao independente (vista vertical com cota).
@@ -466,10 +488,38 @@ export function fusionMultiView(
     if (!w.source_page_indices || w.source_page_indices.length === 0) {
       w.source_page_indices = typeof w.page_index === "number" ? [w.page_index] : [];
     }
+    // Fase E (E.0.5): backfill do contrato de procedencia multi-vista.
+    // Toda wall criada pela Etapa 3 veio de planta_baixa por construcao
+    // (extractGeometryParallel so itera plantas). Marcamos explicitamente.
+    if (!w.sourceContribution) {
+      w.sourceContribution = {
+        primary: {
+          view: "planta_baixa",
+          pageIndex: typeof w.page_index === "number" ? w.page_index : 0,
+          tileIndex: 0,
+        },
+        enrichments: [],
+      };
+    }
   }
-  for (const s of allSlabs as any[]) {
+  for (const s of allSlabs) {
     if (!s.source_page_indices || s.source_page_indices.length === 0) {
       s.source_page_indices = typeof s.page_index === "number" ? [s.page_index] : [];
+    }
+    if (!s.sourceContribution) {
+      // Lajes coberta tendem a vir de planta_cobertura quando ela existe;
+      // mas como aqui nao temos essa info por elemento, usamos planta_baixa
+      // como default e a Etapa 3.8 (slabRefiner) pode atualizar depois.
+      const primaryView: "planta_baixa" | "planta_cobertura" =
+        s.classe === "coberta" ? "planta_cobertura" : "planta_baixa";
+      s.sourceContribution = {
+        primary: {
+          view: primaryView,
+          pageIndex: typeof s.page_index === "number" ? s.page_index : 0,
+          tileIndex: 0,
+        },
+        enrichments: [],
+      };
     }
   }
   console.log(

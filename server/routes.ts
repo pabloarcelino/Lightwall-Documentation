@@ -74,6 +74,7 @@ import { readCotas, mergeCotasIntoWalls } from "./services/extraction/cotaReader
 import { linkEsquadriasWithTable } from "./services/extraction/esquadriasLinker";
 import { derivePisoSlabsFromEnvelopes, mergeSlabPolygons } from "./services/extraction/slabRefiner";
 import { runSelfCheck } from "./services/extraction/selfCheck";
+import { checkCvServiceHealth, cvServiceCapability } from "./services/cv-service/client";
 import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
@@ -1032,6 +1033,22 @@ export async function registerRoutes(
   // SSE: timeline ao vivo de chamadas IA (started/completed/failed) com tokens
   // e custo estimado. Funciona para Gemini e OpenAI — o auditor emite eventos
   // independentemente do provider que de fato executou.
+  // Fase E: health do cv-service Python. UI pode mostrar status na aba
+  // de processamento e o pipeline decide entre rota CV (Fase E) vs Gemini
+  // (Fases A+B+D) baseado na capability.
+  app.get("/api/cv-service/health", async (_req, res) => {
+    try {
+      const health = await checkCvServiceHealth();
+      if (!health.reachable) {
+        return res.json({ ...health, ready: false });
+      }
+      const cap = await cvServiceCapability();
+      return res.json({ ...health, ready: cap.ready });
+    } catch (err: any) {
+      return res.status(500).json({ reachable: false, error: err?.message || String(err) });
+    }
+  });
+
   app.get("/api/projects/:id/ai-events", (req, res) => {
     const projectId = parseInt(String(req.params.id));
     res.setHeader("Content-Type", "text/event-stream");

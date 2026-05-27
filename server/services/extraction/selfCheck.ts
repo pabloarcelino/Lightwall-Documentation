@@ -269,11 +269,89 @@ function checkPisoVsCoberta(slabs: ExtractedSlab[]): AuditNote[] {
 }
 
 // ============================================================
+// Fase E (E.0.5): checagens de contrato multi-vista
+// ============================================================
+
+/**
+ * REGRA DE OURO: nenhum wall pode ter primary.view diferente de
+ * "planta_baixa"/"planta_cobertura". Se aparecer, e bug de pipeline
+ * (extracao de cortes/fachadas/3D vazando para o orcamento).
+ */
+function checkOrphansFromNonPlanta(walls: ExtractedWall[], slabs: ExtractedSlab[]): AuditNote[] {
+  const notes: AuditNote[] = [];
+  const ALLOWED: Array<string> = ["planta_baixa", "planta_cobertura"];
+
+  const orphanWalls = walls.filter(
+    w => w.sourceContribution && !ALLOWED.includes(w.sourceContribution.primary.view),
+  );
+  if (orphanWalls.length > 0) {
+    notes.push({
+      severity: "error",
+      code: "ORPHAN_FROM_NON_PLANTA",
+      message:
+        `${orphanWalls.length} parede(s) com origem primaria fora de planta_baixa/planta_cobertura. ` +
+        `Apenas plantas baixas podem criar paredes — cortes/fachadas/3D so enriquecem.`,
+      context: { count: orphanWalls.length, views: Array.from(new Set(orphanWalls.map(w => w.sourceContribution?.primary.view))) },
+      relatedIds: orphanWalls.slice(0, 10).map(w => w.id),
+    });
+  }
+
+  const orphanSlabs = slabs.filter(
+    s => s.sourceContribution && !ALLOWED.includes(s.sourceContribution.primary.view),
+  );
+  if (orphanSlabs.length > 0) {
+    notes.push({
+      severity: "error",
+      code: "ORPHAN_SLAB_FROM_NON_PLANTA",
+      message:
+        `${orphanSlabs.length} laje(s) com origem primaria fora de planta_baixa/planta_cobertura. ` +
+        `Cortes/fachadas/3D nao podem criar lajes.`,
+      context: { count: orphanSlabs.length },
+      relatedIds: orphanSlabs.slice(0, 10).map(s => s.id),
+    });
+  }
+
+  return notes;
+}
+
+/**
+ * Resumo de procedencia: conta paredes por vista primaria e por enriquecimentos.
+ * Vira note INFO (nao e erro) para visibilidade na UI.
+ */
+function checkProvenanceSummary(walls: ExtractedWall[]): AuditNote[] {
+  const withContribution = walls.filter(w => !!w.sourceContribution);
+  if (withContribution.length === 0) return [];
+
+  const byPrimary = new Map<string, number>();
+  const enrichByView = new Map<string, number>();
+  for (const w of withContribution) {
+    const pv = w.sourceContribution!.primary.view;
+    byPrimary.set(pv, (byPrimary.get(pv) || 0) + 1);
+    for (const e of w.sourceContribution!.enrichments) {
+      enrichByView.set(e.view, (enrichByView.get(e.view) || 0) + 1);
+    }
+  }
+
+  const primaryStr = Array.from(byPrimary.entries()).map(([k, v]) => `${k}=${v}`).join(", ");
+  const enrichStr = Array.from(enrichByView.entries()).map(([k, v]) => `${k}=${v}`).join(", ") || "nenhum";
+
+  return [{
+    severity: "info",
+    code: "PROVENANCE_SUMMARY",
+    message:
+      `Procedencia: paredes primarias [${primaryStr}]; enriquecimentos por vista [${enrichStr}].`,
+    context: { primary: Object.fromEntries(byPrimary), enrichments: Object.fromEntries(enrichByView) },
+  }];
+}
+
+// ============================================================
 // Roda todos os checks
 // ============================================================
 
 export function runSelfCheck(input: SelfCheckInput): SelfCheckResult {
   const all: AuditNote[] = [];
+  all.push(...checkOrphansFromNonPlanta(input.walls, input.slabs));
+  all.push(...checkProvenanceSummary(input.walls));
   all.push(...checkOpeningsVsWallArea(input.walls));
   all.push(...checkPeDireito(input.walls, input.buildingType));
   all.push(...checkEspessura(input.walls));
