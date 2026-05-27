@@ -20,6 +20,17 @@ export function clearUserApiKey() {
   console.log("[Gemini] Usando chave de API do sistema (Replit AI Integrations)");
 }
 
+/**
+ * Retorna o cliente Gemini ATIVO — respeita a chave do usuario quando
+ * setUserApiKey foi chamado. Modulos da Fase A/B (envelopeExtractor,
+ * wallInventory, cotaReader) DEVEM usar este getter ao inves de importar
+ * `genAI` direto do client.ts. Caso contrario o cliente fica preso a
+ * env var do startup e falha com 403 quando o usuario tem chave propria.
+ */
+export function getActiveGenAI(): GoogleGenAI {
+  return activeGenAI;
+}
+
 export interface PageClassification {
   page_index: number;
   classificacao: string;

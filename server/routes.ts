@@ -2214,6 +2214,11 @@ export async function registerRoutes(
         ...c,
         enabled: scope.cantos,
       }));
+      // Fase E.0/Bugfix #3: atribui displayLabel GLOBAL (W001..Wn / M001..Mn /
+      // L001..Ln) ANTES de persistir, para que o cliente possa exibir a
+      // numeracao consistente no Resumo do Levantamento sem precisar
+      // recalcular. assignDisplayLabels muta em lugar.
+      assignDisplayLabels(fusaoWallsWithScope, fusaoSlabsWithScope);
       await storage.addExtractedData({
         projectId, fileId: null, elementType: "etapa4_fusao",
         data: {

@@ -165,8 +165,10 @@ export async function runGlobalCrossValidation(
           if (!op) throw new Error("OpenAI provider nao configurado");
           return await op.generateContent(prompt, plantaImages, { maxOutputTokens: 16384 });
         } else {
-          // Gemini path: use planAnalyzer's existing client (gemini-2.5-pro)
-          const { genAI } = await import("./client");
+          // Gemini path: usa o cliente ATIVO (respeita setUserApiKey). Antes
+          // importavamos `genAI` direto, o que falhava com 403 quando o
+          // usuario definia sua propria chave via UI.
+          const { getActiveGenAI } = await import("./planAnalyzer");
           const parts: any[] = plantaImages.map((img) => ({
             inlineData: { mimeType: img.mimeType, data: img.base64 },
           }));
@@ -174,7 +176,7 @@ export async function runGlobalCrossValidation(
           // Modelos com thinking nao aceitam topP/topK/temperature personalizados.
           // Usamos thinkingBudget alto porque esta chamada e a verificacao
           // global cruzada — onde acurar a classificacao topologica vale o custo.
-          const response = await genAI.models.generateContent({
+          const response = await getActiveGenAI().models.generateContent({
             model: "gemini-2.5-pro",
             contents: [{ role: "user", parts }],
             config: { maxOutputTokens: 16384, thinkingConfig: { thinkingBudget: 8192 } },

@@ -1566,21 +1566,24 @@ export default function ProjectDetails() {
                     </Button>
                   </div>
                   <div className="mb-3">
-                    <Label className="text-xs font-medium text-muted-foreground">Modo de Analise:</Label>
+                    <Label className="text-xs font-medium text-muted-foreground">Provider da extração inicial:</Label>
                     <Select value={analysisMode} onValueChange={setAnalysisMode}>
                       <SelectTrigger className="h-8 text-sm w-72 mt-1">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="gemini-only">Gemini-only (IA pura)</SelectItem>
-                        <SelectItem value="openai-only">OpenAI-only (IA pura)</SelectItem>
-                        <SelectItem value="openai-vision-takeoff">OpenAI Vision Takeoff (estruturado)</SelectItem>
+                        <SelectItem value="gemini-only">Gemini (padrão)</SelectItem>
+                        <SelectItem value="openai-only">OpenAI (alternativa)</SelectItem>
+                        <SelectItem value="openai-vision-takeoff">OpenAI Vision (saída estruturada)</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {analysisMode === "gemini-only" && "Usa apenas o Gemini para analisar a planta. Mais simples, sem dependencias externas."}
-                      {analysisMode === "openai-only" && "Usa apenas a OpenAI (modelo configurado em Configuracoes, padrao gpt-5-mini) para todo o pipeline. Requer chave OpenAI."}
-                      {analysisMode === "openai-vision-takeoff" && "Usa OpenAI Vision com saida estruturada (JSON Schema) para extrair paredes e lajes diretamente da planta. Requer chave OpenAI. Roda automaticamente ao clicar em \"Processar\"."}
+                      {analysisMode === "gemini-only" && "Gemini 2.5 Pro faz a extração inicial das paredes/lajes."}
+                      {analysisMode === "openai-only" && "OpenAI (modelo configurado em Configurações, padrão gpt-5-mini) faz a extração inicial. Requer chave OpenAI."}
+                      {analysisMode === "openai-vision-takeoff" && "OpenAI Vision com JSON Schema estrito para a extração inicial. Requer chave OpenAI."}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground mt-1 italic">
+                      A metodologia completa (envelope, cotas, topologia determinística, esquadrias, reconciliação CV↔LLM, self-check) roda em <strong>todos</strong> os modos. A escolha acima define apenas qual modelo faz a extração inicial das paredes.
                     </p>
                   </div>
                   <div className="mb-3">
@@ -1962,7 +1965,7 @@ export default function ProjectDetails() {
                                   <span key={w.id || i}>
                                     {i > 0 && ", "}
                                     <span className="whitespace-nowrap">
-                                      {w.id} ({fmt(w.comprimento_m)}m)
+                                      {w.displayLabel || w.id} ({fmt(w.comprimento_m)}m)
                                       {cv?.kind === "match" && (
                                         <span
                                           className="ml-1 inline-flex items-center px-1 py-0 rounded text-[10px] font-medium border bg-success-soft text-success border-success/30 align-middle"
@@ -2027,7 +2030,7 @@ export default function ProjectDetails() {
                             <span className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
                             <p className="text-slate-700 dark:text-slate-300">
                               <strong className="text-foreground">Laje de Piso ({slabPiso.length}):</strong>{" "}
-                              {slabPiso.map((l: any, i: number) => `${l.id || `L${i+1}`} (${fmt(l.area_m2)}m²)`).join(", ")}.
+                              {slabPiso.map((l: any, i: number) => `${l.displayLabel || l.id || `L${i+1}`} (${fmt(l.area_m2)}m²)`).join(", ")}.
                               {" "}<span className="text-muted-foreground text-xs">Total: {fmt(totalPiso)}m²</span>
                             </p>
                           </div>
@@ -2037,7 +2040,7 @@ export default function ProjectDetails() {
                             <span className="w-2 h-2 rounded-full bg-red-500 mt-1.5 shrink-0" />
                             <p className="text-slate-700 dark:text-slate-300">
                               <strong className="text-foreground">Laje Coberta ({slabCoberta.length}):</strong>{" "}
-                              {slabCoberta.map((l: any, i: number) => `${l.id || `L${i+1}`} (${fmt(l.area_m2)}m²)`).join(", ")}.
+                              {slabCoberta.map((l: any, i: number) => `${l.displayLabel || l.id || `L${i+1}`} (${fmt(l.area_m2)}m²)`).join(", ")}.
                               {" "}<span className="text-muted-foreground text-xs">Total: {fmt(totalCoberta)}m²</span>
                             </p>
                           </div>

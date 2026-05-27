@@ -1,5 +1,5 @@
-import { genAI, withRetry } from "../gemini/client";
-import { repairJSON, type ExtractedWall } from "../gemini/planAnalyzer";
+import { withRetry } from "../gemini/client";
+import { repairJSON, getActiveGenAI, type ExtractedWall } from "../gemini/planAnalyzer";
 import { auditAiCall, recordAiUsage, geminiUsageFromResponse } from "../audit/aiAuditor";
 
 /**
@@ -113,7 +113,7 @@ async function readCotasOnePage(job: CotaJob): Promise<{ pavimento: string; cota
     },
     async () => {
       return withRetry(async () => {
-        const response = await genAI.models.generateContent({
+        const response = await getActiveGenAI().models.generateContent({
           model: COTA_MODEL,
           contents: [{ role: "user", parts }],
           // Thinking moderado: leitura de texto e mais visual+OCR, menos raciocinio.

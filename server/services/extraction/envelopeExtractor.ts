@@ -1,5 +1,5 @@
-import { genAI, withRetry } from "../gemini/client";
-import { repairJSON } from "../gemini/planAnalyzer";
+import { withRetry } from "../gemini/client";
+import { repairJSON, getActiveGenAI } from "../gemini/planAnalyzer";
 import { auditAiCall, recordAiUsage, geminiUsageFromResponse } from "../audit/aiAuditor";
 
 /**
@@ -95,7 +95,7 @@ async function extractOneEnvelope(job: EnvelopeJob): Promise<EnvelopePolygon | n
     },
     async () => {
       return withRetry(async () => {
-        const response = await genAI.models.generateContent({
+        const response = await getActiveGenAI().models.generateContent({
           model: ENVELOPE_MODEL,
           contents: [{ role: "user", parts }],
           // Thinking budget alto: tracar contorno demanda raciocinio espacial,

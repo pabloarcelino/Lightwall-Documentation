@@ -1,5 +1,5 @@
-import { genAI, withRetry } from "../gemini/client";
-import { repairJSON } from "../gemini/planAnalyzer";
+import { withRetry } from "../gemini/client";
+import { repairJSON, getActiveGenAI } from "../gemini/planAnalyzer";
 import { auditAiCall, recordAiUsage, geminiUsageFromResponse } from "../audit/aiAuditor";
 
 /**
@@ -128,7 +128,7 @@ async function inventoryOnePage(job: InventoryJob): Promise<WallSegment[]> {
     },
     async () => {
       return withRetry(async () => {
-        const response = await genAI.models.generateContent({
+        const response = await getActiveGenAI().models.generateContent({
           model: INVENTORY_MODEL,
           contents: [{ role: "user", parts }],
           // Thinking budget alto: identificar TODAS as paredes sem omitir
