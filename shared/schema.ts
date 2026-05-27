@@ -137,6 +137,28 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+/**
+ * Eventos de pipeline persistidos para reconstrucao "historica" da timeline
+ * quando o usuario abre um projeto depois do processamento terminar.
+ * Apenas eventos "importantes" sao gravados (stage, audit_finding, ai_call
+ * completed/failed, image_render). Eventos verbosos como pdf_split e
+ * cv_substep granular vivem so em memoria (SSE ao-vivo).
+ */
+export const pipelineEvents = pgTable("pipeline_events", {
+  id: serial("id").primaryKey(),
+  projectId: integer("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  kind: varchar("kind", { length: 30 }).notNull(),
+  stage: varchar("stage", { length: 20 }),
+  phase: varchar("phase", { length: 20 }).notNull(),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type PipelineEvent = typeof pipelineEvents.$inferSelect;
+export type InsertPipelineEvent = typeof pipelineEvents.$inferInsert;
+
 // ===== OpenAI Vision Takeoff: type constants used by AiTakeoffService prompts =====
 export const TAKEOFF_SEGMENT_CATEGORY = ["parede_externa", "parede_interna", "muro"] as const;
 export type TakeoffSegmentCategory = (typeof TAKEOFF_SEGMENT_CATEGORY)[number];

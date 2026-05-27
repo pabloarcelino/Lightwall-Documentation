@@ -8,6 +8,7 @@ import {
   budgets,
   settings,
   aiRuns,
+  pipelineEvents,
   users,
   pricingProfiles,
   profilePrices,
@@ -26,6 +27,8 @@ import {
   type Setting,
   type AiRun,
   type InsertAiRun,
+  type PipelineEvent,
+  type InsertPipelineEvent,
   type User,
   type InsertUser,
   type PricingProfile,
@@ -82,6 +85,9 @@ export interface IStorage {
 
   // ===== AI audit =====
   createAiRun(run: InsertAiRun): Promise<AiRun>;
+  createPipelineEvent(event: InsertPipelineEvent): Promise<PipelineEvent>;
+  getPipelineEvents(projectId: number): Promise<PipelineEvent[]>;
+  deletePipelineEvents(projectId: number): Promise<void>;
   getAiRuns(projectId: number): Promise<AiRun[]>;
 
   // ===== Users =====
@@ -342,8 +348,27 @@ export class DatabaseStorage implements IStorage {
     await db.delete(budgets).where(eq(budgets.projectId, id));
     await db.delete(extractedData).where(eq(extractedData.projectId, id));
     await db.delete(aiRuns).where(eq(aiRuns.projectId, id));
+    await db.delete(pipelineEvents).where(eq(pipelineEvents.projectId, id));
     await db.delete(projectFiles).where(eq(projectFiles.projectId, id));
     await db.delete(projects).where(eq(projects.id, id));
+  }
+
+  // ===== Pipeline events (timeline historica) =====
+  async createPipelineEvent(event: InsertPipelineEvent): Promise<PipelineEvent> {
+    const [created] = await db.insert(pipelineEvents).values(event).returning();
+    return created;
+  }
+
+  async getPipelineEvents(projectId: number): Promise<PipelineEvent[]> {
+    return db
+      .select()
+      .from(pipelineEvents)
+      .where(eq(pipelineEvents.projectId, projectId))
+      .orderBy(asc(pipelineEvents.createdAt));
+  }
+
+  async deletePipelineEvents(projectId: number): Promise<void> {
+    await db.delete(pipelineEvents).where(eq(pipelineEvents.projectId, projectId));
   }
 
   // ===== AI audit =====

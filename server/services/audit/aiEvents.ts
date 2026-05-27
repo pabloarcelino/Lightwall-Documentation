@@ -1,13 +1,21 @@
 /**
- * Event bus de chamadas IA por projeto.
+ * Event bus de chamadas IA + sub-etapas do pipeline por projeto.
  *
- * Cada chamada audit-ada (auditAiCall) emite "started" no inicio e
- * "completed" ou "failed" ao final. O front consome via SSE em
- * GET /api/projects/:id/ai-events e mostra timeline + custo acumulado.
+ * Eventos sao discriminados por `kind`:
+ *  - "ai_call"        : chamadas Gemini/OpenAI (auditAiCall). Retro-compat
+ *                       com a forma legada (sem kind explicito tambem aceita).
+ *  - "stage"          : marcos de etapas do pipeline (0.5, 1, 1.5, 3, ...).
+ *  - "pdf_split"      : conversao de cada pagina de PDF para PNG.
+ *  - "image_render"   : geracao de imagens anotadas, uma por pavimento.
+ *  - "cv_substep"     : sub-passos do cv-service (preprocess, ocr, etc).
+ *  - "audit_finding"  : notas estruturadas do selfCheck/validators.
  *
- * Mantemos isso em memoria — eventos sao efemeros (servem para a tela
- * de processamento ao vivo). A persistencia continua sendo a tabela
- * `ai_runs` via storage.createAiRun.
+ * Todos compartilham `projectId`, `phase` e `timestamp`. O front consome via
+ * SSE em GET /api/projects/:id/ai-events e renderiza conforme o kind.
+ *
+ * Eventos vivem em memoria — efemeros pro modo ao-vivo. Persistencia
+ * opcional via `storage.createPipelineEvent` (PR2-2), feita assincronamente
+ * a partir do broadcast pra nao bloquear emissores.
  */
 
 import type { Response } from "express";
@@ -22,6 +30,10 @@ export interface AiTokenUsage {
 }
 
 type Phase = "started" | "completed" | "failed";
+
+// ============================================================
+// Eventos "ai_call" — retro-compat com formato legado
+// ============================================================
 
 export interface AiEventBase {
   /** Identificador unico desta chamada (gerado no auditor). */
@@ -38,6 +50,8 @@ export interface AiEventBase {
   inputSummary: string;
   /** Epoch ms. */
   timestamp: number;
+  /** Discriminator. Opcional pra eventos legados — default "ai_call". */
+  kind?: "ai_call";
 }
 
 export interface AiEventStarted extends AiEventBase { phase: "started"; }
@@ -56,7 +70,112 @@ export interface AiEventFailed extends AiEventBase {
   errorMessage: string;
 }
 
-export type AiEvent = AiEventStarted | AiEventCompleted | AiEventFailed;
+// ============================================================
+// Eventos "stage" — marcos de etapas do pipeline
+// ============================================================
+
+export interface StageEvent {
+  kind: "stage";
+  projectId: number;
+  /** Numero da etapa: "0.5", "1", "1.5", "3", "3.4", "3.5", ... */
+  stage: string;
+  /** Rotulo amigavel exibido na timeline ("Caracterizacao", "Inventario (endpoints)"). */
+  label: string;
+  phase: Phase;
+  timestamp: number;
+  detail?: string;
+  errorMessage?: string;
+}
+
+// ============================================================
+// Eventos "pdf_split" — conversao por pagina
+// ============================================================
+
+export interface PdfSplitEvent {
+  kind: "pdf_split";
+  projectId: number;
+  fileId?: number | null;
+  fileName?: string;
+  pageIndex: number;
+  totalPages?: number;
+  phase: Phase;
+  timestamp: number;
+  errorMessage?: string;
+}
+
+// ============================================================
+// Eventos "image_render" — anotacao por pavimento
+// ============================================================
+
+export interface ImageRenderEvent {
+  kind: "image_render";
+  projectId: number;
+  pavimento: string;
+  pageIndex: number;
+  phase: Phase;
+  timestamp: number;
+  /** Quando completed e disponivel, URL ou data URL pra preview. */
+  imageUrl?: string;
+  /** Tamanho da imagem renderizada (bytes), quando aplicavel. */
+  byteSize?: number;
+  errorMessage?: string;
+}
+
+// ============================================================
+// Eventos "cv_substep" — sub-passos do cv-service Python
+// ============================================================
+
+export type CvSubstep =
+  | "preprocess"
+  | "skeletonize"
+  | "ocr"
+  | "wall_detect"
+  | "envelope"
+  | "classify"
+  | "other";
+
+export interface CvSubstepEvent {
+  kind: "cv_substep";
+  projectId: number;
+  pavimento?: string;
+  substep: CvSubstep;
+  phase: Phase;
+  timestamp: number;
+  /** Progresso 0..100 quando o CV reportar (opcional). */
+  progressPct?: number;
+  detail?: string;
+  errorMessage?: string;
+}
+
+// ============================================================
+// Eventos "audit_finding" — notas estruturadas
+// ============================================================
+
+export interface AuditFindingEvent {
+  kind: "audit_finding";
+  projectId: number;
+  severity: "info" | "warning" | "error";
+  /** Codigo estavel — "OPENING_OVER_WALL", "PE_DIREITO_ALTO", etc. */
+  code: string;
+  message: string;
+  /** IDs de elementos relacionados (paredes, lajes) — opcional. */
+  relatedIds?: string[];
+  /** Etapa que gerou a nota (opcional). */
+  stage?: string;
+  timestamp: number;
+  /** Phase fixa em "completed" — auditoria nao tem started/failed; mantido por uniformidade. */
+  phase: "completed";
+}
+
+export type AiEvent =
+  | AiEventStarted
+  | AiEventCompleted
+  | AiEventFailed
+  | StageEvent
+  | PdfSplitEvent
+  | ImageRenderEvent
+  | CvSubstepEvent
+  | AuditFindingEvent;
 
 const aiClients = new Map<number, Set<Response>>();
 
@@ -73,7 +192,24 @@ export function addAiEventClient(projectId: number, res: Response): () => void {
   };
 }
 
+/**
+ * Hook opcional de persistencia. Quando definido (via setEventPersister em
+ * PR2-2 storage.ts), cada evento broadcastado tambem e gravado em
+ * `pipeline_events`. Mantemos como hook pra evitar dependencia circular do
+ * aiEvents.ts importar storage.ts.
+ */
+type EventPersister = (event: AiEvent) => void;
+let eventPersister: EventPersister | null = null;
+
+export function setEventPersister(fn: EventPersister | null): void {
+  eventPersister = fn;
+}
+
 function broadcast(projectId: number, event: AiEvent): void {
+  // Persistencia best-effort: nunca bloqueia ou propaga erro pro emissor.
+  if (eventPersister) {
+    try { eventPersister(event); } catch (e) { /* swallow */ }
+  }
   const set = aiClients.get(projectId);
   if (!set || set.size === 0) return;
   const data = `event: ${event.phase}\ndata: ${JSON.stringify(event)}\n\n`;
@@ -81,6 +217,10 @@ function broadcast(projectId: number, event: AiEvent): void {
     try { res.write(data); } catch { /* cliente desconectou — sera limpo via close */ }
   }
 }
+
+// ============================================================
+// Emitters "ai_call"
+// ============================================================
 
 export function emitStarted(payload: Omit<AiEventStarted, "phase" | "timestamp">): void {
   broadcast(payload.projectId, { ...payload, phase: "started", timestamp: Date.now() });
@@ -92,6 +232,37 @@ export function emitCompleted(payload: Omit<AiEventCompleted, "phase" | "timesta
 
 export function emitFailed(payload: Omit<AiEventFailed, "phase" | "timestamp">): void {
   broadcast(payload.projectId, { ...payload, phase: "failed", timestamp: Date.now() });
+}
+
+// ============================================================
+// Emitters "stage" / "pdf_split" / "image_render" / "cv_substep" / "audit_finding"
+// ============================================================
+
+export function emitStage(payload: Omit<StageEvent, "kind" | "timestamp">): void {
+  broadcast(payload.projectId, { kind: "stage", ...payload, timestamp: Date.now() });
+}
+
+export function emitPdfSplit(payload: Omit<PdfSplitEvent, "kind" | "timestamp">): void {
+  broadcast(payload.projectId, { kind: "pdf_split", ...payload, timestamp: Date.now() });
+}
+
+export function emitImageRender(payload: Omit<ImageRenderEvent, "kind" | "timestamp">): void {
+  broadcast(payload.projectId, { kind: "image_render", ...payload, timestamp: Date.now() });
+}
+
+export function emitCvSubstep(payload: Omit<CvSubstepEvent, "kind" | "timestamp">): void {
+  broadcast(payload.projectId, { kind: "cv_substep", ...payload, timestamp: Date.now() });
+}
+
+export function emitAuditFinding(
+  payload: Omit<AuditFindingEvent, "kind" | "phase" | "timestamp">,
+): void {
+  broadcast(payload.projectId, {
+    kind: "audit_finding",
+    ...payload,
+    phase: "completed",
+    timestamp: Date.now(),
+  });
 }
 
 // ============================================================
