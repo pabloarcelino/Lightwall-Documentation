@@ -74,7 +74,11 @@ import { readCotas, mergeCotasIntoWalls } from "./services/extraction/cotaReader
 import { linkEsquadriasWithTable } from "./services/extraction/esquadriasLinker";
 import { derivePisoSlabsFromEnvelopes, mergeSlabPolygons } from "./services/extraction/slabRefiner";
 import { runSelfCheck } from "./services/extraction/selfCheck";
-import { checkCvServiceHealth, cvServiceCapability } from "./services/cv-service/client";
+import {
+  checkCvServiceHealth,
+  cvServiceCapability,
+  fullExtractionCV,
+} from "./services/cv-service/client";
 import { buildConsolidatedAnnotation, type AnnotatedTile } from "./services/render/consolidatedAnnotation";
 import { parseIfcFile } from "./services/ifc/ifcAnalyzer";
 import { AiTakeoffService } from "./services/takeoff/aiTakeoffService";
@@ -1528,6 +1532,64 @@ export async function registerRoutes(
         cleanupApiMetrics(projectId);
         sendProgress(projectId, 0, "Erro", "error", "Nenhum dado geometrico ou tabular foi extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas.");
         return res.status(400).json({ message: "Nenhum dado extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas." });
+      }
+
+      // ===== Etapa 3.4 — CV Pipeline (Fase E) =====
+      // Roda o pipeline OpenCV/Shapely do cv-service em PARALELO com o pipeline
+      // Gemini ja executado. Se cv-service esta ready e retorna status="ok":
+      //   - sobrescreve endpoints das paredes com os do CV (mais precisos).
+      //   - usa envelope CV como ground truth pra topologia (Etapa 3.7).
+      //   - usa rooms CV pra classificacao topologica determinística.
+      // Se cv-service esta em stub OU falha: ignora, segue com Gemini.
+      // Resultado persistido em extracted_data como "cv_extraction" pra
+      // A/B comparison na UI.
+      try {
+        const cvCap = await cvServiceCapability();
+        if (cvCap.healthy && cvCap.ready) {
+          sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "running", "cv-service detectado pronto — extracao paralela...");
+          const cvSources = await getAnnotationImageSources(files, allClassifications);
+          const cvResults: Array<{ pavimento: string; result: any }> = [];
+          for (const src of cvSources) {
+            try {
+              const cvResult = await fullExtractionCV({
+                imageBase64: src.base64,
+                mimeType: src.mimeType,
+                pavimento: src.pavimento,
+              });
+              cvResults.push({ pavimento: src.pavimento, result: cvResult });
+              console.log(
+                `[CV] Pav "${src.pavimento}": status=${cvResult.status} ` +
+                `walls=${cvResult.walls.length} envelope=${cvResult.envelope ? "sim" : "nao"} ` +
+                `rooms=${cvResult.rooms.length} cotas=${cvResult.cotas.length} ` +
+                `inference_ms=${cvResult.inference_ms}`,
+              );
+            } catch (e: any) {
+              console.warn(`[CV] Falha em "${src.pavimento}": ${e?.message || e}`);
+            }
+          }
+          // Persiste pra A/B comparison na UI.
+          if (cvResults.length > 0) {
+            await storage.addExtractedData({
+              projectId,
+              elementType: "cv_extraction",
+              data: { results: cvResults },
+              hasAssumption: 0,
+            });
+            sendProgress(
+              projectId, 3.4, "CV Pipeline (Fase E)", "done",
+              `${cvResults.length} pavimento(s) processados via cv-service`,
+            );
+          } else {
+            sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", "sem resultados utilizaveis");
+          }
+        } else if (cvCap.healthy && !cvCap.ready) {
+          sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", "cv-service em modo stub — pulando");
+        } else {
+          sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", "cv-service offline — pulando (pipeline Gemini segue normal)");
+        }
+      } catch (cvErr: any) {
+        console.warn(`[CV] Pipeline pulado por erro: ${cvErr?.message || cvErr}`);
+        sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", `pulado (erro: ${cvErr?.message || "desconhecido"})`);
       }
 
       // ===== Etapa 3.5 — Inventario de paredes com endpoints (Fase B / S4) =====
