@@ -8,10 +8,13 @@ Falhas em qualquer etapa fazem o endpoint retornar status="degraded" com
 listas vazias nos campos que falharam. Node detecta isso e faz fallback
 parcial pro pipeline Gemini.
 """
+import asyncio
 import base64
+import json
 import time
-from typing import List, Optional
+from typing import Callable, List, Optional
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import cv2
@@ -24,6 +27,11 @@ from app.modules.semantic_ocr import extract_semantic_texts
 from app.modules.classifier import build_zones, classify_walls
 
 router = APIRouter(prefix="/extraction", tags=["extraction"])
+
+# Callback opcional pra reportar progresso sub-etapa por sub-etapa quando
+# rodando em modo streaming. Recebe (substep, phase, **extra_fields).
+# Em modo sincrono o callback e None e o pipeline corre sem reportar.
+ProgressCallback = Optional[Callable[..., None]]
 
 
 # ============================================================
@@ -165,17 +173,28 @@ async def classify_pages(req: ClassifyPagesRequest):
     return []
 
 
-@router.post("/full_extraction", response_model=FullExtractionResponse)
-async def full_extraction(req: FullExtractionRequest):
-    """Extracao completa de uma planta_baixa:
-      envelope + paredes + comodos + cotas + classificacao topologica.
-    """
+def _run_full_extraction(
+    req: FullExtractionRequest,
+    progress: ProgressCallback = None,
+) -> FullExtractionResponse:
+    """Core do pipeline CV. Quando `progress` e definido, reporta cada sub-etapa
+    via callback `(substep, phase, **extra)`. Usado tanto pelo endpoint sincrono
+    quanto pelo streaming."""
+    def emit(substep: str, phase: str, **extra):
+        if progress is not None:
+            try:
+                progress(substep, phase, **extra)
+            except Exception:
+                pass
+
     t0 = time.time()
     notes: List[str] = []
 
     # 1. Decode da imagem.
+    emit("preprocess", "started")
     img = _decode_image(req.image_base64, req.mime_type)
     if img is None:
+        emit("preprocess", "failed", error="decode falhou")
         return FullExtractionResponse(
             status="failed",
             notes=["nao foi possivel decodificar a imagem"],
@@ -187,7 +206,9 @@ async def full_extraction(req: FullExtractionRequest):
     try:
         prep = preprocess(img)
         wall_mask = prep["cleaned"]
+        emit("preprocess", "completed", width=w, height=h)
     except Exception as e:
+        emit("preprocess", "failed", error=str(e))
         return FullExtractionResponse(
             status="failed",
             notes=[f"preprocess falhou: {e}"],
@@ -195,6 +216,7 @@ async def full_extraction(req: FullExtractionRequest):
         )
 
     # 3. Envelope detection.
+    emit("envelope", "started")
     envelope_out: Optional[EnvelopeOut] = None
     try:
         env_result = detect_envelope_multiscale(wall_mask)
@@ -208,15 +230,25 @@ async def full_extraction(req: FullExtractionRequest):
             notes.extend(env_result.notes)
         else:
             notes.append("envelope nao detectado (CV)")
+        emit(
+            "envelope",
+            "completed",
+            detected=envelope_out is not None,
+            vertices=len(env_result.polygon) if env_result.polygon else 0,
+        )
     except Exception as e:
         notes.append(f"envelope_detector erro: {e}")
+        emit("envelope", "failed", error=str(e))
 
     # 4. OCR semantico.
+    emit("ocr", "started")
     semantic_texts = []
     try:
         semantic_texts = extract_semantic_texts(img)
+        emit("ocr", "completed", text_count=len(semantic_texts))
     except Exception as e:
         notes.append(f"OCR semantico erro: {e}")
+        emit("ocr", "failed", error=str(e))
 
     rooms_out: List[RoomOut] = []
     cotas_out: List[CotaOut] = []
@@ -269,13 +301,17 @@ async def full_extraction(req: FullExtractionRequest):
         notes.append(f"watershed comodos erro: {e}")
 
     # 6. Wall extraction (skeletonize + segmentos).
+    emit("wall_detect", "started")
     walls_segments: List[WallSegment] = []
     try:
         walls_segments = extract_walls_from_mask(wall_mask, min_segment_len_px=25)
+        emit("wall_detect", "completed", segment_count=len(walls_segments))
     except Exception as e:
         notes.append(f"wall_extractor erro: {e}")
+        emit("wall_detect", "failed", error=str(e))
 
     # 7. Topology classification (Shapely buffer/intersect).
+    emit("classify", "started")
     walls_out: List[WallOut] = []
     try:
         # Constroi zones em PIXELS (mesmo espaco das walls).
@@ -353,6 +389,8 @@ async def full_extraction(req: FullExtractionRequest):
                 needs_review=True,
             ))
 
+    emit("classify", "completed", wall_count=len(walls_out))
+
     # 8. Status: tudo OK se tem walls + envelope; degradado caso contrario.
     if walls_out and envelope_out:
         status = "ok"
@@ -371,4 +409,74 @@ async def full_extraction(req: FullExtractionRequest):
         cotas=cotas_out,
         notes=notes,
         inference_ms=int((time.time() - t0) * 1000),
+    )
+
+
+@router.post("/full_extraction", response_model=FullExtractionResponse)
+async def full_extraction(req: FullExtractionRequest):
+    """Extracao completa de uma planta_baixa:
+      envelope + paredes + comodos + cotas + classificacao topologica.
+    """
+    return _run_full_extraction(req)
+
+
+@router.post("/full_extraction/stream")
+async def full_extraction_stream(req: FullExtractionRequest):
+    """Variante SSE de /full_extraction. Emite eventos por sub-etapa via
+    text/event-stream, e termina com um evento "result" contendo o JSON
+    completo (mesmo shape de FullExtractionResponse).
+
+    Formato:
+      event: substep
+      data: {"substep": "preprocess", "phase": "started", ...}
+
+      event: result
+      data: {...FullExtractionResponse...}
+
+    Cliente Node escuta os eventos "substep" e ecoa como `cv_substep` no
+    canal SSE do projeto; usa o "result" como output final, equivalente a
+    /full_extraction sincrono.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def progress(substep: str, phase: str, **extra):
+        # Coloca evento na fila sem bloquear (loop async drena depois).
+        try:
+            queue.put_nowait({"substep": substep, "phase": phase, **extra})
+        except Exception:
+            pass
+
+    async def run_pipeline_and_finish():
+        loop = asyncio.get_event_loop()
+        try:
+            # Pipeline e CPU-bound: roda num thread pra nao bloquear o event loop.
+            result = await loop.run_in_executor(None, _run_full_extraction, req, progress)
+            await queue.put({"__final__": result.dict()})
+        except Exception as e:
+            await queue.put({"__error__": str(e)})
+
+    async def event_stream():
+        task = asyncio.create_task(run_pipeline_and_finish())
+        try:
+            while True:
+                msg = await queue.get()
+                if "__final__" in msg:
+                    yield f"event: result\ndata: {json.dumps(msg['__final__'])}\n\n"
+                    break
+                if "__error__" in msg:
+                    yield f"event: error\ndata: {json.dumps({'error': msg['__error__']})}\n\n"
+                    break
+                yield f"event: substep\ndata: {json.dumps(msg)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )

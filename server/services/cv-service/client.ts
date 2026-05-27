@@ -202,6 +202,110 @@ export async function fullExtractionCV(opts: {
 }
 
 /**
+ * Variante streaming de `fullExtractionCV`. Faz a mesma chamada mas via SSE,
+ * permitindo reportar sub-etapas em tempo real ao caller. `onSubstep` e
+ * invocado para cada evento "substep" do cv-service. O retorno final e
+ * equivalente ao endpoint sincrono.
+ *
+ * Cai automaticamente no endpoint sincrono se o streaming nao for suportado
+ * (cv-service antigo, status 404). Resilencia importante porque deploys do
+ * cv-service podem rolar fora de fase com o Node.
+ */
+export interface CvSubstepProgress {
+  substep: string;
+  phase: "started" | "completed" | "failed";
+  [k: string]: unknown;
+}
+
+export async function fullExtractionCVStreamed(
+  opts: {
+    imageBase64: string;
+    mimeType: string;
+    pavimento?: string;
+    envelopeHint?: CvPoint[];
+  },
+  onSubstep: (p: CvSubstepProgress) => void,
+): Promise<CvFullExtractionResult> {
+  // Streaming pode demorar bem mais que /full_extraction sincrono.
+  const STREAM_TIMEOUT_MS = 180_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch(`${CV_SERVICE_URL}/extraction/full_extraction/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_base64: opts.imageBase64,
+        mime_type: opts.mimeType,
+        pavimento: opts.pavimento || "Terreo",
+        envelope_hint: opts.envelopeHint,
+      }),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    clearTimeout(timer);
+    if (err?.name === "AbortError") {
+      throw new CvServiceUnavailable("streaming timeout");
+    }
+    throw new CvServiceUnavailable(err?.message || String(err));
+  }
+
+  if (res.status === 404) {
+    clearTimeout(timer);
+    // cv-service nao suporta streaming — cai pro sincrono
+    return fullExtractionCV(opts);
+  }
+  if (!res.ok || !res.body) {
+    clearTimeout(timer);
+    throw new CvServiceUnavailable(`HTTP ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: CvFullExtractionResult | null = null;
+  let errorMsg: string | null = null;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames sao separados por \n\n
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        let eventName = "message";
+        let dataLine = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event: ")) eventName = line.slice(7).trim();
+          else if (line.startsWith("data: ")) dataLine += line.slice(6);
+        }
+        if (!dataLine) continue;
+        let payload: any;
+        try { payload = JSON.parse(dataLine); } catch { continue; }
+
+        if (eventName === "substep") {
+          try { onSubstep(payload as CvSubstepProgress); } catch { /* swallow */ }
+        } else if (eventName === "result") {
+          finalResult = payload as CvFullExtractionResult;
+        } else if (eventName === "error") {
+          errorMsg = payload?.error || "erro desconhecido";
+        }
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (errorMsg) throw new CvServiceUnavailable(errorMsg);
+  if (!finalResult) throw new CvServiceUnavailable("stream encerrou sem result");
+  return finalResult;
+}
+
+/**
  * Helper: testa se cv-service esta DISPONIVEL e COM IMPLEMENTACAO REAL
  * (nao apenas stub). Usado pelo pipeline para decidir entre Fase E (CV)
  * e fallback Gemini.
