@@ -481,6 +481,37 @@ function sendProgress(projectId: number, step: number, label: string, status: "r
   });
 }
 
+/**
+ * Mantem o canal /progress vivo durante etapas longas (cv-service, render
+ * de imagens, retries Gemini) re-emitindo um sendProgress "running" a cada
+ * `intervalMs` ate `fn()` resolver/rejeitar. Sem isso, etapas que silenciam
+ * por minutos fazem o stepper parecer travado mesmo com backend OK.
+ *
+ * Detalhe e' append-only: o ultimo detail visto fica como detail repetido.
+ * Quando `fn` chama sendProgress diretamente durante a execucao, esses
+ * eventos passam normais — o heartbeat e' apenas o piso de feedback.
+ */
+async function withStageHeartbeat<T>(
+  projectId: number,
+  step: number,
+  label: string,
+  baseDetail: string,
+  fn: () => Promise<T>,
+  intervalMs = 20_000,
+): Promise<T> {
+  let pulses = 0;
+  const id = setInterval(() => {
+    pulses++;
+    const detail = `${baseDetail} (${pulses * Math.round(intervalMs / 1000)}s decorridos)`;
+    sendProgress(projectId, step, label, "running", detail);
+  }, intervalMs);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(id);
+  }
+}
+
 const upload = multer({
   dest: "server/uploads/projects/",
   limits: { fileSize: 50 * 1024 * 1024 },
@@ -1724,40 +1755,47 @@ export async function registerRoutes(
           sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "running", "cv-service detectado pronto — extracao paralela...");
           const cvSources = await getAnnotationImageSources(files, allClassifications);
           const cvResults: Array<{ pavimento: string; result: any }> = [];
-          for (const src of cvSources) {
-            try {
-              // Usa streaming pra emitir cv_substep por etapa interna
-              // (preprocess, envelope, ocr, wall_detect, classify). Em caso de
-              // 404/erro, fullExtractionCVStreamed automaticamente cai pro
-              // endpoint sincrono — compat total.
-              const cvResult = await fullExtractionCVStreamed(
-                {
-                  imageBase64: src.base64,
-                  mimeType: src.mimeType,
-                  pavimento: src.pavimento,
-                },
-                (p) => {
-                  emitCvSubstep({
-                    projectId,
-                    pavimento: src.pavimento,
-                    substep: (p.substep as any) || "other",
-                    phase: p.phase,
-                    detail: typeof p.error === "string" ? p.error : undefined,
-                    errorMessage: p.phase === "failed" && typeof p.error === "string" ? p.error : undefined,
-                  });
-                },
-              );
-              cvResults.push({ pavimento: src.pavimento, result: cvResult });
-              console.log(
-                `[CV] Pav "${src.pavimento}": status=${cvResult.status} ` +
-                `walls=${cvResult.walls.length} envelope=${cvResult.envelope ? "sim" : "nao"} ` +
-                `rooms=${cvResult.rooms.length} cotas=${cvResult.cotas.length} ` +
-                `inference_ms=${cvResult.inference_ms}`,
-              );
-            } catch (e: any) {
-              console.warn(`[CV] Falha em "${src.pavimento}": ${e?.message || e}`);
-            }
-          }
+          // Heartbeat: o loop pode ficar minutos esperando cv-service em cada
+          // pavimento. Sem isso, o stepper /progress fica silencioso ate a
+          // primeira chamada terminar. Re-emite "running" a cada 20s.
+          await withStageHeartbeat(
+            projectId,
+            3.4,
+            "CV Pipeline (Fase E)",
+            `Processando ${cvSources.length} pavimento(s) no cv-service`,
+            async () => {
+              for (const src of cvSources) {
+                try {
+                  const cvResult = await fullExtractionCVStreamed(
+                    {
+                      imageBase64: src.base64,
+                      mimeType: src.mimeType,
+                      pavimento: src.pavimento,
+                    },
+                    (p) => {
+                      emitCvSubstep({
+                        projectId,
+                        pavimento: src.pavimento,
+                        substep: (p.substep as any) || "other",
+                        phase: p.phase,
+                        detail: typeof p.error === "string" ? p.error : undefined,
+                        errorMessage: p.phase === "failed" && typeof p.error === "string" ? p.error : undefined,
+                      });
+                    },
+                  );
+                  cvResults.push({ pavimento: src.pavimento, result: cvResult });
+                  console.log(
+                    `[CV] Pav "${src.pavimento}": status=${cvResult.status} ` +
+                    `walls=${cvResult.walls.length} envelope=${cvResult.envelope ? "sim" : "nao"} ` +
+                    `rooms=${cvResult.rooms.length} cotas=${cvResult.cotas.length} ` +
+                    `inference_ms=${cvResult.inference_ms}`,
+                  );
+                } catch (e: any) {
+                  console.warn(`[CV] Falha em "${src.pavimento}": ${e?.message || e}`);
+                }
+              }
+            },
+          );
           // Persiste pra A/B comparison na UI.
           if (cvResults.length > 0) {
             await storage.addExtractedData({
@@ -2536,7 +2574,15 @@ export async function registerRoutes(
             return { src, floorWalls, floorSlabs, enabledFloorWalls, enabledFloorSlabs };
           }).filter((j): j is NonNullable<typeof j> => j !== null);
 
-          const annotationResults = await Promise.allSettled(
+          // Heartbeat: render de PDF grande via sharp pode levar minutos em
+          // background. Sem isso, o stepper /progress fica silencioso ate o
+          // Promise.allSettled resolver.
+          const annotationResults = await withStageHeartbeat(
+            projectId,
+            7.5,
+            "Imagem Anotada",
+            `Renderizando ${annotationJobs.length} pavimento(s)`,
+            () => Promise.allSettled(
             annotationJobs.map(async (job) => {
               // Emit started per pavimento — antes a Promise.allSettled era
               // silenciosa ate todas terminarem; agora a UI pode mostrar grid
@@ -2598,6 +2644,7 @@ export async function registerRoutes(
                 throw err;
               }
             }),
+            ),
           );
           // Captura erros por pavimento pra UI dar visibilidade (Parte 1 do bugfix).
           // Antes, era so console.error e o usuario nunca via — caia silenciosamente

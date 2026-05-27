@@ -226,8 +226,11 @@ export async function fullExtractionCVStreamed(
   },
   onSubstep: (p: CvSubstepProgress) => void,
 ): Promise<CvFullExtractionResult> {
-  // Streaming pode demorar bem mais que /full_extraction sincrono.
-  const STREAM_TIMEOUT_MS = 180_000;
+  // O cv-service streaming agora emite eventos a cada sub-passo
+  // (preprocess → ocr → wall_detect → classify), tipicamente < 30s no total.
+  // Se passar de 90s e' trava real — abortar libera o pipeline pra cair em
+  // fallback Gemini sem fazer o stepper /progress ficar minutos parado.
+  const STREAM_TIMEOUT_MS = 90_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
 
