@@ -2304,6 +2304,9 @@ export async function registerRoutes(
         // while still surfacing the rest of the project to the user.
         let annotatedImages: Array<{ pavimento: string; pageIndex: number; image: string; summary: any }> = [];
         let annotationSource: "ia" | "none" = "none";
+        // Erros por pavimento — exibidos na UI quando o card "Planta Anotada" nao
+        // consegue ser renderizado. Persistidos junto com etapa3_annotated_plan.
+        const annotationErrors: Array<{ pavimento: string; pageIndex: number; error: string }> = [];
 
         {
           // Renderizacao DETERMINISTICA (sharp + SVG) no servidor. Substitui a
@@ -2366,9 +2369,41 @@ export async function registerRoutes(
               };
             }),
           );
-          for (const r of annotationResults) {
-            if (r.status === "fulfilled") annotatedImages.push(r.value);
-            else console.error(`[ETAPA 4.5] Falha na imagem de um pavimento:`, (r as PromiseRejectedResult).reason?.message);
+          // Captura erros por pavimento pra UI dar visibilidade (Parte 1 do bugfix).
+          // Antes, era so console.error e o usuario nunca via — caia silenciosamente
+          // no fallback de "Outras Vistas".
+          for (let i = 0; i < annotationResults.length; i++) {
+            const r = annotationResults[i];
+            const job = annotationJobs[i];
+            if (r.status === "fulfilled") {
+              annotatedImages.push(r.value);
+            } else {
+              const reason = (r as PromiseRejectedResult).reason;
+              const errMsg = reason?.message || String(reason);
+              console.error(`[ETAPA 4.5] Falha pavimento "${job.src.pavimento}" pg ${job.src.pageIndex}:`, errMsg);
+              annotationErrors.push({
+                pavimento: job.src.pavimento,
+                pageIndex: job.src.pageIndex,
+                error: errMsg,
+              });
+            }
+          }
+          // Tambem detecta quando o filtro eliminou TODOS os jobs antes do render.
+          // (Acontece quando walls/slabs nao casam com pavimento das imagens, ou
+          // quando todos os escopos estao desligados.)
+          if (annotationJobs.length === 0 && imgSources.length > 0) {
+            for (const src of imgSources) {
+              const reason =
+                fusaoWallsWithScope.length === 0 && fusaoSlabsWithScope.length === 0
+                  ? "Nenhuma parede ou laje extraida — Etapa 3 nao produziu resultado utilizavel"
+                  : `Nenhuma parede/laje habilitada no pavimento "${src.pavimento}" — verifique escopo e classificacao por pavimento`;
+              annotationErrors.push({
+                pavimento: src.pavimento,
+                pageIndex: src.pageIndex,
+                error: reason,
+              });
+            }
+            console.error(`[ETAPA 4.5] annotationJobs vazio (${imgSources.length} fontes mas nenhuma com walls/slabs habilitados)`);
           }
           if (annotatedImages.length > 0) annotationSource = "ia";
         }
@@ -2511,6 +2546,7 @@ export async function registerRoutes(
                 summary: summaryAll,
                 generatedAt: new Date().toISOString(),
                 source: annotationSource,
+                annotationErrors,  // Parte 1 do bugfix — visibilidade pra UI
               },
               hasAssumption: 0,
             });

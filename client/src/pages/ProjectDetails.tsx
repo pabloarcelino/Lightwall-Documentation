@@ -57,6 +57,7 @@ import {
   Activity,
   Fingerprint,
   Mail,
+  AlertCircle,
 } from "lucide-react";
 import {
   Dialog,
@@ -1855,6 +1856,9 @@ export default function ProjectDetails() {
               const auditNotesData = (extractedData || []).find((d: any) => d.elementType === "audit_notes");
               const auditNotes: Array<{ severity: "info" | "warning" | "error"; code: string; message: string; relatedIds?: string[] }> =
                 (auditNotesData?.data as any)?.notes || [];
+              // Parte 1 do bugfix — visibilidade de erros de render.
+              const annotationErrors: Array<{ pavimento: string; pageIndex: number; error: string }> =
+                (annotatedPlan?.data as any)?.annotationErrors || [];
               const planWalls = liveWalls || fusao?.data?.resultado?.walls || [];
               const planSlabs = fusao?.data?.resultado?.slabs || [];
               const handleClickWall = (wallId: string) => {
@@ -1924,10 +1928,43 @@ export default function ProjectDetails() {
                     </div>
                   )}
 
+                  {/* Parte 1.2 do bugfix — Card de erro quando renderizacao falhou */}
+                  {annotationErrors.length > 0 &&
+                   (!annotatedPlan?.data?.images || annotatedPlan.data.images.length === 0) && (
+                    <div className="rounded-xl border border-error/40 bg-error-soft px-5 py-4">
+                      <div className="flex items-start gap-3">
+                        <AlertCircle className="h-5 w-5 text-error mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-base font-semibold text-error">
+                            Renderização da planta anotada falhou
+                          </h3>
+                          <p className="text-sm text-foreground/80 mt-1">
+                            O orçamento foi calculado normalmente, mas a imagem anotada não pôde ser gerada no servidor.
+                            {planWalls.some((w: any) => w.bbox || w.endpoints) && (
+                              <span> Estamos mostrando uma versão alternativa com anotação no navegador (abaixo).</span>
+                            )}
+                          </p>
+                          <ul className="mt-2 space-y-1 text-xs">
+                            {annotationErrors.map((e, i) => (
+                              <li key={i} className="font-mono">
+                                <strong>{e.pavimento}</strong> (pg {e.pageIndex}): {e.error}
+                              </li>
+                            ))}
+                          </ul>
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Causas comuns: dependência <code className="font-mono">pdf-to-png-converter</code> ausente
+                            (rode <code className="font-mono">npm install</code> no servidor), classificação errada de pavimento,
+                            ou todos os escopos desligados. Veja os logs do servidor para diagnóstico completo.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Annotated floor plan image - shown prominently like Gemini output */}
                   {(() => {
                     // Support both new multi-floor format (data.images) and legacy single image (data.image)
-                    const floorImages: Array<{ pavimento: string; image: string }> = [];
+                    const floorImages: Array<{ pavimento: string; image: string; isClientSideFallback?: boolean }> = [];
                     if (annotatedPlan?.data?.images && Array.isArray(annotatedPlan.data.images)) {
                       for (const img of annotatedPlan.data.images) {
                         if (img?.image) floorImages.push({ pavimento: img.pavimento || "all", image: img.image });
@@ -1935,7 +1972,24 @@ export default function ProjectDetails() {
                     } else if (annotatedPlan?.data?.image) {
                       floorImages.push({ pavimento: "all", image: annotatedPlan.data.image });
                     }
+                    // Parte 1.3 do bugfix — fallback client-side.
+                    // Quando server-side render falhou MAS temos walls com bbox/endpoints
+                    // E temos plantas baixas em referenceImages, monta floorImages com
+                    // a planta crua + InteractiveAnnotatedPlan desenha overlay SVG.
+                    if (floorImages.length === 0 && planWalls.some((w: any) => w.bbox || w.endpoints)) {
+                      const refImgs: Array<{ pageType: string; pavimento?: string; image: string }> =
+                        (annotatedPlan?.data as any)?.referenceImages || [];
+                      const plantaBaixaRefs = refImgs.filter(r => r.pageType === "planta_baixa");
+                      for (const r of plantaBaixaRefs) {
+                        floorImages.push({
+                          pavimento: r.pavimento || "all",
+                          image: r.image,
+                          isClientSideFallback: true,
+                        });
+                      }
+                    }
                     if (floorImages.length === 0) return null;
+                    const isClientSideFallback = floorImages.some(f => f.isClientSideFallback);
 
                     const isMultiFloor = floorImages.length > 1;
                     const floorLabel = (pav: string) => {
@@ -2078,7 +2132,7 @@ export default function ProjectDetails() {
                           <div className="flex items-center justify-between">
                             <CardTitle className="flex items-center gap-2 text-base">
                               <Sparkles className="h-5 w-5 text-cyan-500" />
-                              Planta Anotada pela IA
+                              Planta Anotada {isClientSideFallback ? "(fallback no navegador)" : "pela IA"}
                             </CardTitle>
                             <a href={floorImages[0].image} download={`planta-anotada-${projectId}.png`}>
                               <Button variant="outline" size="sm">
@@ -2088,6 +2142,12 @@ export default function ProjectDetails() {
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-4">
+                          {isClientSideFallback && (
+                            <div className="text-xs border rounded-md p-2.5 bg-info-soft border-info/30 text-info">
+                              Renderização servidor falhou — exibindo planta original com overlay de paredes no navegador.
+                              Algumas labels podem estar deslocadas. Veja o card vermelho acima para o erro real.
+                            </div>
+                          )}
                           <div
                             className="text-xs border rounded-md p-3 bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-100 space-y-1"
                             data-testid="banner-reclassify-help"
