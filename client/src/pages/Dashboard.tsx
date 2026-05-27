@@ -388,7 +388,7 @@ export default function Dashboard() {
                                 variant="ghost"
                                 className="h-8 w-8 text-muted-foreground hover:text-error hover:bg-error-soft"
                                 aria-label="Excluir projeto"
-                                onClick={e => { e.preventDefault(); e.stopPropagation(); }}
+                                onClick={e => e.stopPropagation()}
                                 data-testid={`button-delete-${project.id}`}
                               >
                                 <Trash2 className="h-4 w-4" />
