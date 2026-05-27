@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { apiRequest } from "@/lib/queryClient";
 import {
   Select,
@@ -509,11 +510,22 @@ export default function ProjectDetails() {
     };
   }, []);
 
+  // Timer desacoplado de `isProcessing`. Roda enquanto o pipeline foi iniciado
+  // (pipelineStartTime) e ainda nao reportou conclusao real (todas etapas
+  // principais terminadas). Mesmo se o SSE cair e isProcessing virar false,
+  // o cronometro continua andando ate o backend reportar terminal de fato.
   useEffect(() => {
-    if (!isProcessing) return;
+    if (pipelineStartTime == null) return;
+    // Conferimos se todas as etapas principais terminaram. Se nao, mantemos
+    // o tick. Se nao ha etapas registradas ainda, tambem mantemos (estamos
+    // no "warm-up" entre disparo do processamento e primeiro evento SSE).
+    const mainStepsDone =
+      pipelineSteps.length > 0 &&
+      pipelineSteps.filter(s => !s.parentStep).every(s => s.status === "done" || s.status === "error");
+    if (mainStepsDone) return;
     const interval = setInterval(() => setTickNow(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [isProcessing]);
+  }, [pipelineStartTime, pipelineSteps]);
 
   const startSSE = (isReconnect = false) => {
     if (eventSourceRef.current) eventSourceRef.current.close();
@@ -592,8 +604,24 @@ export default function ProjectDetails() {
         // processing or another SSE has taken over the ref.
         const MAX_RETRIES = 5;
         if (sseRetryRef.current >= MAX_RETRIES) {
-          console.warn(`[SSE] Limite de tentativas (${MAX_RETRIES}) atingido — desistindo`);
-          setIsProcessing(false);
+          console.warn(`[SSE] Limite de tentativas (${MAX_RETRIES}) atingido — oferecendo reconexao manual`);
+          // NAO matamos isProcessing — o backend pode estar progredindo, e
+          // matar agora congela o cronometro/spinner sem motivo real. Em
+          // vez disso oferecemos reconexao manual via toast persistente.
+          toast({
+            title: "Conexao com o servidor perdida",
+            description: "O processamento pode continuar no servidor. Tente reconectar.",
+            variant: "destructive",
+            duration: 1000 * 60 * 30, // 30 min — efetivamente persistente
+            action: (
+              <ToastAction
+                altText="Reconectar agora"
+                onClick={() => { sseRetryRef.current = 0; try { startSSE(true); } catch {} }}
+              >
+                Reconectar agora
+              </ToastAction>
+            ),
+          });
           return;
         }
         const attempt = sseRetryRef.current + 1;
