@@ -2,6 +2,9 @@ import { genAI, withRetry } from "../gemini/client";
 import { repairJSON, type ExtractedSlab } from "../gemini/planAnalyzer";
 import { auditAiCall, recordAiUsage, geminiUsageFromResponse } from "../audit/aiAuditor";
 import type { EnvelopePolygon } from "./envelopeExtractor";
+import { polygonAreaNorm } from "./geometryUtils";
+
+export { polygonAreaNorm };
 
 /**
  * Estagio S10 da metodologia: refinamento de lajes via poligono real.
@@ -28,19 +31,6 @@ export interface SlabPolygon {
   polygon: Array<[number, number]>;
   /** Area em unidades normalizadas (0-1000 x 0-1000). Reescalada depois. */
   areaNorm: number;
-}
-
-// ============================================================
-// Shoelace
-// ============================================================
-
-export function polygonAreaNorm(poly: Array<[number, number]>): number {
-  if (poly.length < 3) return 0;
-  let s = 0;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    s += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
-  }
-  return Math.abs(s) / 2;
 }
 
 // ============================================================

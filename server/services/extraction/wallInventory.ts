@@ -230,15 +230,6 @@ export function segmentToBbox(seg: WallSegment): [number, number, number, number
   ];
 }
 
-/**
- * Comprimento do segmento em unidades NORMALIZADAS (0-1000). Para converter
- * para metros, voce precisa de pixelsPerMeter (S1, ainda nao implementado).
- * Por enquanto, retorna 0 e mantemos comprimento_m da extracao da Etapa 3.
- */
-export function segmentLengthNorm(seg: WallSegment): number {
-  return Math.hypot(seg.p2[0] - seg.p1[0], seg.p2[1] - seg.p1[1]);
-}
-
 // ============================================================
 // Merge: enriquece walls existentes com endpoints do inventario
 // ============================================================

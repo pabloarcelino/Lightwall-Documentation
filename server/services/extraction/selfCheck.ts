@@ -1,5 +1,6 @@
 import type { ExtractedWall, ExtractedSlab } from "../gemini/planAnalyzer";
 import type { EnvelopePolygon } from "./envelopeExtractor";
+import { polygonAreaNorm, polygonPerimeterNorm } from "./geometryUtils";
 
 /**
  * Estagio S12 da metodologia: validacao global deterministica.
@@ -46,30 +47,6 @@ export interface SelfCheckResult {
     warning: number;
     error: number;
   };
-}
-
-// ============================================================
-// Helpers
-// ============================================================
-
-function polygonPerimeterNorm(poly: Array<[number, number]>): number {
-  if (poly.length < 2) return 0;
-  let p = 0;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % poly.length];
-    p += Math.hypot(b[0] - a[0], b[1] - a[1]);
-  }
-  return p;
-}
-
-function polygonAreaNorm(poly: Array<[number, number]>): number {
-  if (poly.length < 3) return 0;
-  let s = 0;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    s += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
-  }
-  return Math.abs(s) / 2;
 }
 
 // ============================================================
