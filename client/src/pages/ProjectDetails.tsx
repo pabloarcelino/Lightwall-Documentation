@@ -73,6 +73,8 @@ import AnnotatedFloorPlan from "@/components/AnnotatedFloorPlan";
 import { LightwallDots } from "@/components/LightwallLogo";
 import { PageHeader } from "@/components/PageHeader";
 import { AiTimeline } from "@/components/AiTimeline";
+import { WorkspaceLayout } from "@/components/processing/WorkspaceLayout";
+import { useNewWorkspaceUI } from "@/components/processing/useProcessingSync";
 import { LoadingState } from "@/components/ui/states";
 import type { Product } from "@shared/schema";
 
@@ -306,6 +308,8 @@ export default function ProjectDetails() {
   const [, setLocation] = useLocation();
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  // Fase E.7: feature flag pra nova interface da aba processamento.
+  const newWorkspace = useNewWorkspaceUI();
   const [pipelineVisible, setPipelineVisible] = useState(true);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
@@ -1850,7 +1854,90 @@ export default function ProjectDetails() {
           </TabsContent>
 
           <TabsContent value="quantitativos">
-            {(() => {
+            {/* Fase E.7: feature flag pra nova interface. Toggle visivel ao usuario. */}
+            <div className="mb-3 flex items-center justify-end gap-2">
+              <span className="text-xs text-muted-foreground">Layout:</span>
+              <button
+                onClick={newWorkspace.toggle}
+                className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+                  newWorkspace.enabled
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card text-muted-foreground border-border hover:bg-accent"
+                }`}
+                data-testid="toggle-new-workspace"
+                title="Alternar entre interface nova (workspace) e legada"
+              >
+                {newWorkspace.enabled ? "🧪 Nova interface" : "Interface legada"}
+              </button>
+            </div>
+            {newWorkspace.enabled && (() => {
+              const fusao = (extractedData || []).find((d: any) => d.elementType === "etapa4_fusao");
+              const annotatedPlan = (extractedData || []).find((d: any) => d.elementType === "etapa3_annotated_plan");
+              const auditNotesData = (extractedData || []).find((d: any) => d.elementType === "audit_notes");
+              const allWalls: any[] = (liveWalls || (fusao?.data as any)?.resultado?.walls || []) as any[];
+              const allSlabs: any[] = ((fusao?.data as any)?.resultado?.slabs || []) as any[];
+              const allNotes: any[] = ((auditNotesData?.data as any)?.notes || []) as any[];
+
+              // Reusa o mesmo construtor de floorImages do bloco antigo (com fallback client-side).
+              const floorImages: Array<{ pavimento: string; image: string; isClientSideFallback?: boolean }> = [];
+              const imgsData = (annotatedPlan?.data as any)?.images;
+              if (Array.isArray(imgsData)) {
+                for (const img of imgsData) {
+                  if (img?.image) floorImages.push({ pavimento: img.pavimento || "all", image: img.image });
+                }
+              } else if ((annotatedPlan?.data as any)?.image) {
+                floorImages.push({ pavimento: "all", image: (annotatedPlan!.data as any).image });
+              }
+              if (floorImages.length === 0 && allWalls.some((w: any) => w.bbox || w.endpoints)) {
+                const refImgs: any[] = (annotatedPlan?.data as any)?.referenceImages || [];
+                const plantaBaixaRefs = refImgs.filter(r => r.pageType === "planta_baixa");
+                for (const r of plantaBaixaRefs) {
+                  floorImages.push({
+                    pavimento: r.pavimento || "all",
+                    image: r.image,
+                    isClientSideFallback: true,
+                  });
+                }
+              }
+
+              // Steps derivados de pipelineSteps existente.
+              const steps = pipelineSteps
+                .filter(s => !s.parentStep)
+                .map(s => ({
+                  step: s.step,
+                  label: s.label,
+                  status:
+                    s.status === "done"    ? ("done" as const) :
+                    s.status === "running" ? ("running" as const) :
+                    s.status === "error"   ? ("error" as const) :
+                                              ("pending" as const),
+                }));
+
+              const projectStatus: "completed" | "processing" | "error" | "draft" =
+                isProcessing || project.status === "processing" ? "processing" :
+                project.status === "completed" ? "completed" :
+                project.status === "error" ? "error" :
+                "draft";
+              const hasFailures =
+                ((annotatedPlan?.data as any)?.annotationErrors?.length ?? 0) > 0 ||
+                allNotes.some((n: any) => n.severity === "error");
+
+              return (
+                <WorkspaceLayout
+                  status={projectStatus}
+                  hasFailures={hasFailures}
+                  steps={steps}
+                  projectId={Number(projectId)}
+                  walls={allWalls}
+                  slabs={allSlabs}
+                  auditNotes={allNotes}
+                  floorImages={floorImages}
+                  isProcessing={isProcessing}
+                  onReprocess={() => processMutation.mutate()}
+                />
+              );
+            })()}
+            {!newWorkspace.enabled && (() => {
               const fusao = (extractedData || []).find((d: any) => d.elementType === "etapa4_fusao");
               const annotatedPlan = (extractedData || []).find((d: any) => d.elementType === "etapa3_annotated_plan");
               const auditNotesData = (extractedData || []).find((d: any) => d.elementType === "audit_notes");
