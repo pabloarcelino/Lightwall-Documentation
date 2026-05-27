@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import {
@@ -1854,21 +1855,27 @@ export default function ProjectDetails() {
           </TabsContent>
 
           <TabsContent value="quantitativos">
-            {/* Fase E.7: feature flag pra nova interface. Toggle visivel ao usuario. */}
-            <div className="mb-3 flex items-center justify-end gap-2">
-              <span className="text-xs text-muted-foreground">Layout:</span>
-              <button
-                onClick={newWorkspace.toggle}
-                className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
-                  newWorkspace.enabled
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-card text-muted-foreground border-border hover:bg-accent"
-                }`}
+            {/* Banner Switch — nova interface por padrao; usuario pode voltar a legada. */}
+            <div className="mb-3 flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border bg-card shadow-xs">
+              <Sparkles className="h-4 w-4 text-primary shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-foreground">
+                  {newWorkspace.enabled
+                    ? "Nova interface (workspace ativo)"
+                    : "Interface legada em uso"}
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  {newWorkspace.enabled
+                    ? "Planta e tabela lado a lado, com sync de hover/click. Use o switch para voltar à interface antiga."
+                    : "Clique no switch para voltar à interface nova com workspace split-view."}
+                </p>
+              </div>
+              <Switch
+                checked={newWorkspace.enabled}
+                onCheckedChange={newWorkspace.toggle}
                 data-testid="toggle-new-workspace"
-                title="Alternar entre interface nova (workspace) e legada"
-              >
-                {newWorkspace.enabled ? "🧪 Nova interface" : "Interface legada"}
-              </button>
+                aria-label="Alternar interface nova"
+              />
             </div>
             {newWorkspace.enabled && (() => {
               const fusao = (extractedData || []).find((d: any) => d.elementType === "etapa4_fusao");
@@ -1879,14 +1886,14 @@ export default function ProjectDetails() {
               const allNotes: any[] = ((auditNotesData?.data as any)?.notes || []) as any[];
 
               // Reusa o mesmo construtor de floorImages do bloco antigo (com fallback client-side).
-              const floorImages: Array<{ pavimento: string; image: string; isClientSideFallback?: boolean }> = [];
+              const floorImages: Array<{ pavimento: string; image: string; mimeType?: string; isClientSideFallback?: boolean }> = [];
               const imgsData = (annotatedPlan?.data as any)?.images;
               if (Array.isArray(imgsData)) {
                 for (const img of imgsData) {
-                  if (img?.image) floorImages.push({ pavimento: img.pavimento || "all", image: img.image });
+                  if (img?.image) floorImages.push({ pavimento: img.pavimento || "all", image: img.image, mimeType: img.mimeType });
                 }
               } else if ((annotatedPlan?.data as any)?.image) {
-                floorImages.push({ pavimento: "all", image: (annotatedPlan!.data as any).image });
+                floorImages.push({ pavimento: "all", image: (annotatedPlan!.data as any).image, mimeType: (annotatedPlan!.data as any).mimeType });
               }
               if (floorImages.length === 0 && allWalls.some((w: any) => w.bbox || w.endpoints)) {
                 const refImgs: any[] = (annotatedPlan?.data as any)?.referenceImages || [];
@@ -1895,6 +1902,7 @@ export default function ProjectDetails() {
                   floorImages.push({
                     pavimento: r.pavimento || "all",
                     image: r.image,
+                    mimeType: r.mimeType,
                     isClientSideFallback: true,
                   });
                 }

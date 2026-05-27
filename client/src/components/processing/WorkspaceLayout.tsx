@@ -18,7 +18,7 @@ interface WorkspaceLayoutProps {
   walls: any[];
   slabs: any[];
   auditNotes: any[];
-  floorImages: Array<{ pavimento: string; image: string; isClientSideFallback?: boolean }>;
+  floorImages: Array<{ pavimento: string; image: string; mimeType?: string; isClientSideFallback?: boolean }>;
   isProcessing: boolean;
   // Actions
   hasPendingChanges?: boolean;

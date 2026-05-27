@@ -55,11 +55,15 @@ export function useProcessingSync(initialPavimento = "all"): ProcessingSync {
 
 const FLAG_KEY = "lw-use-new-workspace-ui";
 
-/** Le flag do localStorage. Default false (UI legada). */
+/** Le flag do localStorage. Default TRUE — nova UI e o padrao agora.
+ *  Para voltar a UI legada, usuario alterna no Switch e localStorage grava "0". */
 export function useNewWorkspaceUI(): { enabled: boolean; toggle: () => void } {
   const [enabled, setEnabled] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try { return window.localStorage.getItem(FLAG_KEY) === "1"; } catch { return false; }
+    if (typeof window === "undefined") return true;
+    try {
+      const stored = window.localStorage.getItem(FLAG_KEY);
+      return stored === null ? true : stored === "1";
+    } catch { return true; }
   });
   const toggle = useCallback(() => {
     setEnabled(prev => {
