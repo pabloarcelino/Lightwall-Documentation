@@ -1,0 +1,15 @@
+node_modules
+dist
+build
+.next
+coverage
+package-lock.json
+*.min.js
+*.min.css
+cv-service
+attached_assets
+.local
+.config
+.agents
+.replit
+migration.sql

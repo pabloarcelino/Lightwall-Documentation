@@ -9,6 +9,22 @@
 
   ## 📋 Checklist de Inicialização
 
+  ### 0. Provisionar variáveis de ambiente
+
+  ```bash
+  cp .env.example .env
+  ```
+
+  Preencha em `.env`:
+  - `DATABASE_URL` — connection string do Postgres provisionado.
+  - `SESSION_SECRET` — string aleatória ≥ 16 chars (use `openssl rand -hex 32`).
+  - `AI_INTEGRATIONS_GEMINI_API_KEY` *(recomendado em produção)* — chave obtida em [Google AI Studio](https://aistudio.google.com/apikey). Quando definida, sobrescreve qualquer chave configurada via UI (Settings) e a UI fica read-only por segurança.
+  - `AI_INTEGRATIONS_OPENAI_API_KEY` *(opcional)* — habilita verificação cross-model e modo OpenAI-only.
+
+  Em desenvolvimento as chaves de IA podem ser deixadas em branco — você consegue configurar via `/settings` na UI.
+
+  O processo morre cedo com mensagem clara se uma variável obrigatória estiver ausente ou inválida (validação via Zod em `server/config/env.ts`).
+
   ### 1. Validar Sistema
   ```bash
   npm run validate
