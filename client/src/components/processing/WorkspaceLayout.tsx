@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ProcessingHeader, type ProjectStatus } from "./ProcessingHeader";
-import { PlantaWorkspace } from "./PlantaWorkspace";
+import { PlantaWorkspace, type AnnotationError } from "./PlantaWorkspace";
 import { InspectorPanel } from "./InspectorPanel";
 import { TechnicalDrawer } from "./TechnicalDrawer";
 import { ProjectActionBar } from "./ProjectActionBar";
@@ -19,6 +19,8 @@ interface WorkspaceLayoutProps {
   slabs: any[];
   auditNotes: any[];
   floorImages: Array<{ pavimento: string; image: string; mimeType?: string; isClientSideFallback?: boolean }>;
+  /** Erros do `etapa3_annotated_plan.data.annotationErrors`. Surface no PlantaWorkspace. */
+  annotationErrors?: AnnotationError[];
   isProcessing: boolean;
   // Actions
   hasPendingChanges?: boolean;
@@ -63,6 +65,7 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
           floorImages={props.floorImages}
           walls={props.walls}
           sync={sync}
+          annotationErrors={props.annotationErrors}
         />
         {/* Inspector */}
         <InspectorPanel

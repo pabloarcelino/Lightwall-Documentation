@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react";
+import { AlertCircle } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import {
+  endpointsToWallPolygon,
+  wallPolygonToSvgPoints,
+  WALL_FILL_OPACITY,
+  WALL_STROKE_OPACITY,
+  DEFAULT_THICKNESS_PCT,
+} from "@/lib/wallGeometry";
 import type { ProcessingSync } from "./useProcessingSync";
 
 interface FloorImage {
@@ -11,6 +19,12 @@ interface FloorImage {
   /** Mime type explicito quando conhecido — ajuda na escolha do renderer. */
   mimeType?: string;
   isClientSideFallback?: boolean;
+}
+
+export interface AnnotationError {
+  pavimento: string;
+  pageIndex: number;
+  error: string;
 }
 
 function isPdfDataUrl(src: string, mimeType?: string): boolean {
@@ -25,6 +39,8 @@ interface Wall {
   nivel: string;
   bbox?: number[];
   endpoints?: { p1: [number, number]; p2: [number, number] };
+  /** Espessura em % do lado maior (0..100). Quando ausente, usa DEFAULT_THICKNESS_PCT. */
+  thickness_pct?: number;
   needs_review?: boolean;
   enabled?: boolean;
 }
@@ -36,6 +52,10 @@ interface PlantaWorkspaceProps {
   /** Toggles default abertos. */
   showLabels?: boolean;
   showEnvelope?: boolean;
+  /** Erros por pavimento vindos do `etapa3_annotated_plan.data.annotationErrors`.
+   *  Quando presente, um card vermelho explica POR QUE a planta server-rendered
+   *  falhou. Diagnóstico — caller pode atacar a causa real depois. */
+  annotationErrors?: AnnotationError[];
 }
 
 const CLASSE_COLOR: Record<string, string> = {
@@ -50,6 +70,7 @@ export function PlantaWorkspace({
   sync,
   showLabels = true,
   showEnvelope = false,
+  annotationErrors = [],
 }: PlantaWorkspaceProps) {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -196,6 +217,30 @@ export function PlantaWorkspace({
         </div>
       )}
 
+      {/* Card de erros da renderização server-side — diagnóstico pro usuário entender POR QUE caiu no fallback. */}
+      {annotationErrors.length > 0 && (
+        <div className="px-3 py-2 bg-error-soft border-b border-error/30">
+          <div className="flex items-start gap-2 text-[11px]">
+            <AlertCircle className="h-3.5 w-3.5 text-error mt-0.5 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-error mb-0.5">
+                Erro ao gerar planta anotada no servidor ({annotationErrors.length}):
+              </div>
+              <ul className="space-y-0.5 font-mono text-foreground/80">
+                {annotationErrors.slice(0, 3).map((e, i) => (
+                  <li key={i} className="truncate" title={e.error}>
+                    <strong>{e.pavimento}</strong> (pg {e.pageIndex}): {e.error}
+                  </li>
+                ))}
+                {annotationErrors.length > 3 && (
+                  <li className="text-muted-foreground">+{annotationErrors.length - 3} pavimentos com erro</li>
+                )}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Planta + overlay SVG */}
       <div className="flex-1 overflow-auto bg-slate-50 dark:bg-slate-900">
         <div className="relative inline-block min-w-full">
@@ -263,17 +308,30 @@ export function PlantaWorkspace({
                 const isOther = (sync.hoveredId || sync.selectedId) && !isHovered && !isSelected;
                 const strokeWidth = isSelected ? 5 : isHovered ? 4 : 2.5;
                 const opacity = isOther ? 0.25 : 1;
+                // Estilo "filled" — igual ao server renderer.ts. Com endpoints +
+                // thickness, pinta polígono retangular preenchido (faixa). Sem
+                // endpoints (só bbox), preenche o retangulo. Substitui o estilo
+                // antigo de <line>/rect outline que produzia tracinhos finos
+                // visualmente diferentes da planta do Gemini Web.
+                const thick = w.thickness_pct ?? DEFAULT_THICKNESS_PCT;
+                const wallFillOpacity = isOther ? WALL_FILL_OPACITY * 0.4 : WALL_FILL_OPACITY;
+                const wallStrokeWidth = isSelected ? 2.5 : isHovered ? 2 : 1.5;
+                let polygonPoints: string | null = null;
+                if (w.endpoints) {
+                  const poly = endpointsToWallPolygon(w.endpoints.p1, w.endpoints.p2, thick);
+                  polygonPoints = wallPolygonToSvgPoints(poly, dims.w, dims.h);
+                }
                 return (
                   <g key={w.id} className="pointer-events-auto cursor-pointer" style={{ opacity }}>
-                    {w.endpoints ? (
-                      <line
-                        x1={(w.endpoints.p1[0] / 1000) * dims.w}
-                        y1={(w.endpoints.p1[1] / 1000) * dims.h}
-                        x2={(w.endpoints.p2[0] / 1000) * dims.w}
-                        y2={(w.endpoints.p2[1] / 1000) * dims.h}
+                    {polygonPoints ? (
+                      <polygon
+                        points={polygonPoints}
+                        fill={color}
+                        fillOpacity={wallFillOpacity}
                         stroke={color}
-                        strokeWidth={strokeWidth + 2}
-                        strokeLinecap="round"
+                        strokeOpacity={WALL_STROKE_OPACITY}
+                        strokeWidth={wallStrokeWidth}
+                        strokeLinejoin="round"
                         onMouseEnter={() => sync.setHovered(w.id)}
                         onMouseLeave={() => sync.setHovered(null)}
                         onClick={() => sync.setSelected(w.id === sync.selectedId ? null : w.id)}
@@ -281,7 +339,12 @@ export function PlantaWorkspace({
                     ) : (
                       <rect
                         x={x} y={y} width={ww} height={hh}
-                        fill="none" stroke={color} strokeWidth={strokeWidth}
+                        fill={color}
+                        fillOpacity={wallFillOpacity}
+                        stroke={color}
+                        strokeOpacity={WALL_STROKE_OPACITY}
+                        strokeWidth={wallStrokeWidth}
+                        strokeLinejoin="round"
                         onMouseEnter={() => sync.setHovered(w.id)}
                         onMouseLeave={() => sync.setHovered(null)}
                         onClick={() => sync.setSelected(w.id === sync.selectedId ? null : w.id)}

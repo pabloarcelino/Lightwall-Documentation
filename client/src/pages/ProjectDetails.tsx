@@ -1981,6 +1981,8 @@ export default function ProjectDetails() {
                 ((annotatedPlan?.data as any)?.annotationErrors?.length ?? 0) > 0 ||
                 allNotes.some((n: any) => n.severity === "error");
 
+              const annotationErrors: Array<{ pavimento: string; pageIndex: number; error: string }> =
+                ((annotatedPlan?.data as any)?.annotationErrors as any[]) || [];
               return (
                 <WorkspaceLayout
                   status={projectStatus}
@@ -1991,6 +1993,7 @@ export default function ProjectDetails() {
                   slabs={allSlabs}
                   auditNotes={allNotes}
                   floorImages={floorImages}
+                  annotationErrors={annotationErrors}
                   isProcessing={isProcessing}
                   onReprocess={() => processMutation.mutate()}
                 />
