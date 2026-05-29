@@ -103,7 +103,12 @@ app.use((req, res, next) => {
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
-  if (env.NODE_ENV === "production") {
+  // NOTE: usar process.env.NODE_ENV (nao env.NODE_ENV) pra que o esbuild
+  // substitua em build-time (define) e elimine o import dinamico de ./vite no
+  // bundle de producao — caso contrario o bundle puxa vite.config.ts e os
+  // plugins ESM-only do Replit, quebrando o deploy com "module is not defined
+  // in ES module scope".
+  if (process.env.NODE_ENV === "production") {
     serveStatic(app);
   } else {
     const { setupVite } = await import("./vite");

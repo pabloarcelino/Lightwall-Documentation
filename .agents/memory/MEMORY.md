@@ -1,0 +1,1 @@
+- [Deploy vite bundle](deploy-vite-bundle.md) — prod server gate must use process.env.NODE_ENV (not env.NODE_ENV) so esbuild strips dev `./vite` import; else deploy crashes on ESM-only Replit vite plugins.
