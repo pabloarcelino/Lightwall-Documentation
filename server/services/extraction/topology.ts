@@ -34,9 +34,9 @@ export interface TopologyClassification {
 // (sem buracos). Roda em O(N) para N vertices — instantaneo aqui.
 // ============================================================
 
-type Pt = [number, number];
+export type Pt = [number, number];
 
-function pointInPolygon(point: Pt, polygon: Pt[]): boolean {
+export function pointInPolygon(point: Pt, polygon: Pt[]): boolean {
   if (polygon.length < 3) return false;
   const [x, y] = point;
   let inside = false;
@@ -234,4 +234,47 @@ export function classifyWallsByTopology(
   }
 
   return { classifications, reclassified, skipped };
+}
+
+// ============================================================
+// Classificacao para SEGMENTS (geometria do wallInventory) — paralelo a
+// classifyWallsByTopology mas operando direto em (p1, p2, thickness_pct).
+// Usado na Etapa 4.5 pra pintar a planta anotada com geometria correta
+// (sem depender das walls da Etapa 3, que vem sem endpoints).
+// ============================================================
+
+export interface SegmentEnvelope {
+  polygon: Pt[];
+  lotPolygon?: Pt[];
+}
+
+/**
+ * Classifica um segmento (p1, p2 + thickness em % do lado maior, escala 0..1000)
+ * como externa/interna/muro usando point-in-polygon ortogonal igual ao
+ * `classifyOne` de walls. Sem envelope, devolve "externa" como default seguro
+ * (renderer pinta vermelho — usuario ve algo, nao planta crua).
+ */
+export function classifySegmentByEnvelope(
+  p1: Pt,
+  p2: Pt,
+  thicknessPct: number,
+  envelope: SegmentEnvelope | undefined,
+): "externa" | "interna" | "muro" {
+  if (!envelope || envelope.polygon.length < 3) return "externa";
+  const thickHint = Math.max(thicknessPct * 10, 20); // % -> coord 0..1000
+  const { mA, mB } = neighborPointsFromEndpoints(p1, p2, thickHint);
+  const inA = pointInPolygon(mA, envelope.polygon);
+  const inB = pointInPolygon(mB, envelope.polygon);
+
+  if (inA && inB) return "interna";
+  if (!inA && !inB) {
+    const lot = envelope.lotPolygon;
+    if (lot && lot.length >= 3) {
+      const inLotA = pointInPolygon(mA, lot);
+      const inLotB = pointInPolygon(mB, lot);
+      if (inLotA && inLotB) return "muro";
+    }
+    return "externa";
+  }
+  return "externa";
 }

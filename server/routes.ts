@@ -79,7 +79,7 @@ import bcrypt from "bcryptjs";
 import { renderAnnotatedImage } from "./services/annotation/renderer";
 import { extractEnvelopes, type EnvelopePolygon } from "./services/extraction/envelopeExtractor";
 import { characterizeProject, type ProjectCharacterization } from "./services/extraction/projectCharacterization";
-import { classifyWallsByTopology } from "./services/extraction/topology";
+import { classifyWallsByTopology, classifySegmentByEnvelope } from "./services/extraction/topology";
 import { inventoryWalls, mergeEndpointsIntoWalls } from "./services/extraction/wallInventory";
 import { readCotas, mergeCotasIntoWalls } from "./services/extraction/cotaReader";
 import { linkEsquadriasWithTable } from "./services/extraction/esquadriasLinker";
@@ -1866,6 +1866,10 @@ export async function registerRoutes(
       // de retangulo, e (b) a topologia em S5 usar o midpoint REAL do
       // segmento e a direcao para derivar os pontos de teste ortogonais.
       // Falha aqui NAO impede o resto do pipeline (graceful degrade).
+      // Os segmentos brutos (inventorySegmentsAll) sao usados na Etapa 4.5
+      // como FONTE DE VERDADE geometrica para a planta anotada — independente
+      // de quantas paredes da Etapa 3 casaram com bbox/IoU.
+      const inventorySegmentsAll: import("./services/extraction/wallInventory").WallSegment[] = [];
       try {
         const wallsForInventory = allGeometries.flatMap(g => g.walls);
         if (wallsForInventory.length > 0) {
@@ -1882,6 +1886,7 @@ export async function registerRoutes(
               })),
             });
             if (inv.segments.length > 0) {
+              inventorySegmentsAll.push(...inv.segments);
               const enrichedCount = mergeEndpointsIntoWalls(wallsForInventory, inv.segments);
               sendProgress(
                 projectId, 3.5, "Inventario (endpoints)", "done",
@@ -2646,11 +2651,48 @@ export async function registerRoutes(
                 const defaultThicknessPct = characterization
                   ? Math.max(0.5, Math.min(4, (characterization.estimativas.espessuraParedeM[1] / 5) * 100))
                   : 1.5;
+
+                // GEOMETRIA CORRETA: pinta as paredes a partir dos SEGMENTOS do
+                // wallInventory (que tem endpoints reais), classificados
+                // topologicamente pelo envelope. Walls da fusao perderiam
+                // endpoints — e a saida deu "0/N pintadas" antes. Quando ha
+                // segments do inventario, eles SAO as paredes visuais.
+                // Fallback: se nao ha segments (inventario falhou), volta pra
+                // enabledFloorWalls e tenta pintar com o que tiver.
+                let renderableWalls: any[] = job.enabledFloorWalls;
+                let geometrySource: "inventory_segments" | "fusion_walls" = "fusion_walls";
+                if (inventorySegmentsAll.length > 0) {
+                  const envForClassify = env
+                    ? { polygon: env.polygon, lotPolygon: env.lotPolygon }
+                    : undefined;
+                  renderableWalls = inventorySegmentsAll.map((seg, idx) => {
+                    const classe = classifySegmentByEnvelope(
+                      seg.p1, seg.p2, seg.thickness_pct, envForClassify,
+                    );
+                    // Comprimento em metros aproximado pra log/auditoria — nao
+                    // critico pro render. Assume escala ~10m por 1000 unidades
+                    // se a caracterizacao nao deu nada melhor.
+                    const lenNorm = Math.hypot(seg.p2[0] - seg.p1[0], seg.p2[1] - seg.p1[1]);
+                    const approxMperUnit = characterization
+                      ? (characterization.estimativas.areaTotalRangeM2[1] / 1000) ** 0.5
+                      : 0.015;
+                    return {
+                      id: `S${String(idx + 1).padStart(3, "0")}`,
+                      classe,
+                      comprimento_m: lenNorm * approxMperUnit,
+                      altura_m: peDireito,
+                      endpoints: { p1: [...seg.p1] as [number, number], p2: [...seg.p2] as [number, number] },
+                      thickness_pct: seg.thickness_pct,
+                    };
+                  });
+                  geometrySource = "inventory_segments";
+                }
+
                 const { pngBuffer, rendered } = await renderAnnotatedImage(
                   baseBuffer,
                   job.src.mimeType,
                   job.src.pageIndex,
-                  job.enabledFloorWalls,
+                  renderableWalls,
                   job.enabledFloorSlabs,
                   {
                     pavimentoLabel: job.src.pavimento === "all" ? "" : `Pavimento: ${job.src.pavimento}`,
@@ -2661,6 +2703,7 @@ export async function registerRoutes(
                     defaultThicknessPct,
                   },
                 );
+                console.log(`[ETAPA 4.5] Geometria: source=${geometrySource}, paredes_input=${renderableWalls.length}`);
                 // Quando recebemos N paredes mas o renderer pintou 0, registra
                 // como annotationError pra UI surfair o problema com mensagem
                 // util — sem isso o usuario ve uma planta crua e nao entende
@@ -2879,6 +2922,31 @@ export async function registerRoutes(
             if (finalAnnotated.length > 1) finalAnnotated = [finalAnnotated[0]];
           }
 
+          // Persistir wallSegments do inventario classificados topologicamente —
+          // a UI usa pra desenhar overlay com geometria correta sem reprocessar.
+          const persistedWallSegments = (() => {
+            if (inventorySegmentsAll.length === 0) return [];
+            const env = envelopes[0]; // simplificacao: single-pavimento. Multi-pav cobre depois
+            const envForClassify = env ? { polygon: env.polygon, lotPolygon: env.lotPolygon } : undefined;
+            return inventorySegmentsAll.map((seg, idx) => {
+              const classe = classifySegmentByEnvelope(seg.p1, seg.p2, seg.thickness_pct, envForClassify);
+              return {
+                id: `S${String(idx + 1).padStart(3, "0")}`,
+                pavimento: seg.pavimento,
+                p1: seg.p1,
+                p2: seg.p2,
+                thickness_pct: seg.thickness_pct,
+                classe,
+                has_door: seg.has_door,
+                has_window: seg.has_window,
+                confidence: seg.confidence,
+              };
+            });
+          })();
+          if (persistedWallSegments.length > 0) {
+            console.log(`[ETAPA 4.5] Persistindo ${persistedWallSegments.length} wallSegments classificados pra UI overlay`);
+          }
+
           try {
             await storage.addExtractedData({
               projectId, fileId: sourceFileId, elementType: "etapa3_annotated_plan",
@@ -2891,6 +2959,7 @@ export async function registerRoutes(
                 summary: summaryAll,
                 generatedAt: new Date().toISOString(),
                 source: annotationSource,
+                wallSegments: persistedWallSegments,
                 annotationErrors,  // Parte 1 do bugfix — visibilidade pra UI
               },
               hasAssumption: 0,
