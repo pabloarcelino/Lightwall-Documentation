@@ -312,6 +312,9 @@ export default function ProjectDetails() {
   const [isProcessing, setIsProcessing] = useState(false);
   // Fase E.7: feature flag pra nova interface da aba processamento.
   const newWorkspace = useNewWorkspaceUI();
+  /** Quando o usuario aperta "Abrir abas detalhadas", reverte temporariamente
+   *  pra UI antiga (8 abas) sem desligar o flag global do workspace novo. */
+  const [showLegacyTabs, setShowLegacyTabs] = useState(false);
   const [pipelineVisible, setPipelineVisible] = useState(true);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
@@ -1130,6 +1133,76 @@ export default function ProjectDetails() {
           </Card>
         )}
 
+        {/* MODO CONSOLIDADO: quando o projeto ja foi processado E newWorkspace
+            esta ativo (default true), mostra UMA tela com tudo (planta,
+            inspector, descricao, auditoria, orcamento) e esconde as 8 abas.
+            "Mostrar abas detalhadas" abre o modo antigo via flag local. */}
+        {project.status === "completed" && budget && newWorkspace.enabled && !showLegacyTabs ? (() => {
+          const fusao = (extractedData || []).find((d: any) => d.elementType === "etapa4_fusao");
+          const annotatedPlan = (extractedData || []).find((d: any) => d.elementType === "etapa3_annotated_plan");
+          const auditNotesData = (extractedData || []).find((d: any) => d.elementType === "audit_notes");
+          const allWalls: any[] = (liveWalls || (fusao?.data as any)?.resultado?.walls || []) as any[];
+          const allSlabs: any[] = ((fusao?.data as any)?.resultado?.slabs || []) as any[];
+          const allNotes: any[] = ((auditNotesData?.data as any)?.notes || []) as any[];
+          const floorImages: Array<{ pavimento: string; image: string; mimeType?: string; isClientSideFallback?: boolean }> = [];
+          const imgsData = (annotatedPlan?.data as any)?.images;
+          if (Array.isArray(imgsData)) for (const img of imgsData) if (img?.image) floorImages.push({ pavimento: img.pavimento || "all", image: img.image, mimeType: img.mimeType });
+          else if ((annotatedPlan?.data as any)?.image) floorImages.push({ pavimento: "all", image: (annotatedPlan!.data as any).image, mimeType: (annotatedPlan!.data as any).mimeType });
+          if (floorImages.length === 0 && allWalls.some((w: any) => w.bbox || w.endpoints)) {
+            const refImgs: any[] = (annotatedPlan?.data as any)?.referenceImages || [];
+            const plantaBaixaRefs = refImgs.filter(r => r.pageType === "planta_baixa");
+            for (const r of plantaBaixaRefs) floorImages.push({ pavimento: r.pavimento || "all", image: r.image, mimeType: r.mimeType, isClientSideFallback: true });
+          }
+          const wallSegments = ((annotatedPlan?.data as any)?.wallSegments as any[]) || [];
+          const annotationErrors = ((annotatedPlan?.data as any)?.annotationErrors as any[]) || [];
+          const steps = pipelineSteps.filter(s => !s.parentStep).map(s => ({
+            step: s.step, label: s.label,
+            status: s.status === "done" ? ("done" as const) : s.status === "running" ? ("running" as const) : s.status === "error" ? ("error" as const) : ("pending" as const),
+          }));
+          const projectStatus: "completed" | "processing" | "error" | "draft" =
+            isProcessing || project.status === "processing" ? "processing" :
+            project.status === "completed" ? "completed" :
+            project.status === "error" ? "error" : "draft";
+          const hasFailures = ((annotatedPlan?.data as any)?.annotationErrors?.length ?? 0) > 0 || allNotes.some((n: any) => n.severity === "error");
+          return (
+            <div className="space-y-3">
+              {/* Header consolidado com toggle pra abas detalhadas */}
+              <div className="flex items-center justify-between gap-2 px-1">
+                <div className="flex items-center gap-3 text-sm">
+                  <span className="text-xs uppercase tracking-wider text-muted-foreground">Total</span>
+                  <span className="font-bold text-lg">R$ {budget?.totalCost ? Number(budget.totalCost).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "—"}</span>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-sm"><strong>{allWalls.filter((w: any) => w.enabled !== false).length}</strong> paredes</span>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-sm"><strong>{allSlabs.filter((s: any) => s.enabled !== false).length}</strong> lajes</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowLegacyTabs(true)}
+                  className="text-xs text-muted-foreground hover:text-foreground underline"
+                >
+                  Abrir abas detalhadas (modo avançado)
+                </button>
+              </div>
+              <WorkspaceLayout
+                status={projectStatus}
+                hasFailures={hasFailures}
+                steps={steps}
+                projectId={Number(projectId)}
+                walls={allWalls}
+                slabs={allSlabs}
+                auditNotes={allNotes}
+                floorImages={floorImages}
+                annotationErrors={annotationErrors}
+                wallSegments={wallSegments}
+                isProcessing={isProcessing}
+                costUsd={undefined}
+                elapsedMs={undefined}
+                onReprocess={() => processMutation.mutate()}
+              />
+            </div>
+          );
+        })() : (
         <Tabs defaultValue={isProcessing || project.status === "processing" ? "processamento" : (budget ? "description" : "files")} className="space-y-6">
           <TabsList className="grid w-full grid-cols-8">
             <TabsTrigger value="processamento" data-testid="tab-processamento">
@@ -1983,6 +2056,14 @@ export default function ProjectDetails() {
 
               const annotationErrors: Array<{ pavimento: string; pageIndex: number; error: string }> =
                 ((annotatedPlan?.data as any)?.annotationErrors as any[]) || [];
+              const wallSegments: Array<{
+                id: string;
+                classe: "externa" | "interna" | "muro";
+                pavimento: string;
+                p1: [number, number];
+                p2: [number, number];
+                thickness_pct: number;
+              }> = ((annotatedPlan?.data as any)?.wallSegments as any[]) || [];
               return (
                 <WorkspaceLayout
                   status={projectStatus}
@@ -1994,6 +2075,7 @@ export default function ProjectDetails() {
                   auditNotes={allNotes}
                   floorImages={floorImages}
                   annotationErrors={annotationErrors}
+                  wallSegments={wallSegments}
                   isProcessing={isProcessing}
                   onReprocess={() => processMutation.mutate()}
                 />
@@ -3142,6 +3224,7 @@ export default function ProjectDetails() {
             </Card>
           </TabsContent>
         </Tabs>
+        )}
       </main>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ProcessingHeader, type ProjectStatus } from "./ProcessingHeader";
-import { PlantaWorkspace, type AnnotationError } from "./PlantaWorkspace";
+import { PlantaWorkspace, type AnnotationError, type WallSegmentRender } from "./PlantaWorkspace";
 import { InspectorPanel } from "./InspectorPanel";
 import { TechnicalDrawer } from "./TechnicalDrawer";
 import { ProjectActionBar } from "./ProjectActionBar";
@@ -21,6 +21,8 @@ interface WorkspaceLayoutProps {
   floorImages: Array<{ pavimento: string; image: string; mimeType?: string; isClientSideFallback?: boolean }>;
   /** Erros do `etapa3_annotated_plan.data.annotationErrors`. Surface no PlantaWorkspace. */
   annotationErrors?: AnnotationError[];
+  /** wallSegments classificados do `etapa3_annotated_plan.data.wallSegments`. Geometria correta pra overlay. */
+  wallSegments?: WallSegmentRender[];
   isProcessing: boolean;
   // Actions
   hasPendingChanges?: boolean;
@@ -66,6 +68,7 @@ export function WorkspaceLayout(props: WorkspaceLayoutProps) {
           walls={props.walls}
           sync={sync}
           annotationErrors={props.annotationErrors}
+          wallSegments={props.wallSegments}
         />
         {/* Inspector */}
         <InspectorPanel

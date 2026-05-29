@@ -45,6 +45,21 @@ interface Wall {
   enabled?: boolean;
 }
 
+/**
+ * Segmentos detectados pelo wallInventory + classificados topologicamente
+ * (etapa3_annotated_plan.data.wallSegments). Quando disponivel, sao a fonte
+ * de verdade pra desenhar o overlay — `walls` (lista logica) raramente tem
+ * endpoints utilizaveis (vem da Etapa 3 Gemini, geralmente sem geometria).
+ */
+export interface WallSegmentRender {
+  id: string;
+  classe: "externa" | "interna" | "muro";
+  pavimento: string;
+  p1: [number, number];
+  p2: [number, number];
+  thickness_pct: number;
+}
+
 interface PlantaWorkspaceProps {
   floorImages: FloorImage[];
   walls: Wall[];
@@ -56,6 +71,10 @@ interface PlantaWorkspaceProps {
    *  Quando presente, um card vermelho explica POR QUE a planta server-rendered
    *  falhou. Diagnóstico — caller pode atacar a causa real depois. */
   annotationErrors?: AnnotationError[];
+  /** Segments do wallInventory classificados topologicamente. Quando presente,
+   *  o overlay e desenhado a partir DELES (geometria correta) em vez de `walls`
+   *  (que vem da Etapa 3 Gemini, geralmente sem endpoints). */
+  wallSegments?: WallSegmentRender[];
 }
 
 const CLASSE_COLOR: Record<string, string> = {
@@ -71,6 +90,7 @@ export function PlantaWorkspace({
   showLabels = true,
   showEnvelope = false,
   annotationErrors = [],
+  wallSegments = [],
 }: PlantaWorkspaceProps) {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -274,7 +294,7 @@ export function PlantaWorkspace({
               data-testid={`planta-img-${activeFloor.pavimento}`}
             />
           )}
-          {dims && wallsForPav.length > 0 && (
+          {dims && (wallsForPav.length > 0 || wallSegments.length > 0) && (
             <svg
               className="absolute top-0 left-0 pointer-events-none"
               width={dims.w}
@@ -282,7 +302,32 @@ export function PlantaWorkspace({
               viewBox={`0 0 ${dims.w} ${dims.h}`}
               style={{ width: dims.w, height: dims.h }}
             >
-              {wallsForPav.map(w => {
+              {/* Camada A — segments do inventario (geometria correta).
+                  Quando ha wallSegments, ELES sao a fonte visual; walls da
+                  Etapa 3 ficam so pra inspector (raramente tem endpoints). */}
+              {wallSegments
+                .filter(s => sync.activePavimento === "all" || s.pavimento.toLowerCase() === sync.activePavimento.toLowerCase())
+                .map((seg) => {
+                  const color = CLASSE_COLOR[seg.classe] || "#888";
+                  const poly = endpointsToWallPolygon(seg.p1, seg.p2, seg.thickness_pct);
+                  const points = wallPolygonToSvgPoints(poly, dims.w, dims.h);
+                  return (
+                    <polygon
+                      key={seg.id}
+                      points={points}
+                      fill={color}
+                      fillOpacity={WALL_FILL_OPACITY}
+                      stroke={color}
+                      strokeOpacity={WALL_STROKE_OPACITY}
+                      strokeWidth={1.5}
+                      strokeLinejoin="round"
+                    />
+                  );
+                })}
+              {/* Camada B — walls da Etapa 3 (interativas). Quando ha
+                  wallSegments, esta camada vira backup invisivel pra preservar
+                  hover/click sem duplicar visual. */}
+              {wallSegments.length === 0 && wallsForPav.map(w => {
                 let x = 0, y = 0, ww = 0, hh = 0;
                 if (Array.isArray(w.bbox) && w.bbox.length === 4) {
                   const [ymin, xmin, ymax, xmax] = w.bbox;
