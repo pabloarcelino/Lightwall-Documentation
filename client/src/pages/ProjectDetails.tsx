@@ -74,7 +74,7 @@ import FloorPlanDiagram from "@/components/FloorPlanDiagram";
 import AnnotatedFloorPlan from "@/components/AnnotatedFloorPlan";
 import { LightwallDots } from "@/components/LightwallLogo";
 import { PageHeader } from "@/components/PageHeader";
-import { AiTimeline } from "@/components/AiTimeline";
+import { ProcessingLiveView } from "@/components/live-pipeline/ProcessingLiveView";
 import { WorkspaceLayout } from "@/components/processing/WorkspaceLayout";
 import { useNewWorkspaceUI } from "@/components/processing/useProcessingSync";
 import { LoadingState } from "@/components/ui/states";
@@ -911,14 +911,6 @@ export default function ProjectDetails() {
       </PageHeader>
 
       <main className="container mx-auto px-4 py-8">
-        {projectId && (
-          <div className="mb-6">
-            <AiTimeline
-              projectId={projectId}
-              enabled={isProcessing || project.status === "processing"}
-            />
-          </div>
-        )}
         <div className="flex items-center gap-4 mb-6 glass-card rounded-xl p-4">
           <div className="flex items-center gap-3">
             <span className="text-sm font-medium text-muted-foreground">Tipo:</span>
@@ -1138,8 +1130,12 @@ export default function ProjectDetails() {
           </Card>
         )}
 
-        <Tabs defaultValue={budget ? "description" : "files"} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-7">
+        <Tabs defaultValue={isProcessing || project.status === "processing" ? "processamento" : (budget ? "description" : "files")} className="space-y-6">
+          <TabsList className="grid w-full grid-cols-8">
+            <TabsTrigger value="processamento" data-testid="tab-processamento">
+              <Activity className="h-4 w-4 mr-2" />
+              Processamento
+            </TabsTrigger>
             <TabsTrigger value="description" disabled={!budget} data-testid="tab-description">
               <Info className="h-4 w-4 mr-2" />
               Analise IA
@@ -1169,6 +1165,33 @@ export default function ProjectDetails() {
               Exportar
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="processamento">
+            {projectId ? (
+              <ProcessingLiveView
+                projectId={projectId}
+                isActive={isProcessing || project.status === "processing"}
+                onReprocess={async (stage) => {
+                  try {
+                    const res = await fetch(`/api/projects/${projectId}/reprocess/${stage}`, { method: "POST" });
+                    if (stage === "7.5" && res.status === 202) {
+                      // Delega para o endpoint de imagem anotada existente
+                      await fetch(`/api/projects/${projectId}/annotated-image`, { method: "POST" });
+                      toast({ title: "Imagens reprocessadas", description: "Plantas anotadas atualizadas." });
+                      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+                      return;
+                    }
+                    if (!res.ok) {
+                      const body = await res.json().catch(() => ({}));
+                      toast({ title: "Reprocesso indisponivel", description: body.message || `Etapa ${stage}`, variant: "destructive" });
+                    }
+                  } catch (err: any) {
+                    toast({ title: "Erro", description: err?.message || "Falha no reprocesso", variant: "destructive" });
+                  }
+                }}
+              />
+            ) : null}
+          </TabsContent>
 
           <TabsContent value="description">
             {budget?.projectDescription ? (
