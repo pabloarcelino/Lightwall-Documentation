@@ -4,6 +4,7 @@ import fs from "fs/promises";
 import { PDFDocument } from "pdf-lib";
 import path from "path";
 import { getBuildingTypeConfig } from "./buildingTypePrompts";
+import type { ProjectCharacterization } from "../extraction/projectCharacterization";
 
 let activeGenAI: GoogleGenAI = genAI;
 let activeModelName: string = MODEL_NAME;
@@ -859,6 +860,7 @@ export async function extractGeometryParallel(
   concurrency: number = 2,
   buildingType?: string,
   peDireito: number = 3.0,
+  characterization?: ProjectCharacterization | null,
 ): Promise<GeometryResult & { failedPages: number[] }> {
   try {
     const pages = await getFilePages(filePath, fileType);
@@ -941,7 +943,7 @@ export async function extractGeometryParallel(
         // Include corte/fachada for height context
         parts.push(...corteParts);
 
-        const prompt = buildGeometryPrompt([pav], buildingType, peDireito);
+        const prompt = buildGeometryPrompt([pav], buildingType, peDireito, characterization);
         parts.push({ text: prompt });
 
         console.log(`[ETAPA3] Pavimento "${pav}": ${floorPages.length} pagina(s) via ${_providerLabelEtapa3}`);
@@ -1126,13 +1128,51 @@ Se houver correcoes: retorne o JSON COMPLETO corrigido { "walls": [...], "slabs"
   return null;
 }
 
-function buildGeometryPrompt(pavimentos: string[], buildingType?: string, peDireito: number = 3.0): string {
+function buildGeometryPrompt(
+  pavimentos: string[],
+  buildingType?: string,
+  peDireito: number = 3.0,
+  characterization?: ProjectCharacterization | null,
+): string {
   const btConfig = getBuildingTypeConfig(buildingType);
   const pavStr = pavimentos.join(", ");
   const isSingle = pavimentos.length === 1;
   const nivelRef = isSingle ? pavimentos[0] : pavStr;
 
+  // Etapa 1.5 — caracterizacao previa: injeta hints de typology/padrao/ranges
+  // pra calibrar expectativas do modelo (count esperado de paredes, espessura,
+  // pe-direito). Diminui falsos positivos em projetos pequenos e falsos
+  // negativos em projetos grandes. Quando ausente, mantem comportamento legado.
+  let caractBlock = "";
+  if (characterization) {
+    const c = characterization;
+    const progStr = c.programa.length > 0
+      ? c.programa.map(p => `${p.qty}x ${p.ambiente}`).join(", ")
+      : "n/a";
+    const paredesEsperadas = c.estimativas.paredeCountRange.join("-");
+    const espessuraEsperada = `${c.estimativas.espessuraParedeM[0].toFixed(2)}-${c.estimativas.espessuraParedeM[1].toFixed(2)}m`;
+    const peDireitoEsperado = `${c.estimativas.peDireitoM[0].toFixed(2)}-${c.estimativas.peDireitoM[1].toFixed(2)}m`;
+    const areaEsperada = `${c.estimativas.areaTotalRangeM2[0]}-${c.estimativas.areaTotalRangeM2[1]}m2`;
+    caractBlock = `
+=== CARACTERIZACAO PREVIA DO PROJETO (Etapa 1.5) ===
+Antes desta extracao, uma analise multimodal global classificou o projeto. Use estes hints para CALIBRAR seu count, NAO para forcar.
+- Tipologia: ${c.typology} | Padrao: ${c.padrao} | Confianca: ${c.confidence}
+- Pavimentos identificados: ${c.pavimentos.join(", ")}
+- Programa: ${progStr}
+- Forma do envelope: ${c.caracteristicas.formaEnvelopePrincipal}
+- Tem cobertura: ${c.caracteristicas.temCobertura ? "sim" : "nao"} | Garagem: ${c.caracteristicas.temGaragem ? "sim" : "nao"} | Muros: ${c.caracteristicas.temMuros ? "sim" : "nao"} | Pergolado: ${c.caracteristicas.temPergolado ? "sim" : "nao"}
+RANGES ESPERADOS (sanity check — se sua extracao ficar muito fora, revise):
+- Total de paredes (TODOS os pavimentos): ${paredesEsperadas}
+- Espessura tipica de parede: ${espessuraEsperada}
+- Pe-direito tipico: ${peDireitoEsperado}
+- Area construida total: ${areaEsperada}
+${c.notes ? `Observacao da caracterizacao: ${c.notes}\n` : ""}IMPORTANTE: estes ranges sao um HINT — se voce VE claramente mais ou menos paredes do que o esperado, confie na sua observacao. Os ranges existem so pra detectar extracoes drasticamente fora da curva (5x menos, 3x mais).
+
+`;
+  }
+
   return `Voce e um engenheiro orcamentista experiente. Analise ${isSingle ? "esta planta baixa" : "estas plantas baixas"} (${nivelRef}) e extraia TODOS os elementos construtivos para orcamento de paineis Lightwall.
+${caractBlock}
 
 === PRE-TRATAMENTO (IGNORAR ELEMENTOS NAO-ESTRUTURAIS) ===
 IGNORE COMPLETAMENTE os seguintes elementos do desenho — eles NAO sao paredes nem elementos construtivos:

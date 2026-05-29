@@ -1380,6 +1380,14 @@ export async function registerRoutes(
       let detectedBuildingType: string | undefined;
       const effectiveBuildingType = (): string | undefined => userBuildingType || detectedBuildingType;
 
+      // PR3 — caracterizacao alimenta a extracao geometrica:
+      // Loop 1 (abaixo) so faz pre-flight + IFC + classify+tables, deferindo
+      // a extracao geometrica para depois da Etapa 1.5. Cada arquivo enfileira
+      // uma closure de geometria que sera drainada apos `characterization`
+      // ser computada — assim o prompt de Etapa 3 recebe o JSON estruturado
+      // como hint, e o modelo calibra count/espessura/pe-direito.
+      const geometryDeferred: Array<{ file: typeof files[0]; fileName: string; run: () => Promise<void> }> = [];
+
       for (const file of files) {
         try {
           // Resolve o caminho do arquivo em disco. Projetos antigos podem ter
@@ -1505,6 +1513,14 @@ export async function registerRoutes(
             console.log(`[ETAPA1] ${vista3dCount} pagina(s) classificada(s) como vista_3d — excluida(s) da extracao de paredes para evitar duplicacao com plantas baixas.`);
           }
 
+          // Defer geometria: closure capta file/filePath/preflight/classifications
+          // por block-scope do for-loop; `characterization` e lida do escopo
+          // externo no momento da execucao (depois da Etapa 1.5). Permite que o
+          // prompt da Etapa 3 receba hints estruturados (tipologia, ranges esperados).
+          geometryDeferred.push({
+            file,
+            fileName: file.originalName,
+            run: async () => {
           if (hasGeometryPages || classifications.every(c => c.classificacao !== "irrelevante")) {
             const plantaPages = classifications.filter(c => c.classificacao === "planta_baixa");
 
@@ -1519,7 +1535,7 @@ export async function registerRoutes(
                   inputSummary: `file=${file.originalName} type=${file.fileType} pages=${classifications.length} buildingType=${effectiveBuildingType() || "n/a"} peDireito=${peDireito}`,
                   inputFileId: String(file.id),
                 },
-                () => extractGeometryParallel(filePath, file.fileType, classifications, 3, effectiveBuildingType(), peDireito),
+                () => extractGeometryParallel(filePath, file.fileType, classifications, 3, effectiveBuildingType(), peDireito, characterization),
                 (out: any) => ({
                   walls: out?.walls?.length ?? 0,
                   slabs: out?.slabs?.length ?? 0,
@@ -1682,26 +1698,24 @@ export async function registerRoutes(
               sendProgress(projectId, 3, "Extracao Geometrica", "done", `${geometry.walls.length} paredes, ${geometry.slabs.length} lajes, ${geometry.corners.length} cantos${geoFailedMsg}`);
             }
           }
+            }, // fim do run: async () => — closure de geometria deferida
+          });
         } catch (fileError) {
           console.error(`Erro ao processar arquivo ${file.id}:`, fileError);
-          sendProgress(projectId, 3, "Extracao Geometrica", "error", `Erro ao processar ${file.originalName} - continuando com outros arquivos`);
+          sendProgress(projectId, 1, "Classificacao + Tabelas", "error", `Erro ao processar ${file.originalName} - continuando com outros arquivos`);
         }
       }
 
-      if (allGeometries.length === 0 && mergedTableData.paredes_de_tabela.length === 0) {
-        await storage.updateProjectStatus(projectId, "error");
-        cleanupApiMetrics(projectId);
-        sendProgress(projectId, 0, "Erro", "error", "Nenhum dado geometrico ou tabular foi extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas.");
-        return res.status(400).json({ message: "Nenhum dado extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas." });
-      }
+      // NOTA: a checagem de "nenhum dado geometrico extraido" foi movida para
+      // DEPOIS do drain de geometryDeferred (ver abaixo). Aqui ainda nao temos
+      // geometria — Etapa 1.5 precisa rodar primeiro para alimentar a Etapa 3.
 
       // ===== Etapa 1.5 — Caracterizacao do projeto =====
-      // Roda DEPOIS da Etapa 1 (classificacao + tabelas) e ANTES das etapas
-      // 3.5+ (inventory, envelope, selfCheck, describe). Produz JSON estruturado
-      // com tipologia, padrao, programa de ambientes e ranges esperados.
-      // O resultado alimenta as etapas subsequentes (ranges dinamicos em
-      // selfCheck, sanity check de count em wallInventory, hint de forma no
-      // envelopeExtractor, input rico para describeProject).
+      // Roda DEPOIS da Etapa 1 (classificacao + tabelas) e ANTES da Etapa 3
+      // (extracao geometrica). Produz JSON estruturado com tipologia, padrao,
+      // programa de ambientes e ranges esperados. O resultado alimenta:
+      //   - Etapa 3 (extractGeometryParallel) via injecao no prompt como hints
+      //   - Etapa 3.5+ (inventory, envelope, selfCheck, describe) ja consumiam
       // Custo: 1 chamada Gemini (~$0.003). Falha = continua sem ranges
       // refinados, fallback para buildingTypePrompts hardcoded.
       let characterization: ProjectCharacterization | null = null;
@@ -1738,6 +1752,26 @@ export async function registerRoutes(
       } catch (charErr: any) {
         console.warn(`[CARACTERIZACAO] Pulada por erro: ${charErr?.message || charErr}`);
         sendProgress(projectId, 1.5, "Caracterizacao", "done", `pulada (erro: ${charErr?.message || "desconhecido"})`);
+      }
+
+      // ===== Drain geometryDeferred — Etapas 2.5/3/3.5 por arquivo =====
+      // Cada closure agora le `characterization` do escopo externo (ja populado)
+      // e a passa para extractGeometryParallel, que injeta no prompt como hint.
+      for (const { file, fileName, run } of geometryDeferred) {
+        try {
+          await run();
+        } catch (geomError: any) {
+          console.error(`[GEOMETRIA] Falha em ${fileName}:`, geomError?.message || geomError);
+          sendProgress(projectId, 3, "Extracao Geometrica", "error", `Erro ao processar ${fileName} - continuando com outros arquivos`);
+        }
+      }
+
+      // Checagem de bail-out movida pra cá: agora avalia depois da geometria.
+      if (allGeometries.length === 0 && mergedTableData.paredes_de_tabela.length === 0) {
+        await storage.updateProjectStatus(projectId, "error");
+        cleanupApiMetrics(projectId);
+        sendProgress(projectId, 0, "Erro", "error", "Nenhum dado geometrico ou tabular foi extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas.");
+        return res.status(400).json({ message: "Nenhum dado extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas." });
       }
 
       // ===== Etapa 3.4 — CV Pipeline (Fase E) =====
@@ -4092,6 +4126,61 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[ANNOTATED-IMG] Erro:", error);
       res.status(500).json({ message: error?.message || "Erro ao gerar imagem anotada" });
+    }
+  });
+
+  // PR3 — Reprocesso granular de uma etapa.
+  // Implementacao faseada: por enquanto suporta apenas etapas idempotentes que
+  // nao dependem de output anterior em RAM. As demais retornam 400 com
+  // instrucao para usar o reprocesso completo via /api/projects/:id/process.
+  // Atualmente implementado:
+  //   - 7.5 (Imagens anotadas) → delega para a logica de /annotated-image
+  // Demais (0.5, 1, 1.5, 8) marcadas como suportadas mas com "ainda nao
+  // implementado" — endpoint existe para o frontend nao crashar.
+  app.post("/api/projects/:id/reprocess/:stage", requireAuth, async (req, res) => {
+    try {
+      const projectId = parseInt(String(req.params.id));
+      const stage = String(req.params.stage);
+      if (!Number.isFinite(projectId)) {
+        return res.status(400).json({ message: "ID de projeto invalido" });
+      }
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto nao encontrado" });
+
+      const IDEMPOTENT_STAGES = new Set(["0.5", "1.5", "7.5", "8"]);
+      const NOT_REPROCESSABLE_REASON =
+        "Esta etapa depende de outputs intermediarios e nao pode ser reprocessada isoladamente. " +
+        "Use POST /api/projects/:id/process para reprocesso completo.";
+
+      if (!IDEMPOTENT_STAGES.has(stage)) {
+        return res.status(400).json({
+          message: NOT_REPROCESSABLE_REASON,
+          stage,
+          supportedStages: Array.from(IDEMPOTENT_STAGES),
+        });
+      }
+
+      // 7.5: delegamos ao endpoint /annotated-image (mesma logica, evita duplicar
+      // ~130 linhas). O frontend pode optar por chamar /annotated-image direto;
+      // mantemos este caminho como atalho semantico.
+      if (stage === "7.5") {
+        return res.status(202).json({
+          message: "Para reprocessar imagens anotadas, chame POST /api/projects/:id/annotated-image.",
+          stage,
+          delegateTo: `/api/projects/${projectId}/annotated-image`,
+        });
+      }
+
+      // 0.5, 1.5, 8: reservados pra implementacao futura. Retornamos 501 (Not
+      // Implemented) com mensagem clara — endpoint existe, comportamento ainda
+      // nao. Permite que a UI mostre o botao sem crashar.
+      return res.status(501).json({
+        message: `Reprocesso granular da etapa ${stage} ainda nao implementado. Use o reprocesso completo por enquanto.`,
+        stage,
+      });
+    } catch (err: any) {
+      console.error("[REPROCESS]", err?.message || err);
+      return res.status(500).json({ message: err?.message || "Erro interno" });
     }
   });
 
