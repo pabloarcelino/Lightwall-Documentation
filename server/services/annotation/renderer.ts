@@ -419,6 +419,17 @@ function buildSvgOverlay(
   // Legenda no rodapé (gerada por código, conta os elementos visíveis)
   const legend = opts.showLegend ? buildLegend(walls, slabs, width, height, labelFs) : "";
 
+  // Diagnostico: se temos paredes no input mas NENHUMA virou shape, o usuario
+  // recebe uma planta "anotada" sem anotacao alguma — bug silencioso classico.
+  // Causa comum: walls vem com classe valida mas sem `endpoints` nem `bbox`,
+  // tipico de extracao via tabela (parede_tabela) onde so existe comprimento.
+  if (walls.length > 0 && wallShapes.length === 0) {
+    console.warn(
+      `[RENDERER] ATENCAO: ${walls.length} parede(s) recebidas mas 0 renderizadas — ` +
+      `provavelmente sem endpoints nem bbox. Estilo=${opts.wallStyle}.`,
+    );
+  }
+
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <g>${lotShape}</g>
   <g>${envelopeShape}</g>

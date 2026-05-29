@@ -1082,9 +1082,13 @@ export async function registerRoutes(
       }
       await storage.deleteProject(id);
       res.json({ message: "Projeto excluido com sucesso" });
-    } catch (error) {
-      console.error("Erro ao excluir projeto:", error);
-      res.status(500).json({ message: "Erro ao excluir projeto" });
+    } catch (error: any) {
+      const detail = error?.message || String(error);
+      console.error("Erro ao excluir projeto:", detail);
+      res.status(500).json({
+        message: "Erro ao excluir projeto",
+        detail,
+      });
     }
   });
 
@@ -2786,7 +2790,11 @@ export async function registerRoutes(
         }
 
         // ===== Persist annotated + reference together (single record) =====
-        if (annotatedImages.length > 0 || referenceImages.length > 0) {
+        // Persiste mesmo quando ambos arrays estao vazios MAS ha annotationErrors —
+        // sem isso o frontend nao tem como saber POR QUE a planta anotada nao
+        // apareceu (so via console.error do servidor). Com o record salvo, a UI
+        // pode mostrar a mensagem de erro do pavimento direto pro usuario.
+        if (annotatedImages.length > 0 || referenceImages.length > 0 || annotationErrors.length > 0) {
           const sourceFileId = files.find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""))?.id
             || files.find((f: any) => f.fileType === "pdf")?.id
             || null;

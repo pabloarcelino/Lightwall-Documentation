@@ -142,7 +142,10 @@ export default function Dashboard() {
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
       const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Erro ao excluir");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || body.message || `HTTP ${res.status}`);
+      }
       return res.json();
     },
     onSuccess: () => {
@@ -150,8 +153,8 @@ export default function Dashboard() {
       qc.invalidateQueries({ queryKey: ["/api/projects"] });
       setPendingDelete(null);
     },
-    onError: () => {
-      toast({ title: "Erro", description: "Erro ao excluir projeto", variant: "destructive" });
+    onError: (err: Error) => {
+      toast({ title: "Erro ao excluir projeto", description: err.message, variant: "destructive" });
       setPendingDelete(null);
     },
   });

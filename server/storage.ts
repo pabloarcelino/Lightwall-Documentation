@@ -348,7 +348,21 @@ export class DatabaseStorage implements IStorage {
     await db.delete(budgets).where(eq(budgets.projectId, id));
     await db.delete(extractedData).where(eq(extractedData.projectId, id));
     await db.delete(aiRuns).where(eq(aiRuns.projectId, id));
-    await db.delete(pipelineEvents).where(eq(pipelineEvents.projectId, id));
+    // pipelineEvents foi adicionada no PR2 — em bancos antigos onde
+    // `drizzle-kit push` nao foi rodado a tabela nao existe e a query
+    // explode com "relation does not exist". O FK do schema ja tem
+    // onDelete: "cascade", entao quando a tabela existir o banco apaga
+    // sozinho. Aqui: best-effort, nunca bloqueia o delete do projeto.
+    try {
+      await db.delete(pipelineEvents).where(eq(pipelineEvents.projectId, id));
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      if (/does not exist|relation .* pipeline_events/i.test(msg)) {
+        console.warn(`[STORAGE] pipeline_events nao existe no DB — pulando cleanup. Rode \`npx drizzle-kit push\` pra criar.`);
+      } else {
+        console.warn(`[STORAGE] Falha ao apagar pipeline_events do projeto ${id}: ${msg}`);
+      }
+    }
     await db.delete(projectFiles).where(eq(projectFiles.projectId, id));
     await db.delete(projects).where(eq(projects.id, id));
   }
