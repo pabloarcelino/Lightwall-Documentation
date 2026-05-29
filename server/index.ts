@@ -5,6 +5,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupAuth, ensureDefaultUser } from "./auth";
 import { ensureProductCatalog } from "./seed-startup";
+import { bootstrapSchema } from "./bootstrap-schema";
 
 process.on("unhandledRejection", (reason) => {
   console.error("[fatal] unhandledRejection:", reason);
@@ -81,6 +82,7 @@ app.use((req, res, next) => {
 
 (async () => {
   setupAuth(app);
+  await bootstrapSchema();
   await ensureDefaultUser();
   await ensureProductCatalog();
   await registerRoutes(httpServer, app);
