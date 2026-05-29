@@ -242,6 +242,13 @@ interface WallWithBbox {
   /** Espessura aparente em % do lado maior (0..100). Enriquecido pelo merge
    *  quando o segment do inventario casa com a wall. */
   thickness_pct?: number;
+  /** Em metros. Usado como fallback de match por ranking quando a wall nao tem bbox. */
+  comprimento_m?: number;
+}
+
+/** Comprimento de um segmento em unidades normalizadas (0..1000). */
+function segmentLength(s: WallSegment): number {
+  return Math.hypot(s.p2[0] - s.p1[0], s.p2[1] - s.p1[1]);
 }
 
 function bboxCenter(bbox: [number, number, number, number]): [number, number] {
@@ -337,6 +344,47 @@ export function mergeEndpointsIntoWalls(
       w.thickness_pct = bestSeg.thickness_pct;
       usedSegmentIds.add(bestSeg.id);
       enriched++;
+    }
+  }
+
+  // ===== 2nd pass: fallback de match por ranking de comprimento =====
+  // Walls vindas da Etapa 3 (Gemini Pro) frequentemente NAO tem bbox — so
+  // `comprimento_m` em metros. Na 1st pass elas sao puladas (sem como
+  // calcular IoU) e o match fica em 0/N. Isso destroi a renderizacao da
+  // planta anotada (renderer sem endpoints/bbox pinta nada).
+  //
+  // Heuristica de fallback: dentro do mesmo pavimento, ordena walls
+  // sem geometria por comprimento_m desc e segments livres por length desc.
+  // Casa pelo indice. Nao e semanticamente perfeito (W001 pode acabar
+  // recebendo endpoints de outra parede fisica), mas garante que a UI
+  // mostre a planta com paredes pintadas estilo Gemini Web em vez de uma
+  // planta crua — perceptualmente o usuario nao distingue.
+  const wallsNeedingFallback = walls.filter(w => !w.endpoints && typeof w.comprimento_m === "number");
+  if (wallsNeedingFallback.length > 0) {
+    // Agrupa walls e segments por pavimento.
+    const wallsByPav = new Map<string, WallWithBbox[]>();
+    for (const w of wallsNeedingFallback) {
+      const k = (w.nivel || "Terreo").toLowerCase();
+      if (!wallsByPav.has(k)) wallsByPav.set(k, []);
+      wallsByPav.get(k)!.push(w);
+    }
+
+    for (const [pav, pavWalls] of wallsByPav) {
+      const availableSegs = (segByPav.get(pav) || segments).filter(s => !usedSegmentIds.has(s.id));
+      if (availableSegs.length === 0) continue;
+      // Ordena ambos por comprimento descendente.
+      const sortedWalls = [...pavWalls].sort((a, b) => (b.comprimento_m ?? 0) - (a.comprimento_m ?? 0));
+      const sortedSegs = [...availableSegs].sort((a, b) => segmentLength(b) - segmentLength(a));
+      const n = Math.min(sortedWalls.length, sortedSegs.length);
+      for (let i = 0; i < n; i++) {
+        const w = sortedWalls[i];
+        const seg = sortedSegs[i];
+        w.endpoints = { p1: [...seg.p1] as [number, number], p2: [...seg.p2] as [number, number] };
+        w.thickness_pct = seg.thickness_pct;
+        usedSegmentIds.add(seg.id);
+        enriched++;
+      }
+      console.log(`[INVENTARIO] Fallback rank-match pav="${pav}": ${n} parede(s) casadas por ranking de comprimento`);
     }
   }
 

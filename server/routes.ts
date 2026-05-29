@@ -2646,7 +2646,7 @@ export async function registerRoutes(
                 const defaultThicknessPct = characterization
                   ? Math.max(0.5, Math.min(4, (characterization.estimativas.espessuraParedeM[1] / 5) * 100))
                   : 1.5;
-                const { pngBuffer } = await renderAnnotatedImage(
+                const { pngBuffer, rendered } = await renderAnnotatedImage(
                   baseBuffer,
                   job.src.mimeType,
                   job.src.pageIndex,
@@ -2661,8 +2661,22 @@ export async function registerRoutes(
                     defaultThicknessPct,
                   },
                 );
+                // Quando recebemos N paredes mas o renderer pintou 0, registra
+                // como annotationError pra UI surfair o problema com mensagem
+                // util — sem isso o usuario ve uma planta crua e nao entende
+                // por que. Causa comum: walls vindas so com `comprimento_m`
+                // sem endpoints/bbox (Gemini Pro na Etapa 3) e wallInventory
+                // (Etapa 3.5) nao casou — agora temos fallback por ranking
+                // mas o erro fica visivel se TODOS os caminhos falharem.
+                if (job.enabledFloorWalls.length > 0 && rendered.walls === 0) {
+                  annotationErrors.push({
+                    pavimento: job.src.pavimento,
+                    pageIndex: job.src.pageIndex,
+                    error: `Renderizacao produziu 0 paredes pintadas (${job.enabledFloorWalls.length} recebidas sem endpoints nem bbox utilizaveis). Verifique se a Etapa 3 retornou geometria valida.`,
+                  });
+                }
                 const dataUrl = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-                console.log(`[ETAPA 4.5] Anotada ${job.src.pavimento} pg ${job.src.pageIndex}: ${Math.round(dataUrl.length / 1024)}KB`);
+                console.log(`[ETAPA 4.5] Anotada ${job.src.pavimento} pg ${job.src.pageIndex}: ${Math.round(dataUrl.length / 1024)}KB (${rendered.walls}/${job.enabledFloorWalls.length} paredes, ${rendered.slabs}/${job.enabledFloorSlabs.length} lajes pintadas)`);
                 emitImageRender({
                   projectId,
                   pavimento: job.src.pavimento,
