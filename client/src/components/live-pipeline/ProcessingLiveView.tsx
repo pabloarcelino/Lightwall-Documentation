@@ -37,9 +37,13 @@ export function ProcessingLiveView({ projectId, isActive = true, onReprocess }: 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toast]);
 
+  // SSE so abre quando o pipeline esta de fato rodando. Quando isActive=false
+  // (projeto ja completado), so hidratamos via GET /pipeline-events e nao
+  // mantemos stream aberto — evita reconnect loop que disparava 429 quando
+  // o servidor termina o broadcast.
   const { state, connected, exhausted: _exhausted, reconnect } = useProcessingEvents({
     projectId,
-    enabled: true,
+    enabled: isActive,
     onSseExhausted: handleSseExhausted,
   });
 

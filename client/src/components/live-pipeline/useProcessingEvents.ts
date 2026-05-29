@@ -387,9 +387,9 @@ export function useProcessingEvents({
   const [state, dispatch] = useReducer(reducer, initialState);
   const hydratedRef = useRef(false);
 
-  // Hidratar do GET /pipeline-events
+  // Hidratar do GET /pipeline-events — roda SEMPRE (historico) independente
+  // de enabled. enabled controla apenas o SSE stream.
   useEffect(() => {
-    if (!enabled) return;
     let cancelled = false;
     hydratedRef.current = false;
     fetch(`/api/projects/${projectId}/pipeline-events`)
@@ -406,7 +406,7 @@ export function useProcessingEvents({
         hydratedRef.current = true;
       });
     return () => { cancelled = true; };
-  }, [projectId, enabled]);
+  }, [projectId]);
 
   // Stream em tempo real
   const handleEvent = useCallback((_eventName: string, payload: unknown) => {

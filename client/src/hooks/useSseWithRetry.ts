@@ -31,9 +31,10 @@ interface UseSseWithRetryReturn {
  * - cleanup em unmount,
  * - callback quando o limite e atingido (caller mostra toast/cta).
  *
- * Extraido do padrao usado em ProjectDetails (/progress) — pra que multiplos
- * canais SSE (/ai-events, /pipeline-events streaming, etc) compartilhem a
- * mesma logica de resiliencia sem duplicar codigo.
+ * Estabilidade de conexao: apenas `url` e `enabled` reabrem a conexao. Os
+ * demais inputs (events list, callbacks, retry params) sao lidos via ref no
+ * momento da abertura — caller pode passar arrays/funcoes inline sem
+ * disparar reconexoes em cada render.
  */
 export function useSseWithRetry({
   url,
@@ -50,13 +51,22 @@ export function useSseWithRetry({
   const esRef = useRef<EventSource | null>(null);
   const retryCountRef = useRef(0);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Guarda a versao mais recente do onEvent sem reabrir o stream a cada render.
+
+  // Todos os inputs nao-conexao ficam em refs para nao disparar reabertura
+  // quando o caller passa valores inline (arrays/funcoes recriados a cada render).
+  const eventsRef = useRef(events);
   const onEventRef = useRef(onEvent);
   const onMaxRef = useRef(onMaxRetriesExceeded);
+  const maxRetriesRef = useRef(maxRetries);
+  const baseBackoffMsRef = useRef(baseBackoffMs);
 
+  useEffect(() => { eventsRef.current = events; }, [events]);
   useEffect(() => { onEventRef.current = onEvent; }, [onEvent]);
   useEffect(() => { onMaxRef.current = onMaxRetriesExceeded; }, [onMaxRetriesExceeded]);
+  useEffect(() => { maxRetriesRef.current = maxRetries; }, [maxRetries]);
+  useEffect(() => { baseBackoffMsRef.current = baseBackoffMs; }, [baseBackoffMs]);
 
+  // open() so depende de url+enabled — nao recriado quando outros inputs mudam.
   const open = useCallback(() => {
     if (!enabled) return;
     const es = new EventSource(url);
@@ -75,7 +85,7 @@ export function useSseWithRetry({
       // hiccups transitorios (proxy intermediario, redes flutuando).
       if (es.readyState !== EventSource.CLOSED) return;
 
-      if (retryCountRef.current >= maxRetries) {
+      if (retryCountRef.current >= maxRetriesRef.current) {
         setExhausted(true);
         onMaxRef.current?.();
         return;
@@ -83,7 +93,7 @@ export function useSseWithRetry({
 
       const attempt = retryCountRef.current + 1;
       retryCountRef.current = attempt;
-      const backoff = baseBackoffMs * Math.pow(2, attempt - 1);
+      const backoff = baseBackoffMsRef.current * Math.pow(2, attempt - 1);
       timeoutRef.current = setTimeout(() => {
         // Caso o usuario tenha desmontado ou outro reconnect tenha tomado o
         // ref, abandona silenciosamente.
@@ -102,14 +112,14 @@ export function useSseWithRetry({
       }
     };
 
-    for (const evName of events) {
+    for (const evName of eventsRef.current) {
       if (evName === "message") {
         es.onmessage = dispatchHandler("message");
       } else {
         es.addEventListener(evName, dispatchHandler(evName));
       }
     }
-  }, [url, enabled, maxRetries, baseBackoffMs, events]);
+  }, [url, enabled]);
 
   const reconnect = useCallback(() => {
     retryCountRef.current = 0;
