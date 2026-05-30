@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Download, RefreshCw, Receipt } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, RefreshCw, Receipt, Clock, CircleDollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -17,9 +17,27 @@ interface CompletedFooterProps {
   discountPct?: number;
   freightCost?: number;
   biomassCost?: number;
+  /** Tempo total do processamento em ms (do startedAt ao finishedAt). */
+  elapsedMs?: number | null;
+  /** Custo total das chamadas IA em USD. */
+  aiCostUsd?: number | null;
   onExportXlsx?: () => void;
   onMoreOptions?: () => void;
   onReprocess?: () => void;
+}
+
+function formatElapsed(ms: number | null | undefined): string | null {
+  if (ms == null || ms < 0) return null;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return `${m}m${s.toString().padStart(2, "0")}s`;
+}
+
+function formatUsd(usd: number | null | undefined): string | null {
+  if (usd == null || usd <= 0) return null;
+  if (usd < 0.01) return "< US$ 0.01";
+  return `US$ ${usd.toFixed(usd < 1 ? 3 : 2)}`;
 }
 
 function brl(n: number): string {
@@ -38,6 +56,8 @@ export function CompletedFooter({
   discountPct = 0,
   freightCost = 0,
   biomassCost = 0,
+  elapsedMs,
+  aiCostUsd,
   onExportXlsx,
   onMoreOptions,
   onReprocess,
@@ -46,6 +66,8 @@ export function CompletedFooter({
 
   const subtotalCategorias = categories.reduce((s, c) => s + c.cost, 0);
   const totalAreaCategorias = categories.reduce((s, c) => s + c.area, 0);
+  const elapsedStr = formatElapsed(elapsedMs);
+  const aiCostStr = formatUsd(aiCostUsd);
 
   return (
     <div className={cn(
@@ -70,6 +92,20 @@ export function CompletedFooter({
           </span>
           {expanded ? <ChevronDown className="h-4 w-4 ml-1" /> : <ChevronUp className="h-4 w-4 ml-1" />}
         </button>
+        <div className="hidden md:flex items-center gap-2 ml-2 mr-auto">
+          {elapsedStr && (
+            <span className="inline-flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground" title="Tempo de processamento">
+              <Clock className="h-3 w-3" />
+              {elapsedStr}
+            </span>
+          )}
+          {aiCostStr && (
+            <span className="inline-flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground" title="Custo IA">
+              <CircleDollarSign className="h-3 w-3 text-success" />
+              {aiCostStr}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {onReprocess && (
             <Button variant="outline" size="sm" onClick={onReprocess} data-testid="footer-reprocess">

@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { ArrowLeft, Pencil, Check, X } from "lucide-react";
+import { ArrowLeft, Pencil, Check, X, Clock, CircleDollarSign, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 interface ProjectHeaderProps {
   projectName: string;
   clientName?: string;
+  clientEmail?: string | null;
   status: "draft" | "processing" | "completed" | "error";
   projectType?: "teste" | "real";
   buildingType?: string;
@@ -13,7 +14,33 @@ interface ProjectHeaderProps {
   onRenameProject?: (name: string) => Promise<void> | void;
   onProjectTypeChange?: (t: "teste" | "real") => void;
   onBuildingTypeChange?: (t: string) => void;
+  /** Chips de telemetria — mostra Tempo, Custo IA, Tokens quando relevante. */
+  elapsedMs?: number | null;
+  costUsd?: number | null;
+  tokens?: number | null;
   menu?: React.ReactNode;
+}
+
+function formatElapsed(ms?: number | null): string | null {
+  if (ms == null || ms < 0) return null;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return `${m}m${s.toString().padStart(2, "0")}s`;
+}
+
+function formatUsd(usd?: number | null): string | null {
+  if (usd == null || usd <= 0) return null;
+  if (usd < 0.01) return "< US$ 0.01";
+  return `US$ ${usd.toFixed(usd < 1 ? 3 : 2)}`;
+}
+
+function formatTokens(n?: number | null): string | null {
+  if (n == null || n <= 0) return null;
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
 const STATUS_LABELS = {
@@ -34,6 +61,7 @@ const BUILDING_TYPES = ["residencial", "comercial", "industrial", "misto"] as co
 export function ProjectHeader({
   projectName,
   clientName,
+  clientEmail,
   status,
   projectType = "real",
   buildingType = "residencial",
@@ -41,8 +69,15 @@ export function ProjectHeader({
   onRenameProject,
   onProjectTypeChange,
   onBuildingTypeChange,
+  elapsedMs,
+  costUsd,
+  tokens,
   menu,
 }: ProjectHeaderProps) {
+  const elapsedStr = formatElapsed(elapsedMs);
+  const costStr = formatUsd(costUsd);
+  const tokensStr = formatTokens(tokens);
+  const hasMetrics = !!(elapsedStr || costStr || tokensStr);
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(projectName);
   const [saving, setSaving] = useState(false);
@@ -106,12 +141,42 @@ export function ProjectHeader({
                   )}
                 </div>
                 {clientName && (
-                  <div className="text-[11px] text-muted-foreground truncate">Cliente: {clientName}</div>
+                  <div className="text-[11px] text-muted-foreground truncate">
+                    Cliente: {clientName}
+                    {clientEmail && (
+                      <a href={`mailto:${clientEmail}`} className="ml-1.5 hover:underline" data-testid="header-client-email">
+                        ({clientEmail})
+                      </a>
+                    )}
+                  </div>
                 )}
               </div>
             </>
           )}
         </div>
+
+        {hasMetrics && (
+          <div className="hidden md:flex items-center gap-2 shrink-0 mr-1" data-testid="header-metrics">
+            {elapsedStr && (
+              <span className="inline-flex items-center gap-1 text-[11px] tabular-nums px-2 py-1 rounded-md border border-border bg-background/60" title="Tempo total de processamento">
+                <Clock className="h-3 w-3 text-muted-foreground" />
+                <span className="font-medium">{elapsedStr}</span>
+              </span>
+            )}
+            {costStr && (
+              <span className="inline-flex items-center gap-1 text-[11px] tabular-nums px-2 py-1 rounded-md border border-border bg-background/60" title="Custo total das chamadas IA">
+                <CircleDollarSign className="h-3 w-3 text-success" />
+                <span className="font-medium">{costStr}</span>
+              </span>
+            )}
+            {tokensStr && (
+              <span className="inline-flex items-center gap-1 text-[11px] tabular-nums px-2 py-1 rounded-md border border-border bg-background/60" title="Tokens consumidos">
+                <Cpu className="h-3 w-3 text-muted-foreground" />
+                <span className="font-medium">{tokensStr}</span>
+              </span>
+            )}
+          </div>
+        )}
 
         <span
           className={cn(
