@@ -78,6 +78,11 @@ import { ProcessingLiveView } from "@/components/live-pipeline/ProcessingLiveVie
 import { WorkspaceLayout } from "@/components/processing/WorkspaceLayout";
 import { useNewWorkspaceUI } from "@/components/processing/useProcessingSync";
 import { LoadingState } from "@/components/ui/states";
+import { ProjectHeader } from "@/components/project/ProjectHeader";
+import { DraftWorkspace } from "@/components/project/DraftWorkspace";
+import { ErrorState } from "@/components/project/ErrorState";
+import { CompletedFooter } from "@/components/project/CompletedFooter";
+import { ProjectMenu } from "@/components/project/ProjectMenu";
 import type { Product } from "@shared/schema";
 
 interface PipelineStep {
@@ -778,6 +783,312 @@ export default function ProjectDetails() {
     return null;
   }
 
+  // ============================================================
+  // NOVO LAYOUT ADAPTATIVO POR STATUS (commit do redesign)
+  // ============================================================
+  // Substitui o sistema de 8 abas por uma tela unica que muda baseado em
+  // project.status: draft/processing/completed/error. Conteudo secundario
+  // (Analise IA, Etapas, Metodologia, Exportar) vai pra modais via kebab.
+  // O return ANTIGO com PageHeader + glass card + Tabs fica desabilitado
+  // pelo `if (false)` abaixo. Vou removelo num commit subsequente quando
+  // os modais estiverem 100% migrados — manter por enquanto pra nao perder
+  // referencia da logica dos handlers.
+
+  const headerStatus: "draft" | "processing" | "completed" | "error" =
+    isProcessing || project.status === "processing" ? "processing" :
+    project.status === "completed" ? "completed" :
+    project.status === "error" ? "error" : "draft";
+
+  const productOptions = (catalogProducts || []).map((p: any) => ({
+    id: String(p.id),
+    label: `${p.name} (R$ ${Number(p.unitPrice).toLocaleString("pt-BR")})`,
+    panelType: p.panelType,
+  }));
+
+  const onPanelChange = (kind: "ext" | "int" | "muros" | "piso" | "coberta", value: string) => {
+    const setters = { ext: setSelectedProductIdExt, int: setSelectedProductIdInt, muros: setSelectedProductIdMuros, piso: setSelectedProductIdPiso, coberta: setSelectedProductIdCoberta };
+    setters[kind](value);
+    localStorage.setItem(`panel-${kind}-${projectId}`, value);
+  };
+
+  const onAnalysisModeChange = (v: string) => {
+    setAnalysisMode(v);
+    localStorage.setItem(`analysis-mode-${projectId}`, v);
+  };
+
+  const onPeDireitoChange = (v: number) => {
+    setPeDireito(v);
+    localStorage.setItem(`pe-direito-${projectId}`, String(v));
+  };
+
+  const onTypeChange = async (t: "teste" | "real") => {
+    await fetch(`/api/projects/${projectId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectType: t }),
+    });
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+    queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+  };
+
+  const onBuildingTypeChange = async (b: string) => {
+    await fetch(`/api/projects/${projectId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ buildingType: b }),
+    });
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+  };
+
+  const onRenameProject = async (name: string) => {
+    await fetch(`/api/projects/${projectId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+    queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+  };
+
+  const handleDeleteFile = async (fileId: number) => {
+    try {
+      const res = await fetch(`/api/files/${fileId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Erro ao remover");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      toast({ title: "Arquivo removido" });
+    } catch (err: any) {
+      toast({ title: "Erro", description: err?.message || "Falha", variant: "destructive" });
+    }
+  };
+
+  // Preview da 1a imagem (planta crua) pra DraftWorkspace
+  const firstImageFile = (files || []).find((f: any) => f.fileType === "image" || /\.(png|jpe?g|webp)$/i.test(f.originalName || ""));
+  const previewSrc = firstImageFile ? `/api/files/${firstImageFile.id}/content` : null;
+  const previewMimeType = firstImageFile ? `image/${(firstImageFile.originalName || "").split(".").pop()?.toLowerCase() || "png"}` : null;
+
+  // Agregação do budget pra CompletedFooter
+  const budgetCategories: Array<{ label: string; area: number; cost: number }> = [];
+  if (budget) {
+    const pavs = (budget as any).pavimentos as any[] | undefined;
+    if (Array.isArray(pavs)) {
+      let extArea = 0, extCost = 0, intArea = 0, intCost = 0, murosArea = 0, murosCost = 0, pisoArea = 0, pisoCost = 0, cobArea = 0, cobCost = 0;
+      for (const pav of pavs) {
+        extArea += Number(pav.paredes_externas?.area_liquida_m2 || 0);
+        extCost += Number(pav.paredes_externas?.custo_total || 0);
+        intArea += Number(pav.paredes_internas?.area_liquida_m2 || 0);
+        intCost += Number(pav.paredes_internas?.custo_total || 0);
+        murosArea += Number(pav.muros?.area_liquida_m2 || 0);
+        murosCost += Number(pav.muros?.custo_total || 0);
+        pisoArea += Number(pav.laje_piso?.area_m2 || 0);
+        pisoCost += Number(pav.laje_piso?.custo_total || 0);
+        cobArea += Number(pav.laje_coberta?.area_m2 || 0);
+        cobCost += Number(pav.laje_coberta?.custo_total || 0);
+      }
+      if (extArea > 0 || extCost > 0) budgetCategories.push({ label: "Paredes externas", area: extArea, cost: extCost });
+      if (intArea > 0 || intCost > 0) budgetCategories.push({ label: "Paredes internas", area: intArea, cost: intCost });
+      if (murosArea > 0 || murosCost > 0) budgetCategories.push({ label: "Muros", area: murosArea, cost: murosCost });
+      if (pisoArea > 0 || pisoCost > 0) budgetCategories.push({ label: "Laje piso", area: pisoArea, cost: pisoCost });
+      if (cobArea > 0 || cobCost > 0) budgetCategories.push({ label: "Laje coberta", area: cobArea, cost: cobCost });
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col bg-background" data-testid="project-page">
+      <ProjectHeader
+        projectName={project.name}
+        clientName={project.clientName}
+        status={headerStatus}
+        projectType={(project.projectType as "teste" | "real") || "real"}
+        buildingType={project.buildingType || "residencial"}
+        onBack={() => setLocation("/")}
+        onRenameProject={onRenameProject}
+        onProjectTypeChange={onTypeChange}
+        onBuildingTypeChange={onBuildingTypeChange}
+        menu={
+          <ProjectMenu
+            hasBudget={!!budget}
+            hasExtractedData={(extractedData || []).length > 0}
+            isProcessing={isProcessing || project.status === "processing"}
+            descriptionContent={
+              budget?.projectDescription
+                ? <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">{budget.projectDescription}</div>
+                : null
+            }
+            stagesContent={
+              <div className="space-y-2 text-sm">
+                {(extractedData || []).filter((d: any) => d.elementType.startsWith("etapa")).map((d: any, i: number) => (
+                  <details key={i} className="border border-border rounded p-2">
+                    <summary className="font-mono text-xs cursor-pointer">{d.elementType}</summary>
+                    <pre className="text-[10px] mt-2 overflow-x-auto bg-muted/40 p-2 rounded">{JSON.stringify(d.data, null, 2).slice(0, 2000)}</pre>
+                  </details>
+                ))}
+              </div>
+            }
+            methodologyContent={<Metodologia />}
+            exportContent={
+              <div className="space-y-2">
+                <Button className="w-full" onClick={() => handleExport("excel")}>
+                  <Download className="h-4 w-4 mr-2" /> Excel (XLSX)
+                </Button>
+                <Button variant="outline" className="w-full" onClick={() => handleExport("pdf")}>
+                  <Download className="h-4 w-4 mr-2" /> PDF
+                </Button>
+                <Button variant="outline" className="w-full" onClick={() => handleExport("json")}>
+                  <Download className="h-4 w-4 mr-2" /> JSON
+                </Button>
+              </div>
+            }
+            onDelete={() => setShowDeleteConfirm(true)}
+          />
+        }
+      />
+
+      <main className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 overflow-auto container mx-auto px-4 py-4">
+          {headerStatus === "draft" && (
+            <DraftWorkspace
+              files={files || []}
+              onUpload={uploadFiles}
+              onDeleteFile={handleDeleteFile}
+              onPreviewFile={(f) => setViewingFile(f)}
+              analysisMode={analysisMode}
+              onAnalysisModeChange={onAnalysisModeChange}
+              peDireito={peDireito}
+              onPeDireitoChange={onPeDireitoChange}
+              scope={scope}
+              onScopeChange={setScope}
+              panelExt={selectedProductIdExt}
+              panelInt={selectedProductIdInt}
+              panelMuros={selectedProductIdMuros}
+              panelPiso={selectedProductIdPiso}
+              panelCoberta={selectedProductIdCoberta}
+              onPanelChange={onPanelChange}
+              productOptions={productOptions}
+              onProcess={() => processMutation.mutate()}
+              isProcessing={isProcessing}
+              previewSrc={previewSrc}
+              previewMimeType={previewMimeType}
+            />
+          )}
+
+          {headerStatus === "processing" && projectId && (
+            <ProcessingLiveView
+              projectId={projectId}
+              isActive
+              onReprocess={(stage) => {
+                fetch(`/api/projects/${projectId}/reprocess/${stage}`, { method: "POST" }).catch(() => {});
+              }}
+            />
+          )}
+
+          {headerStatus === "error" && (
+            <ErrorState
+              message="O pipeline falhou durante o processamento."
+              hint="Verifique os arquivos enviados ou tente reprocessar. Detalhes técnicos no menu (⋮) → Etapas."
+              onReprocess={() => processMutation.mutate()}
+              isReprocessing={processMutation.isPending}
+            />
+          )}
+
+          {headerStatus === "completed" && (() => {
+            const fusao = (extractedData || []).find((d: any) => d.elementType === "etapa4_fusao");
+            const annotatedPlan = (extractedData || []).find((d: any) => d.elementType === "etapa3_annotated_plan");
+            const auditNotesData = (extractedData || []).find((d: any) => d.elementType === "audit_notes");
+            const allWalls: any[] = (liveWalls || (fusao?.data as any)?.resultado?.walls || []) as any[];
+            const allSlabs: any[] = ((fusao?.data as any)?.resultado?.slabs || []) as any[];
+            const allNotes: any[] = ((auditNotesData?.data as any)?.notes || []) as any[];
+            const floorImages: Array<{ pavimento: string; image: string; mimeType?: string; isClientSideFallback?: boolean }> = [];
+            const imgsData = (annotatedPlan?.data as any)?.images;
+            if (Array.isArray(imgsData)) for (const img of imgsData) if (img?.image) floorImages.push({ pavimento: img.pavimento || "all", image: img.image, mimeType: img.mimeType });
+            else if ((annotatedPlan?.data as any)?.image) floorImages.push({ pavimento: "all", image: (annotatedPlan!.data as any).image, mimeType: (annotatedPlan!.data as any).mimeType });
+            if (floorImages.length === 0 && allWalls.some((w: any) => w.bbox || w.endpoints)) {
+              const refImgs: any[] = (annotatedPlan?.data as any)?.referenceImages || [];
+              const plantaBaixaRefs = refImgs.filter(r => r.pageType === "planta_baixa");
+              for (const r of plantaBaixaRefs) floorImages.push({ pavimento: r.pavimento || "all", image: r.image, mimeType: r.mimeType, isClientSideFallback: true });
+            }
+            const wallSegments = ((annotatedPlan?.data as any)?.wallSegments as any[]) || [];
+            const annotationErrors = ((annotatedPlan?.data as any)?.annotationErrors as any[]) || [];
+            const steps = pipelineSteps.filter(s => !s.parentStep).map(s => ({
+              step: s.step, label: s.label,
+              status: s.status === "done" ? ("done" as const) : s.status === "running" ? ("running" as const) : s.status === "error" ? ("error" as const) : ("pending" as const),
+            }));
+            const hasFailures = ((annotatedPlan?.data as any)?.annotationErrors?.length ?? 0) > 0 || allNotes.some((n: any) => n.severity === "error");
+            return (
+              <WorkspaceLayout
+                status="completed"
+                hasFailures={hasFailures}
+                steps={steps}
+                projectId={Number(projectId)}
+                walls={allWalls}
+                slabs={allSlabs}
+                auditNotes={allNotes}
+                floorImages={floorImages}
+                annotationErrors={annotationErrors}
+                wallSegments={wallSegments}
+                isProcessing={isProcessing}
+                onReprocess={() => processMutation.mutate()}
+              />
+            );
+          })()}
+        </div>
+
+        {headerStatus === "completed" && budget && (
+          <CompletedFooter
+            totalCost={Number(budget.totalCost || 0)}
+            totalArea={Number(budget.totalArea || 0)}
+            totalPaneis={(budget as any).totalPaneis || undefined}
+            categories={budgetCategories}
+            discountPct={Number(project.discountPanelPct || 0)}
+            freightCost={Number(project.freightCost || 0)}
+            biomassCost={Number(project.biomassCost || 0)}
+            onExportXlsx={() => handleExport("excel")}
+            onReprocess={() => processMutation.mutate()}
+          />
+        )}
+      </main>
+
+      {/* Modais herdados (visualizacao de arquivo, confirmacao excluir) */}
+      {viewingFile && (
+        <Dialog open onOpenChange={() => setViewingFile(null)}>
+          <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden p-0">
+            <VisuallyHidden><DialogTitle>Visualizar arquivo</DialogTitle></VisuallyHidden>
+            <PdfViewer url={`/api/files/${viewingFile.id}/content`} />
+          </DialogContent>
+        </Dialog>
+      )}
+      {showDeleteConfirm && (
+        <Dialog open onOpenChange={(v) => !v && setShowDeleteConfirm(false)}>
+          <DialogContent className="max-w-md">
+            <DialogTitle>Excluir projeto?</DialogTitle>
+            <p className="text-sm text-muted-foreground mt-2">
+              Esta ação não pode ser desfeita. O projeto e todos os dados associados serão removidos.
+            </p>
+            <div className="flex gap-2 justify-end mt-4">
+              <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>Cancelar</Button>
+              <Button
+                variant="destructive"
+                onClick={async () => {
+                  await fetch(`/api/projects/${projectId}`, { method: "DELETE" });
+                  queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+                  setShowDeleteConfirm(false);
+                  setLocation("/");
+                }}
+              >
+                Excluir
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
+  );
+
+  // ============================================================
+  // ABAIXO: LAYOUT ANTIGO (8 abas + glass card). Mantido como dead code
+  // pra referencia durante a migracao. Sera removido num commit posterior
+  // quando todos os modais estiverem completos. NAO E EXECUTADO.
+  // ============================================================
+  // eslint-disable-next-line no-unreachable
   return (
     <div className="min-h-screen lw-gradient-bg">
       <PageHeader>
@@ -1242,7 +1553,7 @@ export default function ProjectDetails() {
           <TabsContent value="processamento">
             {projectId ? (
               <ProcessingLiveView
-                projectId={projectId}
+                projectId={Number(projectId)}
                 isActive={isProcessing || project.status === "processing"}
                 onReprocess={async (stage) => {
                   try {
