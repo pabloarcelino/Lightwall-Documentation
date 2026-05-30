@@ -441,6 +441,15 @@ export default function ProjectDetails() {
   const { data: catalogProducts } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
+
+  // Telemetria do pipeline (tempo total + custo IA + tokens). Hidrata via
+  // GET /pipeline-events automaticamente. SSE so abre quando isProcessing.
+  // IMPORTANTE: chamar este hook ANTES dos early-returns (isLoading, !data)
+  // pra preservar a ordem dos hooks entre renders (React hook rules).
+  const telemetry = useProcessingEvents({
+    projectId: projectId || 0,
+    enabled: !!projectId && isProcessing,
+  });
   // Marcadores humanos de lado exterior/interior persistidos pra este projeto
   const { data: serverHints } = useQuery<Array<{ id: number; pavimento: string; xNorm: number; yNorm: number; side: "exterior" | "interior" }>>({
     queryKey: ["/api/projects", projectId, "side-hints"],
@@ -800,19 +809,11 @@ export default function ProjectDetails() {
     project.status === "completed" ? "completed" :
     project.status === "error" ? "error" : "draft";
 
-  // Telemetria do pipeline (tempo total + custo IA + tokens). Hidrata via
-  // GET /pipeline-events automaticamente. enabled=true SO durante processing
-  // pra abrir SSE; em completed/error, ainda recebemos os totais via
-  // hidratacao (que roda sempre — ver useProcessingEvents).
-  const processingTelemetry = useProcessingEvents({
-    projectId: projectId || 0,
-    enabled: headerStatus === "processing",
-  });
-  const headerElapsedMs = processingTelemetry.state.startedAt
-    ? (processingTelemetry.state.finishedAt ?? Date.now()) - processingTelemetry.state.startedAt
+  const headerElapsedMs = telemetry.state.startedAt
+    ? (telemetry.state.finishedAt ?? Date.now()) - telemetry.state.startedAt
     : null;
-  const headerCostUsd = processingTelemetry.state.totalCostUsd || null;
-  const headerTokens = processingTelemetry.state.totalTokens || null;
+  const headerCostUsd = telemetry.state.totalCostUsd || null;
+  const headerTokens = telemetry.state.totalTokens || null;
 
   const productOptions = (catalogProducts || []).map((p: any) => ({
     id: String(p.id),
