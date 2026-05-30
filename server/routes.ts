@@ -80,6 +80,7 @@ import { renderAnnotatedImage } from "./services/annotation/renderer";
 import { extractEnvelopes, type EnvelopePolygon } from "./services/extraction/envelopeExtractor";
 import { characterizeProject, type ProjectCharacterization } from "./services/extraction/projectCharacterization";
 import { classifyWallsByTopology, classifySegmentByEnvelope } from "./services/extraction/topology";
+import { clearAbort, throwIfAborted, PipelineAbortedError } from "./services/pipelineAbort";
 import { inventoryWalls, mergeEndpointsIntoWalls } from "./services/extraction/wallInventory";
 import { readCotas, mergeCotasIntoWalls } from "./services/extraction/cotaReader";
 import { linkEsquadriasWithTable } from "./services/extraction/esquadriasLinker";
@@ -1292,6 +1293,27 @@ export async function registerRoutes(
     },
   );
 
+  // Endpoint pra solicitar aborto cooperativo do pipeline em andamento.
+  // O pipeline checa em pontos-chave (entre etapas grandes) e levanta
+  // PipelineAbortedError quando flag estiver setada. Pode demorar ate
+  // alguns segundos pra responder se uma chamada Gemini estiver em voo.
+  app.post("/api/projects/:id/abort", async (req, res) => {
+    try {
+      const projectId = parseInt(String(req.params.id));
+      if (!Number.isFinite(projectId)) {
+        return res.status(400).json({ message: "ID invalido" });
+      }
+      const { requestAbort } = await import("./services/pipelineAbort");
+      requestAbort(projectId);
+      // Resposta imediata — o pipeline em si vai sair na proxima checkpoint
+      // (ate ~2 minutos no pior caso, se estiver no meio de extracao Gemini).
+      return res.json({ ok: true, message: "Aborto solicitado. Aguardando proxima fronteira de etapa." });
+    } catch (err: any) {
+      console.error("[ABORT] erro:", err?.message || err);
+      return res.status(500).json({ message: err?.message || "Erro" });
+    }
+  });
+
   app.post("/api/projects/:id/process", async (req, res) => {
     const projectId = parseInt(String(req.params.id));
     const selectedProductIdExt = req.body?.productIdExt ? parseInt(req.body.productIdExt) : (req.body?.productId ? parseInt(req.body.productId) : null);
@@ -1356,6 +1378,9 @@ export async function registerRoutes(
       }
 
       await storage.updateProjectStatus(projectId, "processing");
+
+      // Limpa flag de aborto residual de runs anteriores.
+      clearAbort(projectId);
 
       const files = await storage.getProjectFiles(projectId);
       if (files.length === 0) {
@@ -1714,6 +1739,7 @@ export async function registerRoutes(
       // DEPOIS do drain de geometryDeferred (ver abaixo). Aqui ainda nao temos
       // geometria — Etapa 1.5 precisa rodar primeiro para alimentar a Etapa 3.
 
+      throwIfAborted(projectId);
       // ===== Etapa 1.5 — Caracterizacao do projeto =====
       // Roda DEPOIS da Etapa 1 (classificacao + tabelas) e ANTES da Etapa 3
       // (extracao geometrica). Produz JSON estruturado com tipologia, padrao,
@@ -1778,6 +1804,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Nenhum dado extraido dos arquivos. Verifique se os arquivos sao plantas arquitetonicas validas." });
       }
 
+      throwIfAborted(projectId);
       // ===== Etapa 3.4 — CV Pipeline (Fase E) =====
       // Roda o pipeline OpenCV/Shapely do cv-service em PARALELO com o pipeline
       // Gemini ja executado. Se cv-service esta ready e retorna status="ok":
@@ -1859,6 +1886,7 @@ export async function registerRoutes(
         sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", `pulado (erro: ${cvErr?.message || "desconhecido"})`);
       }
 
+      throwIfAborted(projectId);
       // ===== Etapa 3.5 — Inventario de paredes com endpoints (Fase B / S4) =====
       // Roda APOS a Etapa 3 monolitica e enriquece cada parede ja extraida
       // com endpoints (p1, p2) — o EIXO real do segmento da parede. Isso
@@ -1941,6 +1969,7 @@ export async function registerRoutes(
         sendProgress(projectId, 3.6, "Cotas (focado)", "done", `pulado (erro: ${cotaErr?.message || "desconhecido"})`);
       }
 
+      throwIfAborted(projectId);
       // ===== Etapa 3.7 — Topologia (envelope + classificacao deterministica) =====
       // Metodologia passo-a-passo, Fase A:
       // (S2) Pede ao Gemini APENAS o poligono da edificacao coberta — sem mistura
@@ -2111,6 +2140,7 @@ export async function registerRoutes(
       for (const n of validated.stats.notes) console.log(`[VALIDATOR]   - ${n}`);
       sendProgress(projectId, 4.5, "Validacao Geometrica", "done", valSummary);
 
+      throwIfAborted(projectId);
       // ===== Etapa 4.55 — Link esquadrias com quadro (Fase B / S8) =====
       // Cruza quadro_esquadrias com aberturas detectadas nas paredes:
       //  - Atualiza dimensoes de portas/janelas para os valores do quadro
@@ -3099,21 +3129,29 @@ export async function registerRoutes(
         budget: budgetData,
       });
     } catch (error: any) {
+      const isAborted = error instanceof PipelineAbortedError;
       const errMsg = error?.message || String(error);
       const isRateLimit = errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("rate");
       const isTimeout = errMsg.includes("timeout") || errMsg.includes("DEADLINE_EXCEEDED");
-      const userMsg = isRateLimit
+      const userMsg = isAborted
+        ? "Processamento abortado pelo usuário."
+        : isRateLimit
         ? "API sobrecarregada (limite de taxa atingido). Tente novamente em alguns minutos."
         : isTimeout
         ? "Tempo limite excedido na API. Tente novamente."
         : `Erro ao processar projeto: ${errMsg.substring(0, 150)}`;
-      console.error("Erro ao processar projeto:", error);
-      console.error("Stack:", error?.stack);
+      if (isAborted) {
+        console.log(`[ABORT] Pipeline projeto ${projectId} abortado e parado em checkpoint`);
+      } else {
+        console.error("Erro ao processar projeto:", error);
+        console.error("Stack:", error?.stack);
+      }
       sendProgress(projectId, 0, "Erro", "error", userMsg);
       pipelineStartTimes.delete(projectId);
+      clearAbort(projectId);
       await storage.updateProjectStatus(projectId, "error");
       cleanupApiMetrics(projectId);
-      res.status(500).json({ message: userMsg });
+      res.status(isAborted ? 200 : 500).json({ message: userMsg, aborted: isAborted });
     }
     }); // end runWithProvider
   });

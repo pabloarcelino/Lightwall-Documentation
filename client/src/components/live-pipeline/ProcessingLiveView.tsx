@@ -1,7 +1,9 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
-import { CircleDollarSign, Cpu, Clock } from "lucide-react";
+import { CircleDollarSign, Cpu, Clock, X, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useProcessingEvents } from "./useProcessingEvents";
 import { LiveStepper } from "./LiveStepper";
 import { EventTimeline } from "./EventTimeline";
@@ -19,6 +21,25 @@ interface ProcessingLiveViewProps {
 
 export function ProcessingLiveView({ projectId, isActive = true, onReprocess }: ProcessingLiveViewProps) {
   const { toast } = useToast();
+  const [confirmAbort, setConfirmAbort] = useState(false);
+  const [aborting, setAborting] = useState(false);
+
+  const handleAbort = useCallback(async () => {
+    setAborting(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/abort`, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast({
+        title: "Aborto solicitado",
+        description: "O pipeline vai parar na próxima fronteira de etapa (pode levar alguns segundos).",
+      });
+      setConfirmAbort(false);
+    } catch (err: any) {
+      toast({ title: "Falha ao abortar", description: err?.message || "Tente novamente.", variant: "destructive" });
+    } finally {
+      setAborting(false);
+    }
+  }, [projectId, toast]);
 
   const handleSseExhausted = useCallback(() => {
     // chamado quando o stream desistir apos N retries — o caller (ProjectDetails)
@@ -75,10 +96,44 @@ export function ProcessingLiveView({ projectId, isActive = true, onReprocess }: 
         <Metric icon={<Clock className="h-3.5 w-3.5" />} label="Tempo" value={state.startedAt ? formatDuration(elapsed) : "—"} />
         <Metric icon={<Cpu className="h-3.5 w-3.5" />} label="Tokens" value={formatTokens(state.totalTokens)} />
         <Metric icon={<CircleDollarSign className="h-3.5 w-3.5 text-success" />} label="Custo" value={formatUsd(state.totalCostUsd)} highlight />
-        <div className="ml-auto text-[11px] text-muted-foreground">
-          {state.aiCalls.length} chamada{state.aiCalls.length !== 1 ? "s" : ""} • {state.renderedImages.filter(i => i.status === "ready").length}/{state.renderedImages.length} imagens
+        <div className="ml-auto flex items-center gap-3">
+          <div className="text-[11px] text-muted-foreground">
+            {state.aiCalls.length} chamada{state.aiCalls.length !== 1 ? "s" : ""} • {state.renderedImages.filter(i => i.status === "ready").length}/{state.renderedImages.length} imagens
+          </div>
+          {isActive && !state.finishedAt && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setConfirmAbort(true)}
+              data-testid="abort-pipeline"
+              className="gap-1.5"
+            >
+              <X className="h-3.5 w-3.5" />
+              Abortar
+            </Button>
+          )}
         </div>
       </header>
+
+      {/* Confirmacao de aborto */}
+      <Dialog open={confirmAbort} onOpenChange={(v) => !v && !aborting && setConfirmAbort(false)}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>Abortar processamento?</DialogTitle>
+          <p className="text-sm text-muted-foreground mt-2">
+            O pipeline vai parar assim que terminar a etapa atual (pode levar alguns segundos —
+            até ~2 minutos se uma chamada Gemini estiver no meio).
+            Os dados parciais ficarão salvos mas o projeto será marcado como erro até reprocessar.
+          </p>
+          <div className="flex gap-2 justify-end mt-4">
+            <Button variant="outline" onClick={() => setConfirmAbort(false)} disabled={aborting}>
+              Continuar processando
+            </Button>
+            <Button variant="destructive" onClick={handleAbort} disabled={aborting} data-testid="abort-confirm">
+              {aborting ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Abortando…</> : "Sim, abortar"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Stepper horizontal ao vivo */}
       <LiveStepper state={state} onReprocess={onReprocess} />
