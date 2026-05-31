@@ -273,6 +273,8 @@ export async function analyzeVisionDirect(
     };
 
     let areaResult = "";
+    let lastFinishReason: string | undefined;
+    let lastUsage: { input?: number; output?: number; thinking?: number } | undefined;
     try {
       areaResult = await withRetry(async () => {
         const ai = getActiveGenAI();
@@ -287,23 +289,27 @@ export async function analyzeVisionDirect(
               ],
             },
           ],
+          // Sem responseMimeType: combinacao com thinkingConfig parece causar
+          // resposta vazia no Gemini 2.5 Pro. O regex /\{[\s\S]*\}/ em
+          // extractJson() captura JSON em texto livre ou markdown wrapper.
           config: {
             temperature: 0.1,
             maxOutputTokens: 8192,
-            responseMimeType: "application/json",
-            thinkingConfig: { thinkingBudget: 2048 },
+            thinkingConfig: { thinkingBudget: 1024 },
           },
         });
         const usage = response.usageMetadata;
         const finishReason = response.candidates?.[0]?.finishReason;
-        console.log(
-          `[VISION-DIRECT] Pag ${pg.pageIndex} usage: input=${usage?.promptTokenCount} output=${usage?.candidatesTokenCount} thinking=${usage?.thoughtsTokenCount} finish=${finishReason}`,
-        );
-        totalCostUsd += estimateCost(MODEL_PRO, {
+        lastFinishReason = finishReason;
+        lastUsage = {
           input: usage?.promptTokenCount,
           output: usage?.candidatesTokenCount,
           thinking: usage?.thoughtsTokenCount,
-        });
+        };
+        console.log(
+          `[VISION-DIRECT] Pag ${pg.pageIndex} usage: input=${usage?.promptTokenCount} output=${usage?.candidatesTokenCount} thinking=${usage?.thoughtsTokenCount} finish=${finishReason}`,
+        );
+        totalCostUsd += estimateCost(MODEL_PRO, lastUsage);
         const text = response.text ?? "";
         if (!text && finishReason && finishReason !== "STOP") {
           throw new Error(`Gemini Pro finalizou sem texto (finishReason=${finishReason})`);
@@ -323,9 +329,14 @@ export async function analyzeVisionDirect(
     if (!areaJson) {
       console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex}: JSON invalido. Resposta completa:`);
       console.warn(areaResult);
+      const diag =
+        `finish=${lastFinishReason ?? "?"} ` +
+        `tokens=in:${lastUsage?.input ?? "?"}/out:${lastUsage?.output ?? "?"}/think:${lastUsage?.thinking ?? "?"} ` +
+        `chars=${areaResult.length}`;
+      const preview = areaResult ? areaResult.substring(0, 200).replace(/\s+/g, " ") : "(vazia)";
       result.observacoes =
         result.observacoes ||
-        `IA nao retornou JSON valido. Os valores estao zerados — verifique se a planta tem cotas legiveis.`;
+        `IA nao retornou JSON parseavel. Diagnostico: ${diag}. Inicio da resposta: "${preview}"`;
     } else {
       console.log(
         `[VISION-DIRECT] Pag ${pg.pageIndex} JSON parseado:`,
