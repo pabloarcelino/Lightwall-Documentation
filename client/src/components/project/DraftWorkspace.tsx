@@ -79,13 +79,15 @@ export function DraftWorkspace({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
+      // [REMOVED 2026-05-31] ".ifc" — parser server-side mantido para futuro;
+      // por enquanto o usuario nao usa BIM. Re-adicionar ".ifc" + "application/octet-stream"
+      // quando voltar a precisar.
       "application/pdf": [".pdf"],
       "image/png": [".png"],
       "image/jpeg": [".jpg", ".jpeg"],
       "image/webp": [".webp"],
       "image/bmp": [".bmp"],
       "image/tiff": [".tif", ".tiff"],
-      "application/octet-stream": [".ifc"],
     },
     noClick: true,
     noKeyboard: true,
@@ -112,7 +114,7 @@ export function DraftWorkspace({
               <Upload className="h-12 w-12 text-muted-foreground/40 mb-3" />
               <h3 className="text-base font-semibold text-foreground">Solte plantas aqui ou clique para selecionar</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Formatos: PDF, PNG, JPG, WEBP, BMP, TIFF, IFC
+                Formatos: PDF, PNG, JPG, WEBP, BMP, TIFF
               </p>
               <Button
                 type="button"

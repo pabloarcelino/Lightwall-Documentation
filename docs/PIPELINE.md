@@ -2,6 +2,22 @@
 
 > Documento técnico detalhado do algoritmo passo a passo. Reflete o código em `main` no momento da escrita; pequenas reordenações podem ocorrer entre releases — quando em dúvida, `server/routes.ts` é a fonte da verdade.
 
+> ⚠️ **Status atual (2026-05-31): Pipeline enxuto**
+>
+> 5 etapas foram **removidas** (comentadas no código) por não trazerem retorno mensurável:
+>
+> | # | Etapa | Motivo da remoção |
+> |---|---|---|
+> | 2.5 | Vetor PDF Nativo | Escala "não confiável" descarta paredes em ~80% dos PDFs. Etapa 3 Gemini cobre. |
+> | 3.4 | CV Pipeline | cv-service offline em ~100% dos deploys atuais. Consome 5-30s sem retorno. |
+> | 3.6 | Cotas focadas | Match rate ~0%. Etapa 3 já lê cotas no mesmo prompt. -US$ 0,03 e -40-60s. |
+> | 4.6 | Validação Global IA | Redundante com Etapas 3 e 4.9. Era opt-in (não rodava por default). |
+> | 4.65 | Reconciliação CV-LLM | Consequência de 3.4: sem CV não há o que reconciliar. |
+>
+> Pipeline ativo: **12 etapas obrigatórias** + 1 condicional (4.7 só se há cortes) + 1 condicional (1-IFC só se .ifc, mas upload de IFC foi removido da UI).
+>
+> Como reativar uma etapa: descomentar o bloco correspondente em `server/routes.ts` (comentado como `[REMOVED 2026-05-31] motivo: ...`). Imports estão preservados.
+
 ---
 
 ## 1. Visão geral

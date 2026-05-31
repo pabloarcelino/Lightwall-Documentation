@@ -1,9 +1,11 @@
 # Lightwall Orçamento — Documento Técnico & Operacional Completo
 
-> **Versão**: 1.0 — 30 de maio de 2026
+> **Versão**: 1.1 — 31 de maio de 2026
 > **Público**: Time de avaliação (Frontend, Backend, IA/ML, DevOps, Produto, Segurança)
 > **Objetivo**: Referência única para entender, avaliar e organizar o projeto end-to-end.
 > **Fonte da verdade**: `main` no momento desta versão. Quando em dúvida, o código (`server/routes.ts`, `shared/schema.ts`) prevalece sobre este texto.
+
+> ⚠️ **Pipeline enxuto (2026-05-31)**: 5 etapas removidas (2.5, 3.4, 3.6, 4.6, 4.65) por não trazerem retorno mensurável. Pipeline ativo passa de 22 → 14 etapas. Ganhos: -30 a -120s por projeto, -US$ 0,05, logs 80% mais limpos. Ver Parte III item 12 e nota no topo de `docs/PIPELINE.md`. Reversível: comentários `[REMOVED 2026-05-31]` em `server/routes.ts`.
 
 ---
 

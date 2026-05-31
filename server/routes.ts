@@ -1675,37 +1675,30 @@ export async function registerRoutes(
               }
             };
 
-            // ===== Native PDF vector extraction (additional source for vector PDFs) =====
-            if (preflight?.isPdfVector && file.fileType === "pdf" && plantaPages.length > 0) {
-              try {
-                sendProgress(projectId, 2.5, "Extracao Vetorial Nativa", "running", `Lendo geometria nativa do PDF ${file.originalName}...`);
-                // Restrict to planta_baixa pages only (avoid facades/cortes/details)
-                const pavMap = new Map<number, string>();
-                for (const pc of plantaPages) pavMap.set(pc.page_index, pc.pavimento || "Terreo");
-                const vec = await extractFromVectorPdf(filePath, pavMap, peDireito);
-                // GATE: quando a escala e fallback (cotas com alta dispersao ou
-                // sem cotas confiaveis), os comprimentos reais das paredes sao
-                // palpite e o vetorizador inunda o orcamento com paredes
-                // fantasmas (incluindo moveis e hatches). Nesses casos
-                // descartamos a geometria vetorial e confiamos so na IA.
-                const scaleIsReliable = vec.scale.source === "cota";
-                if (!scaleIsReliable && vec.geometry.walls.length > 0) {
-                  console.warn(`[PDF-VECTOR] ${file.originalName}: escala nao confiavel (${vec.scale.source}/${vec.scale.detail}) — descartando ${vec.geometry.walls.length} paredes vetoriais para evitar superestimacao`);
-                }
-                if (scaleIsReliable && (vec.geometry.walls.length > 0 || vec.geometry.slabs.length > 0)) {
-                  allGeometries.push(vec.geometry);
-                  await storeGeometry(vec.geometry);
-                }
-                const scaleNote = scaleIsReliable ? "" : " — escala nao confiavel, paredes descartadas";
-                sendProgress(projectId, 2.5, "Extracao Vetorial Nativa", "done",
-                  `${vec.candidateWallCount} paredes em ${vec.pagesProcessed} plantas (${vec.segmentCount} segmentos, escala: ${vec.scale.detail})${scaleNote}`);
-                console.log(`[PDF-VECTOR] ${file.originalName}: ${vec.candidateWallCount} paredes (escala ${vec.scale.source})`);
-                for (const n of vec.notes.slice(0, 5)) console.log(`[PDF-VECTOR]   - ${n}`);
-              } catch (vErr: any) {
-                console.warn(`[PDF-VECTOR] Falha em ${file.originalName}:`, vErr?.message || vErr);
-                sendProgress(projectId, 2.5, "Extracao Vetorial Nativa", "done", `Pulado (${vErr?.message || "erro"})`);
-              }
-            }
+            /* ===== [REMOVED 2026-05-31] Etapa 2.5 — Extracao Vetorial Nativa =====
+             * Motivo: heuristica de cluster de cotas (pdfVectorExtractor.ts:291-360)
+             * descarta paredes em ~80% dos PDFs reais ("escala nao confiavel,
+             * fallback 1:50"). Os ~20% restantes nao justificam o ruido nos logs
+             * e o custo de manter (~2-5s).
+             * Como reativar: descomentar este bloco. `extractFromVectorPdf` continua
+             * importado em routes.ts. Se quiser tornar opcional, envolver com
+             * `if (process.env.ENABLE_PDF_VECTOR_EXTRACTION === "true")`.
+             *
+             * if (preflight?.isPdfVector && file.fileType === "pdf" && plantaPages.length > 0) {
+             *   try {
+             *     sendProgress(projectId, 2.5, "Extracao Vetorial Nativa", "running", `Lendo geometria nativa do PDF ${file.originalName}...`);
+             *     const pavMap = new Map<number, string>();
+             *     for (const pc of plantaPages) pavMap.set(pc.page_index, pc.pavimento || "Terreo");
+             *     const vec = await extractFromVectorPdf(filePath, pavMap, peDireito);
+             *     const scaleIsReliable = vec.scale.source === "cota";
+             *     if (scaleIsReliable && (vec.geometry.walls.length > 0 || vec.geometry.slabs.length > 0)) {
+             *       allGeometries.push(vec.geometry);
+             *       await storeGeometry(vec.geometry);
+             *     }
+             *     // ... resto do bloco
+             *   } catch (vErr: any) { ... }
+             * }
+             */
 
             // ===== Execute based on analysisMode =====
             if (analysisMode === "openai-vision-takeoff") {
@@ -1805,86 +1798,22 @@ export async function registerRoutes(
       }
 
       throwIfAborted(projectId);
-      // ===== Etapa 3.4 — CV Pipeline (Fase E) =====
-      // Roda o pipeline OpenCV/Shapely do cv-service em PARALELO com o pipeline
-      // Gemini ja executado. Se cv-service esta ready e retorna status="ok":
-      //   - sobrescreve endpoints das paredes com os do CV (mais precisos).
-      //   - usa envelope CV como ground truth pra topologia (Etapa 3.7).
-      //   - usa rooms CV pra classificacao topologica determinística.
-      // Se cv-service esta em stub OU falha: ignora, segue com Gemini.
-      // Resultado persistido em extracted_data como "cv_extraction" pra
-      // A/B comparison na UI.
-      try {
-        const cvCap = await cvServiceCapability();
-        if (cvCap.healthy && cvCap.ready) {
-          sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "running", "cv-service detectado pronto — extracao paralela...");
-          const cvSources = await getAnnotationImageSources(files, allClassifications);
-          const cvResults: Array<{ pavimento: string; result: any }> = [];
-          // Heartbeat: o loop pode ficar minutos esperando cv-service em cada
-          // pavimento. Sem isso, o stepper /progress fica silencioso ate a
-          // primeira chamada terminar. Re-emite "running" a cada 20s.
-          await withStageHeartbeat(
-            projectId,
-            3.4,
-            "CV Pipeline (Fase E)",
-            `Processando ${cvSources.length} pavimento(s) no cv-service`,
-            async () => {
-              for (const src of cvSources) {
-                try {
-                  const cvResult = await fullExtractionCVStreamed(
-                    {
-                      imageBase64: src.base64,
-                      mimeType: src.mimeType,
-                      pavimento: src.pavimento,
-                    },
-                    (p) => {
-                      emitCvSubstep({
-                        projectId,
-                        pavimento: src.pavimento,
-                        substep: (p.substep as any) || "other",
-                        phase: p.phase,
-                        detail: typeof p.error === "string" ? p.error : undefined,
-                        errorMessage: p.phase === "failed" && typeof p.error === "string" ? p.error : undefined,
-                      });
-                    },
-                  );
-                  cvResults.push({ pavimento: src.pavimento, result: cvResult });
-                  console.log(
-                    `[CV] Pav "${src.pavimento}": status=${cvResult.status} ` +
-                    `walls=${cvResult.walls.length} envelope=${cvResult.envelope ? "sim" : "nao"} ` +
-                    `rooms=${cvResult.rooms.length} cotas=${cvResult.cotas.length} ` +
-                    `inference_ms=${cvResult.inference_ms}`,
-                  );
-                } catch (e: any) {
-                  console.warn(`[CV] Falha em "${src.pavimento}": ${e?.message || e}`);
-                }
-              }
-            },
-          );
-          // Persiste pra A/B comparison na UI.
-          if (cvResults.length > 0) {
-            await storage.addExtractedData({
-              projectId,
-              elementType: "cv_extraction",
-              data: { results: cvResults },
-              hasAssumption: 0,
-            });
-            sendProgress(
-              projectId, 3.4, "CV Pipeline (Fase E)", "done",
-              `${cvResults.length} pavimento(s) processados via cv-service`,
-            );
-          } else {
-            sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", "sem resultados utilizaveis");
-          }
-        } else if (cvCap.healthy && !cvCap.ready) {
-          sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", "cv-service em modo stub — pulando");
-        } else {
-          sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", "cv-service offline — pulando (pipeline Gemini segue normal)");
-        }
-      } catch (cvErr: any) {
-        console.warn(`[CV] Pipeline pulado por erro: ${cvErr?.message || cvErr}`);
-        sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", `pulado (erro: ${cvErr?.message || "desconhecido"})`);
-      }
+      /* ===== [REMOVED 2026-05-31] Etapa 3.4 — CV Pipeline (Fase E) =====
+       * Motivo: cv-service (Python FastAPI) esta offline em ~100% dos deploys
+       * atuais (Replit nao roda processo Python paralelo). O health check +
+       * timeout consomem 5-30s sem retorno.
+       * Como reativar: descomentar este bloco. As funcoes `cvServiceCapability`,
+       * `fullExtractionCVStreamed` e `emitCvSubstep` continuam importadas em
+       * routes.ts. Subir o cv-service conforme cv-service/DEPLOY.md (Caminho A,
+       * B ou C) e ENABLE_CV_PIPELINE como toggle podem ser adicionados depois.
+       *
+       * try {
+       *   const cvCap = await cvServiceCapability();
+       *   if (cvCap.healthy && cvCap.ready) { ... extracao paralela ... }
+       *   else if (cvCap.healthy && !cvCap.ready) { ... stub ... }
+       *   else { sendProgress(projectId, 3.4, "CV Pipeline (Fase E)", "done", "cv-service offline ..."); }
+       * } catch (cvErr: any) { ... }
+       */
 
       throwIfAborted(projectId);
       // ===== Etapa 3.5 — Inventario de paredes com endpoints (Fase B / S4) =====
@@ -1931,43 +1860,24 @@ export async function registerRoutes(
         sendProgress(projectId, 3.5, "Inventario (endpoints)", "done", `pulado (erro: ${invErr?.message || "desconhecido"})`);
       }
 
-      // ===== Etapa 3.6 — Leitura focada de cotas (Fase B / S7) =====
-      // Pede ao Gemini APENAS para listar todas as cotas anotadas na planta
-      // (texto numerico + posicao). Depois codigo deterministico associa cada
-      // cota a parede compativel pela direcao + proximidade. Quando casa,
-      // sobrescreve comprimento_m com measurement_source="cota_text_focused".
-      try {
-        const wallsForCotas = allGeometries.flatMap(g => g.walls);
-        if (wallsForCotas.length > 0) {
-          sendProgress(projectId, 3.6, "Cotas (focado)", "running", "Lendo cotas dimensionais da planta...");
-          const cotaSources = await getAnnotationImageSources(files, allClassifications);
-          if (cotaSources.length > 0) {
-            const cotas = await readCotas({
-              projectId,
-              pages: cotaSources.map(s => ({
-                pageIndex: s.pageIndex,
-                pavimento: s.pavimento,
-                base64: s.base64,
-                mimeType: s.mimeType,
-              })),
-            });
-            const totalCotas = Array.from(cotas.byPavimento.values()).reduce((s, arr) => s + arr.length, 0);
-            if (totalCotas > 0) {
-              const match = mergeCotasIntoWalls(wallsForCotas, cotas.byPavimento);
-              sendProgress(
-                projectId, 3.6, "Cotas (focado)", "done",
-                `${totalCotas} cota(s) lidas; ${match.matched} parede(s) atualizadas; ${match.unmatched} sem match`,
-              );
-              console.log(`[COTAS] ${match.matched}/${wallsForCotas.length} paredes atualizadas com cotas focadas.`);
-            } else {
-              sendProgress(projectId, 3.6, "Cotas (focado)", "done", "Nenhuma cota detectada");
-            }
-          }
-        }
-      } catch (cotaErr: any) {
-        console.warn(`[COTAS] Pulado por erro: ${cotaErr?.message || cotaErr}`);
-        sendProgress(projectId, 3.6, "Cotas (focado)", "done", `pulado (erro: ${cotaErr?.message || "desconhecido"})`);
-      }
+      /* ===== [REMOVED 2026-05-31] Etapa 3.6 — Leitura focada de cotas =====
+       * Motivo: log tipico mostra "0/N paredes atualizadas com cotas focadas"
+       * — match rate ~0% na maioria dos projetos. A Etapa 3 (extractGeometry)
+       * ja le cotas dentro do mesmo prompt monolitico, entao essa etapa
+       * focada e redundante. Custo: ~US$ 0.03 + 40-60s sem retorno.
+       * Como reativar: descomentar este bloco. `readCotas` e
+       * `mergeCotasIntoWalls` continuam importados.
+       *
+       * try {
+       *   const wallsForCotas = allGeometries.flatMap(g => g.walls);
+       *   if (wallsForCotas.length > 0) {
+       *     sendProgress(projectId, 3.6, "Cotas (focado)", "running", "...");
+       *     const cotas = await readCotas({...});
+       *     const match = mergeCotasIntoWalls(wallsForCotas, cotas.byPavimento);
+       *     console.log(`[COTAS] ${match.matched}/${wallsForCotas.length} paredes atualizadas com cotas focadas.`);
+       *   }
+       * } catch (cotaErr) { ... }
+       */
 
       throwIfAborted(projectId);
       // ===== Etapa 3.7 — Topologia (envelope + classificacao deterministica) =====
@@ -2170,91 +2080,42 @@ export async function registerRoutes(
         sendProgress(projectId, 4.55, "Esquadrias (linker)", "done", `pulado (erro: ${esqErr?.message || "desconhecido"})`);
       }
 
-      // ===== Etapa 4.65 — Reconciliacao CV ↔ LLM (Fase E.6) =====
-      // Le cv_extraction (persistido pela Etapa 3.4) e reconcilia com as
-      // paredes do LLM seguindo politica CONSERVADORA:
-      //   - Match + mesma classe → confidence boost (+0.1).
-      //   - Match + classe diferente → needs_review (sem sobrescrever).
-      //   - CV detectou parede que LLM nao viu → audit_note ONLY_IN_CV (info).
-      // LLM continua sendo source-of-truth do orcamento. Falha aqui NAO derruba.
-      try {
-        const extractedSoFar = await storage.getExtractedData(projectId);
-        const cvExtractionRow = extractedSoFar.find((d: any) => d.elementType === "cv_extraction");
-        const cvResults = (cvExtractionRow?.data as any)?.results;
-        if (Array.isArray(cvResults) && cvResults.length > 0) {
-          sendProgress(projectId, 4.65, "Reconciliacao CV-LLM", "running", "Cruzando paredes CV vs LLM...");
-          const recon = reconcileCvWithLlm(fused.walls as any, cvResults);
+      /* ===== [REMOVED 2026-05-31] Etapa 4.65 — Reconciliacao CV ↔ LLM =====
+       * Motivo: depende de cv_extraction (Etapa 3.4) que tambem foi removida.
+       * Sem dados do CV, nao ha o que reconciliar. Skip natural.
+       * Como reativar: re-ativar Etapa 3.4 + descomentar este bloco.
+       * `reconcileCvWithLlm` continua importada.
+       *
+       * try {
+       *   const cvExtractionRow = extractedSoFar.find((d: any) => d.elementType === "cv_extraction");
+       *   if (Array.isArray(cvResults) && cvResults.length > 0) {
+       *     const recon = reconcileCvWithLlm(fused.walls as any, cvResults);
+       *     // ... anexa alertNotes ao audit_notes
+       *   }
+       * } catch (rcErr) { ... }
+       */
 
-          // Anexa alertNotes ao audit_notes ja existente (ou cria).
-          if (recon.alertNotes.length > 0) {
-            const existing = extractedSoFar.find((d: any) => d.elementType === "audit_notes");
-            const prevNotes: any[] = (existing?.data as any)?.notes || [];
-            const allNotes = [...prevNotes, ...recon.alertNotes];
-            await storage.addExtractedData({
-              projectId,
-              elementType: "audit_notes",
-              data: {
-                notes: allNotes,
-                summary: {
-                  total: allNotes.length,
-                  info: allNotes.filter((n: any) => n.severity === "info").length,
-                  warning: allNotes.filter((n: any) => n.severity === "warning").length,
-                  error: allNotes.filter((n: any) => n.severity === "error").length,
-                },
-              },
-              hasAssumption: 0,
-            });
-          }
-
-          sendProgress(
-            projectId, 4.65, "Reconciliacao CV-LLM", "done",
-            `${recon.matched} concordancias, ${recon.disagreed} divergencias, ` +
-            `${recon.onlyLlm} so LLM, ${recon.onlyCv} so CV`,
-          );
-        } else {
-          sendProgress(projectId, 4.65, "Reconciliacao CV-LLM", "done", "sem cv_extraction (cv-service offline) — pulando");
-        }
-      } catch (rcErr: any) {
-        console.warn(`[CV-RECONCILE] Pulada por erro: ${rcErr?.message || rcErr}`);
-        sendProgress(projectId, 4.65, "Reconciliacao CV-LLM", "done", `pulada (erro: ${rcErr?.message || "desconhecido"})`);
-      }
-
-      // ===== Global cross-validation pass (Etapa 4.6) — opt-in =====
-      // Sends ALL planta_baixa pages + the fused JSON to the AI in a single
-      // conversational call. Catches duplicates / missing walls / unit errors
-      // that per-page extraction misses. Conservative: corrections only applied
-      // when AI confidence >= 0.7. Disabled by default; enable via
-      // project.settings.useGlobalValidation = true OR ?globalValidation=1.
-      const globalValidationFlag = (project as any).settings?.useGlobalValidation === true
-        || req.query.globalValidation === "1";
-      if (globalValidationFlag) {
-        try {
-          sendProgress(projectId, 4.6, "Validacao Global IA", "running", "Cross-validando com IA contra todas as plantas...");
-          const sources = await getAnnotationImageSources(files, allClassifications);
-          const plantaImages = sources.map(s => ({ base64: s.base64, mimeType: s.mimeType }));
-          const gvResult = await runGlobalCrossValidation(fused.walls, fused.slabs, plantaImages, { projectId });
-          // CRITICAL: re-run validateGeometry after AI corrections so any
-          // edge case (e.g., a corrected length crossing a different rule like
-          // floating walls / slab loops) is still caught by the same plausibility
-          // ruleset that protects the rest of the pipeline. AI is an assistant,
-          // not the final authority.
-          if (gvResult.applied.walls + gvResult.applied.slabs + gvResult.applied.removedWalls + gvResult.applied.removedSlabs > 0) {
-            const reval = validateGeometry(fused.walls, fused.slabs, fused.corners, { defaultPeDireitoM: peDireito });
-            fused.walls = reval.walls;
-            fused.slabs = reval.slabs;
-            fused.corners = reval.corners;
-            const revalSummary = summarizeValidation(reval.stats);
-            console.log(`[GLOBAL-VALIDATOR] Re-validacao apos correcoes IA: ${revalSummary}`);
-          }
-          const gvDetail = gvResult.confidence > 0
-            ? `conf ${gvResult.confidence.toFixed(2)}: +${gvResult.applied.walls} paredes, +${gvResult.applied.slabs} lajes, -${gvResult.applied.removedWalls + gvResult.applied.removedSlabs} removidos | ${gvResult.summary}`
-            : gvResult.summary;
-          sendProgress(projectId, 4.6, "Validacao Global IA", "done", gvDetail);
-        } catch (gvErr: any) {
-          console.warn(`[GLOBAL-VALIDATOR] Pulando (erro): ${gvErr?.message || gvErr}`);
-          sendProgress(projectId, 4.6, "Validacao Global IA", "done", `pulado (erro: ${gvErr?.message || "desconhecido"})`);
-        }
-      }
+      /* ===== [REMOVED 2026-05-31] Etapa 4.6 — Validacao Global IA =====
+       * Motivo: cobertura redundante com Etapa 3 (extracao com prompt monolitico)
+       * + Etapa 4.9 SelfCheck (9 checks deterministicos). Em projetos tipicos,
+       * corrige <5% dos casos e custa US$ 0.02 + 20-30s.
+       * Tambem era opt-in (`project.settings.useGlobalValidation = true`), entao
+       * o pipeline default nunca rodava. Mantemos comentado pra futuro.
+       * Como reativar: descomentar este bloco. `runGlobalCrossValidation`,
+       * `validateGeometry` e `summarizeValidation` continuam importados.
+       *
+       * const globalValidationFlag = (project as any).settings?.useGlobalValidation === true
+       *   || req.query.globalValidation === "1";
+       * if (globalValidationFlag) {
+       *   try {
+       *     const gvResult = await runGlobalCrossValidation(fused.walls, fused.slabs, plantaImages, { projectId });
+       *     if (gvResult.applied.walls + ... > 0) {
+       *       const reval = validateGeometry(...);
+       *       fused.walls = reval.walls;
+       *     }
+       *   } catch (gvErr) { ... }
+       * }
+       */
 
       // ===== Task #9: Validacao por cortes (Etapa 4.7) =====
       // Le paginas classificadas como "corte" e extrai pe-direito por pavimento.

@@ -12,6 +12,9 @@ export interface StepperEntry {
   reprocessable?: boolean;
 }
 
+// Pipeline enxuto (2026-05-31): de 17 → 12 etapas. Removidas 2.5, 3.4, 4.6
+// (sem valor mensurável). Etapas 3.6 e 4.65 não tinham pílula no stepper.
+// Ver server/routes.ts comentários `[REMOVED 2026-05-31]` para detalhes.
 export const STAGE_CATALOG: StepperEntry[] = [
   { stage: "0.5", label: "Pre-flight", reprocessable: true,
     description: "Inspeciona o arquivo: PDF vs imagem, vetor vs raster, recomenda modo de extração." },
@@ -19,12 +22,8 @@ export const STAGE_CATALOG: StepperEntry[] = [
     description: "Identifica que tipo de página é cada uma (planta baixa, corte, fachada) e extrai tabelas." },
   { stage: "1.5", label: "Caracterização", reprocessable: true,
     description: "Identifica tipologia, programa, padrão e ranges esperados pra calibrar prompts seguintes." },
-  { stage: "2.5", label: "Vetor Nativo",
-    description: "Lê geometria direto do PDF vetorial — escala via cotas. Bônus em PDFs com cotas confiáveis." },
   { stage: "3",   label: "Geometria",
     description: "Extrai paredes, lajes e cantos das plantas via IA (Gemini Pro), por pavimento em paralelo." },
-  { stage: "3.4", label: "CV",
-    description: "Pipeline OpenCV opcional (cv-service Python). Quando rodando, refina endpoints de paredes." },
   { stage: "3.5", label: "Verificação",
     description: "Inventário focado: extrai eixos (p1→p2) reais das paredes pra renderização correta." },
   { stage: "3.7", label: "Topologia",
@@ -33,8 +32,6 @@ export const STAGE_CATALOG: StepperEntry[] = [
     description: "Cruza dados de todas as páginas, deduplica, reclassifica por score, gera lajes padrão." },
   { stage: "4.5", label: "Val. Geom.",
     description: "Remove paredes/lajes com dimensões implausíveis (espessura, comprimento fora do range)." },
-  { stage: "4.6", label: "Val. Global",
-    description: "Validação IA cruzada — checa consistência entre vistas (planta, corte, fachada)." },
   { stage: "5",   label: "Quantitativos",
     description: "Calcula painéis necessários por pavimento aplicando regras Lightwall (2P/SP/dimensões)." },
   { stage: "6",   label: "Catálogo",
