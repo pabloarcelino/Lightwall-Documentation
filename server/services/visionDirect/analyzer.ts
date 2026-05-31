@@ -155,7 +155,7 @@ export async function analyzeVisionDirect(
   log(`Split: ${pages.length} pagina(s) prontas para analise`);
 
   // ---------- 3) Classifica páginas ----------
-  log(`Classificando paginas (Gemini Flash)...`);
+  log(`Classificando paginas (Gemini Pro)...`);
   const classifyResult = await withRetry(async () => {
     const ai = getActiveGenAI();
     const parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = pages.map(
@@ -163,16 +163,16 @@ export async function analyzeVisionDirect(
     );
     parts.push({ text: buildClassificationPrompt(pages.map((p) => p.pageIndex)) });
     const response = await ai.models.generateContent({
-      model: MODEL_FLASH,
+      model: MODEL_PRO,
       contents: [{ role: "user", parts }],
       config: {
         temperature: 0.1,
-        maxOutputTokens: 1024,
+        maxOutputTokens: 2048,
         responseMimeType: "application/json",
         thinkingConfig: { thinkingBudget: 1024 },
       },
     });
-    totalCostUsd += estimateCost(MODEL_FLASH, {
+    totalCostUsd += estimateCost(MODEL_PRO, {
       input: response.usageMetadata?.promptTokenCount,
       output: response.usageMetadata?.candidatesTokenCount,
       thinking: response.usageMetadata?.thoughtsTokenCount,
