@@ -62,9 +62,18 @@ export function buildImageAnnotationPrompt(): string {
    - Quadrado verde: "Paredes internas"
    - Quadrado azul: "Muros"
 
+REGRA CRITICA — UMA COR POR PAREDE (nao duplicar):
+- Cada parede fisica do desenho recebe UMA UNICA cor sobre toda sua extensao.
+- NUNCA pinte duas cores paralelas na mesma parede (ex: contorno vermelho de um lado + verde do outro). Isso esta PROIBIDO.
+- NUNCA pinte uma linha de cor PARALELA a outra parede ja pintada — uma parede no desenho ocupa UM trecho geometrico unico; cubra com UMA cor.
+- Hierarquia de prevalencia quando ha ambiguidade:
+    a) Se PELO MENOS UMA face da parede toca ambiente externo -> VERMELHO (externa prevalece)
+    b) Caso contrario, se ambas as faces tocam interno -> VERDE (interna)
+    c) Se esta no contorno do lote, fora da edificacao -> AZUL (muro)
+
 REGRA TOPOLOGICA: paredes internas NUNCA podem estar fora do poligono formado pelas paredes externas. Antes de pintar uma parede como interna, confirme que ela esta DENTRO do contorno fechado.
 
-RESULTADO ESPERADO: a mesma planta original, com as paredes destacadas em vermelho/verde/azul e legenda no canto. Mantenha o mesmo tamanho e proporcao.`;
+RESULTADO ESPERADO: a mesma planta original, com cada parede destacada em UMA UNICA cor (vermelho OU verde OU azul, nunca duas), e legenda no canto. Mantenha o mesmo tamanho e proporcao.`;
 }
 
 export function buildAreaPrompt(peDireitoM: number): string {
@@ -109,6 +118,12 @@ PAREDES EXTERNAS — pelo menos UMA face em contato com a PARTE DE FORA da resid
   - Area de servico externa descoberta
   - Divisa com lote vizinho (caso de casa geminada: a parede compartilhada com o vizinho ainda e EXTERNA pela otica desta residencia)
   Sinal visual primario: a parede esta na BORDA do poligono fechado da edificacao coberta. Do lado de fora ha rotulo externo (RUA/JARDIM/QUINTAL) OU simplesmente espaco em branco fora do poligono.
+
+REGRA CRITICA — UMA CLASSIFICACAO POR PAREDE FISICA: cada parede do desenho recebe UMA UNICA classificacao. NUNCA conte a mesma parede duas vezes (uma vez como externa e outra como interna). A hierarquia de prevalencia, em ordem:
+  1. Se PELO MENOS UMA face da parede toca o ambiente externo -> EXTERNA (prevalece sobre tudo)
+  2. Se ambas as faces tocam interno coberto/fechado -> INTERNA
+  3. Se esta no contorno do lote (fora da edificacao) -> MURO
+Exemplo: a parede que separa a SALA (interna) da VARANDA ABERTA (externa) e EXTERNA — nao conte essa parede tambem como interna entre os dois ambientes.
 
 PAREDES INTERNAS — AMBAS as faces tocam ambientes internos, cobertos e FECHADOS, da mesma residencia. Exemplos:
   - Separa quarto/sala, banheiro/quarto, cozinha/sala, copa/cozinha, hall/corredor, etc.

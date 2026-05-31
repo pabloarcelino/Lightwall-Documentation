@@ -289,17 +289,26 @@ export async function analyzeVisionDirect(
           ],
           config: {
             temperature: 0.1,
-            maxOutputTokens: 4096,
+            maxOutputTokens: 8192,
             responseMimeType: "application/json",
-            thinkingConfig: { thinkingBudget: 4096 },
+            thinkingConfig: { thinkingBudget: 2048 },
           },
         });
+        const usage = response.usageMetadata;
+        const finishReason = response.candidates?.[0]?.finishReason;
+        console.log(
+          `[VISION-DIRECT] Pag ${pg.pageIndex} usage: input=${usage?.promptTokenCount} output=${usage?.candidatesTokenCount} thinking=${usage?.thoughtsTokenCount} finish=${finishReason}`,
+        );
         totalCostUsd += estimateCost(MODEL_PRO, {
-          input: response.usageMetadata?.promptTokenCount,
-          output: response.usageMetadata?.candidatesTokenCount,
-          thinking: response.usageMetadata?.thoughtsTokenCount,
+          input: usage?.promptTokenCount,
+          output: usage?.candidatesTokenCount,
+          thinking: usage?.thoughtsTokenCount,
         });
-        return response.text ?? "";
+        const text = response.text ?? "";
+        if (!text && finishReason && finishReason !== "STOP") {
+          throw new Error(`Gemini Pro finalizou sem texto (finishReason=${finishReason})`);
+        }
+        return text;
       }, "VISION-DIRECT-area");
     } catch (err: any) {
       console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex} chamada Gemini Pro falhou: ${err?.message || err}`);
