@@ -378,8 +378,13 @@ def parse_markdown(md_text: str, doc: Document) -> None:
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
-    src = repo_root / "docs" / "PIPELINE.md"
-    dst = repo_root / "docs" / "PIPELINE.docx"
+    # Args: opcionalmente recebe src e dst.
+    if len(sys.argv) >= 3:
+        src = Path(sys.argv[1]).resolve()
+        dst = Path(sys.argv[2]).resolve()
+    else:
+        src = repo_root / "docs" / "PIPELINE.md"
+        dst = repo_root / "docs" / "PIPELINE.docx"
     if not src.exists():
         print(f"NAO ENCONTRADO: {src}", file=sys.stderr)
         return 1
