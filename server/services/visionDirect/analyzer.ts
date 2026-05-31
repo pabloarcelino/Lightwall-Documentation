@@ -165,7 +165,12 @@ export async function analyzeVisionDirect(
     const response = await ai.models.generateContent({
       model: MODEL_FLASH,
       contents: [{ role: "user", parts }],
-      config: { temperature: 0.1, maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 1024 } },
+      config: {
+        temperature: 0.1,
+        maxOutputTokens: 1024,
+        responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 1024 },
+      },
     });
     totalCostUsd += estimateCost(MODEL_FLASH, {
       input: response.usageMetadata?.promptTokenCount,
@@ -204,7 +209,12 @@ export async function analyzeVisionDirect(
                 ],
               },
             ],
-            config: { temperature: 0.1, maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 2048 } },
+            config: {
+              temperature: 0.1,
+              maxOutputTokens: 1024,
+              responseMimeType: "application/json",
+              thinkingConfig: { thinkingBudget: 2048 },
+            },
           });
           totalCostUsd += estimateCost(MODEL_PRO, {
             input: response.usageMetadata?.promptTokenCount,
@@ -243,8 +253,28 @@ export async function analyzeVisionDirect(
     const pg = pages.find((p) => p.pageIndex === cls.page_index);
     if (!pg) continue;
     log(`Analisando planta pagina ${pg.pageIndex} (Gemini Pro)...`);
+
+    // Sempre criamos um PageResult com a imagem original — assim a UI tem o que
+    // mostrar mesmo se a IA falhar em devolver JSON valido. Os numeros sao
+    // preenchidos depois caso o parse seja bem sucedido.
+    const result: PageResult = {
+      pageIndex: pg.pageIndex,
+      pavimento: "Pavimento",
+      paredes_externas: { area_bruta_m2: 0, area_aberturas_m2: 0, area_liquida_m2: 0 },
+      paredes_internas: { area_bruta_m2: 0, area_aberturas_m2: 0, area_liquida_m2: 0 },
+      muros: { area_bruta_m2: 0, altura_assumida_m: 2.0 },
+      laje_piso_m2: 0,
+      laje_coberta_m2: 0,
+      aberturas: [],
+      confidence: "low",
+      observacoes: "",
+      originalImage: `data:${pg.mimeType};base64,${pg.base64}`,
+      annotatedImage: null,
+    };
+
+    let areaResult = "";
     try {
-      const areaResult = await withRetry(async () => {
+      areaResult = await withRetry(async () => {
         const ai = getActiveGenAI();
         const response = await ai.models.generateContent({
           model: MODEL_PRO,
@@ -257,7 +287,12 @@ export async function analyzeVisionDirect(
               ],
             },
           ],
-          config: { temperature: 0.1, maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 4096 } },
+          config: {
+            temperature: 0.1,
+            maxOutputTokens: 4096,
+            responseMimeType: "application/json",
+            thinkingConfig: { thinkingBudget: 4096 },
+          },
         });
         totalCostUsd += estimateCost(MODEL_PRO, {
           input: response.usageMetadata?.promptTokenCount,
@@ -266,73 +301,92 @@ export async function analyzeVisionDirect(
         });
         return response.text ?? "";
       }, "VISION-DIRECT-area");
-      console.log(`[VISION-DIRECT] Pag ${pg.pageIndex} resposta IA (${areaResult.length} chars): ${areaResult.substring(0, 400)}`);
-      const areaJson = extractJson(areaResult);
-      if (!areaJson) {
-        console.warn(`[VISION-DIRECT] Pagina ${pg.pageIndex}: JSON invalido na resposta. Resposta completa:`);
-        console.warn(areaResult);
-        continue;
-      }
-      console.log(`[VISION-DIRECT] Pag ${pg.pageIndex} JSON parseado:`, JSON.stringify(areaJson).substring(0, 500));
-      const result: PageResult = {
-        pageIndex: pg.pageIndex,
-        pavimento: typeof areaJson.pavimento === "string" ? areaJson.pavimento : "Terreo",
-        paredes_externas: {
-          area_bruta_m2: Number(areaJson.paredes_externas?.area_bruta_m2) || 0,
-          area_aberturas_m2: Number(areaJson.paredes_externas?.area_aberturas_m2) || 0,
-          area_liquida_m2: Number(areaJson.paredes_externas?.area_liquida_m2) || 0,
-        },
-        paredes_internas: {
-          area_bruta_m2: Number(areaJson.paredes_internas?.area_bruta_m2) || 0,
-          area_aberturas_m2: Number(areaJson.paredes_internas?.area_aberturas_m2) || 0,
-          area_liquida_m2: Number(areaJson.paredes_internas?.area_liquida_m2) || 0,
-        },
-        muros: {
-          area_bruta_m2: Number(areaJson.muros?.area_bruta_m2) || 0,
-          altura_assumida_m: Number(areaJson.muros?.altura_assumida_m) || 2.0,
-        },
-        laje_piso_m2: Number(areaJson.laje_piso_m2) || 0,
-        laje_coberta_m2: Number(areaJson.laje_coberta_m2) || 0,
-        aberturas: Array.isArray(areaJson.aberturas)
-          ? areaJson.aberturas
-              .filter((a: any) => a && typeof a === "object")
-              .map((a: any) => ({
-                tipo: ["janela", "porta", "cobogo", "outro"].includes(a.tipo) ? a.tipo : "outro",
-                parede: a.parede === "interna" ? "interna" : "externa",
-                largura_m: Number(a.largura_m) || 0,
-                altura_m: Number(a.altura_m) || 0,
-                area_m2: Number(a.area_m2) || (Number(a.largura_m) * Number(a.altura_m)) || 0,
-              }))
-          : [],
-        confidence: ["high", "medium", "low"].includes(areaJson.confidence) ? areaJson.confidence : "low",
-        observacoes: typeof areaJson.observacoes === "string" ? areaJson.observacoes.slice(0, 500) : "",
-        originalImage: `data:${pg.mimeType};base64,${pg.base64}`,
-        annotatedImage: null, // preenchido logo abaixo
-      };
-
-      // Gera a planta anotada via IA (gemini-2.5-flash-image), estilo Gemini Web.
-      // Best-effort: se falhar, mantemos null e a UI cai pra mostrar so a original.
-      log(`Pag ${pg.pageIndex}: gerando planta anotada via IA...`);
-      try {
-        const annotated = await editImage(
-          buildImageAnnotationPrompt(),
-          [{ data: pg.base64, mimeType: pg.mimeType }],
-        );
-        result.annotatedImage = annotated;
-        log(`Pag ${pg.pageIndex}: planta anotada OK (${Math.round(annotated.length / 1024)}KB)`);
-      } catch (imgErr: any) {
-        console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex} geracao de imagem falhou: ${imgErr?.message || imgErr}`);
-      }
-
-      pageResults.push(result);
-      log(
-        `Pag ${pg.pageIndex} (${result.pavimento}): ext=${result.paredes_externas.area_liquida_m2.toFixed(1)} ` +
-          `int=${result.paredes_internas.area_liquida_m2.toFixed(1)} muros=${result.muros.area_bruta_m2.toFixed(1)} ` +
-          `piso=${result.laje_piso_m2.toFixed(1)} coberta=${result.laje_coberta_m2.toFixed(1)} m²`,
-      );
     } catch (err: any) {
-      console.warn(`[VISION-DIRECT] Pagina ${pg.pageIndex} falhou: ${err?.message || err}`);
+      console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex} chamada Gemini Pro falhou: ${err?.message || err}`);
+      result.observacoes = `Falha na chamada Gemini: ${err?.message || "desconhecida"}`;
     }
+
+    console.log(
+      `[VISION-DIRECT] Pag ${pg.pageIndex} resposta IA (${areaResult.length} chars): ${areaResult.substring(0, 400)}`,
+    );
+
+    const areaJson = areaResult ? extractJson(areaResult) : null;
+    if (!areaJson) {
+      console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex}: JSON invalido. Resposta completa:`);
+      console.warn(areaResult);
+      result.observacoes =
+        result.observacoes ||
+        `IA nao retornou JSON valido. Os valores estao zerados — verifique se a planta tem cotas legiveis.`;
+    } else {
+      console.log(
+        `[VISION-DIRECT] Pag ${pg.pageIndex} JSON parseado:`,
+        JSON.stringify(areaJson).substring(0, 500),
+      );
+      result.pavimento = typeof areaJson.pavimento === "string" ? areaJson.pavimento : "Pavimento";
+      result.paredes_externas = {
+        area_bruta_m2: Number(areaJson.paredes_externas?.area_bruta_m2) || 0,
+        area_aberturas_m2: Number(areaJson.paredes_externas?.area_aberturas_m2) || 0,
+        area_liquida_m2: Number(areaJson.paredes_externas?.area_liquida_m2) || 0,
+      };
+      result.paredes_internas = {
+        area_bruta_m2: Number(areaJson.paredes_internas?.area_bruta_m2) || 0,
+        area_aberturas_m2: Number(areaJson.paredes_internas?.area_aberturas_m2) || 0,
+        area_liquida_m2: Number(areaJson.paredes_internas?.area_liquida_m2) || 0,
+      };
+      result.muros = {
+        area_bruta_m2: Number(areaJson.muros?.area_bruta_m2) || 0,
+        altura_assumida_m: Number(areaJson.muros?.altura_assumida_m) || 2.0,
+      };
+      result.laje_piso_m2 = Number(areaJson.laje_piso_m2) || 0;
+      result.laje_coberta_m2 = Number(areaJson.laje_coberta_m2) || 0;
+      result.aberturas = Array.isArray(areaJson.aberturas)
+        ? areaJson.aberturas
+            .filter((a: any) => a && typeof a === "object")
+            .map((a: any) => ({
+              tipo: ["janela", "porta", "cobogo", "outro"].includes(a.tipo) ? a.tipo : "outro",
+              parede: a.parede === "interna" ? "interna" : "externa",
+              largura_m: Number(a.largura_m) || 0,
+              altura_m: Number(a.altura_m) || 0,
+              area_m2: Number(a.area_m2) || (Number(a.largura_m) * Number(a.altura_m)) || 0,
+            }))
+        : [];
+      result.confidence = ["high", "medium", "low"].includes(areaJson.confidence)
+        ? areaJson.confidence
+        : "low";
+      result.observacoes =
+        typeof areaJson.observacoes === "string" ? areaJson.observacoes.slice(0, 500) : "";
+    }
+
+    // Geracao da planta anotada via IA — best-effort, totalmente independente
+    // do sucesso/falha do parse do JSON. Se falhar, UI mostra a original.
+    log(`Pag ${pg.pageIndex}: gerando planta anotada via IA...`);
+    const imgStart = Date.now();
+    try {
+      const annotated = await editImage(buildImageAnnotationPrompt(), [
+        { data: pg.base64, mimeType: pg.mimeType },
+      ]);
+      result.annotatedImage = annotated;
+      log(
+        `Pag ${pg.pageIndex}: planta anotada OK (${Math.round(annotated.length / 1024)}KB, ${(
+          (Date.now() - imgStart) /
+          1000
+        ).toFixed(1)}s)`,
+      );
+    } catch (imgErr: any) {
+      console.warn(
+        `[VISION-DIRECT] Pag ${pg.pageIndex} geracao de imagem falhou (${(
+          (Date.now() - imgStart) /
+          1000
+        ).toFixed(1)}s): ${imgErr?.message || imgErr}`,
+      );
+    }
+
+    pageResults.push(result);
+    log(
+      `Pag ${pg.pageIndex} (${result.pavimento}): ext=${result.paredes_externas.area_liquida_m2.toFixed(1)} ` +
+        `int=${result.paredes_internas.area_liquida_m2.toFixed(1)} muros=${result.muros.area_bruta_m2.toFixed(1)} ` +
+        `piso=${result.laje_piso_m2.toFixed(1)} coberta=${result.laje_coberta_m2.toFixed(1)} m²`,
+    );
   }
 
   // ---------- 6) Agregar ----------
