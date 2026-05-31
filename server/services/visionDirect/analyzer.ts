@@ -15,10 +15,12 @@
 import { withRetry } from "../gemini/client";
 import { repairJSON, getActiveGenAI, getFilePages } from "../gemini/planAnalyzer";
 import { inspectFile } from "../preflight/inspector";
+import { editImage } from "../../replit_integrations/image/client";
 import {
   buildClassificationPrompt,
   buildSectionHeightPrompt,
   buildAreaPrompt,
+  buildImageAnnotationPrompt,
 } from "./prompts";
 
 // ============================================================
@@ -64,6 +66,12 @@ export interface PageResult {
   aberturas: Abertura[];
   confidence: "high" | "medium" | "low";
   observacoes: string;
+  /** Data URL da planta original (PNG/JPEG). */
+  originalImage?: string;
+  /** Data URL da planta anotada gerada pela IA (paredes pintadas).
+   *  Usa modelo gemini-2.5-flash-image (estilo Gemini Web chat). Pode ser
+   *  null quando a geracao de imagem falhar — UI degrada graciosamente. */
+  annotatedImage?: string | null;
 }
 
 export interface VisionDirectResult {
@@ -258,11 +266,14 @@ export async function analyzeVisionDirect(
         });
         return response.text ?? "";
       }, "VISION-DIRECT-area");
+      console.log(`[VISION-DIRECT] Pag ${pg.pageIndex} resposta IA (${areaResult.length} chars): ${areaResult.substring(0, 400)}`);
       const areaJson = extractJson(areaResult);
       if (!areaJson) {
-        console.warn(`[VISION-DIRECT] Pagina ${pg.pageIndex}: JSON invalido, pulando`);
+        console.warn(`[VISION-DIRECT] Pagina ${pg.pageIndex}: JSON invalido na resposta. Resposta completa:`);
+        console.warn(areaResult);
         continue;
       }
+      console.log(`[VISION-DIRECT] Pag ${pg.pageIndex} JSON parseado:`, JSON.stringify(areaJson).substring(0, 500));
       const result: PageResult = {
         pageIndex: pg.pageIndex,
         pavimento: typeof areaJson.pavimento === "string" ? areaJson.pavimento : "Terreo",
@@ -295,7 +306,24 @@ export async function analyzeVisionDirect(
           : [],
         confidence: ["high", "medium", "low"].includes(areaJson.confidence) ? areaJson.confidence : "low",
         observacoes: typeof areaJson.observacoes === "string" ? areaJson.observacoes.slice(0, 500) : "",
+        originalImage: `data:${pg.mimeType};base64,${pg.base64}`,
+        annotatedImage: null, // preenchido logo abaixo
       };
+
+      // Gera a planta anotada via IA (gemini-2.5-flash-image), estilo Gemini Web.
+      // Best-effort: se falhar, mantemos null e a UI cai pra mostrar so a original.
+      log(`Pag ${pg.pageIndex}: gerando planta anotada via IA...`);
+      try {
+        const annotated = await editImage(
+          buildImageAnnotationPrompt(),
+          [{ data: pg.base64, mimeType: pg.mimeType }],
+        );
+        result.annotatedImage = annotated;
+        log(`Pag ${pg.pageIndex}: planta anotada OK (${Math.round(annotated.length / 1024)}KB)`);
+      } catch (imgErr: any) {
+        console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex} geracao de imagem falhou: ${imgErr?.message || imgErr}`);
+      }
+
       pageResults.push(result);
       log(
         `Pag ${pg.pageIndex} (${result.pavimento}): ext=${result.paredes_externas.area_liquida_m2.toFixed(1)} ` +

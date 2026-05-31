@@ -44,6 +44,29 @@ Responda EXCLUSIVAMENTE com JSON valido, sem markdown:
 }`;
 }
 
+/**
+ * Prompt para gerar a IMAGEM anotada via IA (gemini-2.5-flash-image), no
+ * estilo do chat do Gemini Web. Recebe a planta original + instrucao de
+ * pintar paredes externas em vermelho, internas em verde, e muros em azul,
+ * com legenda no canto. Devolve a imagem editada como inline data.
+ */
+export function buildImageAnnotationPrompt(): string {
+  return `Esta e uma planta arquitetonica. Crie uma VERSAO ANOTADA desta mesma imagem aplicando os seguintes destaques:
+
+1) PINTE em VERMELHO semi-transparente (50% opacidade) as PAREDES EXTERNAS (aquelas que tocam o ambiente externo: rua, jardim, ar livre, garagem aberta, varanda aberta).
+2) PINTE em VERDE semi-transparente (50% opacidade) as PAREDES INTERNAS (aquelas que separam ambientes internos da casa — ambas as faces dao para dentro).
+3) PINTE em AZUL semi-transparente (50% opacidade) os MUROS (vedacao do terreno, fora da edificacao, dentro do lote).
+4) PRESERVE o restante da planta intacto: textos, cotas, simbolos, mobiliario, hachuras, carimbo. NAO REDESENHE — apenas adicione as cores sobre as paredes existentes.
+5) Adicione uma LEGENDA pequena no canto inferior direito mostrando:
+   - Quadrado vermelho: "Paredes externas"
+   - Quadrado verde: "Paredes internas"
+   - Quadrado azul: "Muros"
+
+REGRA TOPOLOGICA: paredes internas NUNCA podem estar fora do poligono formado pelas paredes externas. Antes de pintar uma parede como interna, confirme que ela esta DENTRO do contorno fechado.
+
+RESULTADO ESPERADO: a mesma planta original, com as paredes destacadas em vermelho/verde/azul e legenda no canto. Mantenha o mesmo tamanho e proporcao.`;
+}
+
 export function buildAreaPrompt(peDireitoM: number): string {
   return `Voce e um engenheiro orcamentista. Analise esta planta arquitetonica e extraia areas em m² por categoria.
 
@@ -75,6 +98,12 @@ ETAPAS DE ANALISE (siga a ordem):
 10) Para LAJES: meca a area do poligono fechado em m² (piso e coberta podem ser iguais se nao houver beiral).
 
 REGRA TOPOLOGICA: nunca uma parede "interna" pode estar FORA do poligono das externas. Antes de marcar como interna, confirme que esta DENTRO do poligono fechado.
+
+IMPORTANTE — VALORES NAO-ZERO:
+- A planta tem comodos visiveis, portanto SEMPRE havera paredes externas (no minimo o contorno) e laje de piso.
+- NUNCA retorne todos zeros. Se voce nao consegue ler cotas, ESTIME visualmente comparando com comodos identificaveis (ex: porta de quarto tem ~0.8m, sala tipica tem 4-6m de lado).
+- Se a planta for ilegivel, retorne confidence="low" + observacao explicando, mas FORNEÇA estimativas razoaveis.
+- Valores plausiveis para casa residencial pequena (50-150m²): externas 30-70m², internas 30-80m², laje piso 50-150m².
 
 Responda EXCLUSIVAMENTE com este JSON (sem markdown, sem texto antes ou depois):
 {
