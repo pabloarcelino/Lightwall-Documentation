@@ -76,11 +76,11 @@ export function LiveStepper({ state, onSelect, onReprocess }: LiveStepperProps) 
   return (
     <TooltipProvider delayDuration={120}>
       <div
-        className="w-full overflow-x-auto rounded-xl border border-card-border bg-card"
+        className="w-full rounded-xl border border-card-border bg-card"
         data-testid="live-stepper"
       >
-        <div className="flex items-stretch min-w-max px-3 py-3 gap-2">
-          {STAGE_CATALOG.map((entry, idx) => {
+        <div className="flex flex-wrap items-stretch gap-1.5 px-2 py-2">
+          {STAGE_CATALOG.map((entry) => {
             const s = state.stages.get(entry.stage);
             const status = pillStatus(s);
             const Icon = status === "started" ? Loader2 :
@@ -93,69 +93,72 @@ export function LiveStepper({ state, onSelect, onReprocess }: LiveStepperProps) 
               status === "failed" ? "border-error/50 bg-error/10 text-error" :
               "border-border bg-muted/30 text-muted-foreground";
             const isActive = status === "started";
+            const isFailed = status === "failed";
+            // Pílula ativa: ampla com descrição inline. Demais: compacta com
+            // ícone + número + label curto. Falhada: também ampla pra surfar erro.
+            const expanded = isActive || isFailed;
             return (
-              <div key={entry.stage} className="flex items-center gap-2 shrink-0">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => (onSelect ?? defaultSelect)(entry.stage)}
-                      className={cn(
-                        // Quando ativa, alargar pra caber o texto inline.
-                        "group relative flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-all",
-                        isActive ? "min-w-[16rem]" : "min-w-[8.5rem]",
-                        ringTone,
-                        isActive && "shadow-[0_0_0_3px_rgba(24,156,217,0.15)]",
-                      )}
-                      data-testid={`stage-pill-${entry.stage}`}
-                    >
-                      <div className="flex items-center gap-1.5 w-full">
-                        <Icon
-                          className={cn(
-                            "h-3.5 w-3.5 shrink-0",
-                            isActive && "animate-spin",
-                          )}
-                        />
-                        <span className="text-[10px] font-mono tabular-nums uppercase tracking-wider opacity-80">
-                          {entry.stage}
-                        </span>
-                        {entry.reprocessable && status !== "pending" && onReprocess && (
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); onReprocess(entry.stage); }}
-                            className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity rounded p-0.5 hover:bg-accent"
-                            title={`Reprocessar etapa ${entry.stage}`}
-                            data-testid={`reprocess-${entry.stage}`}
-                          >
-                            <RotateCcw className="h-3 w-3" />
-                          </button>
+              <Tooltip key={entry.stage}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => (onSelect ?? defaultSelect)(entry.stage)}
+                    className={cn(
+                      "group relative flex items-center gap-1.5 rounded-md border transition-all",
+                      expanded ? "flex-col items-start px-2.5 py-1.5 max-w-[20rem] flex-1 basis-[16rem]" : "px-2 py-1",
+                      ringTone,
+                      isActive && "shadow-[0_0_0_2px_rgba(24,156,217,0.15)]",
+                    )}
+                    data-testid={`stage-pill-${entry.stage}`}
+                  >
+                    <div className="flex items-center gap-1.5 w-full">
+                      <Icon
+                        className={cn(
+                          "h-3 w-3 shrink-0",
+                          isActive && "animate-spin",
                         )}
-                      </div>
-                      <span className="text-xs font-semibold truncate w-full">{entry.label}</span>
-                      {/* Quando ativa, mostra descrição inline. Quando não, mostra detail do stage (se houver). */}
-                      {isActive ? (
-                        <span className="text-[10px] text-current/80 line-clamp-2 w-full leading-tight">
-                          {entry.description}
-                        </span>
-                      ) : s?.detail ? (
-                        <span className="text-[10px] text-current/70 truncate w-full">{s.detail}</span>
-                      ) : null}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs text-xs leading-relaxed">
-                    <div className="font-semibold mb-1">Etapa {entry.stage} — {entry.label}</div>
-                    <div className="opacity-90">{entry.description}</div>
-                    {s?.detail && <div className="mt-1.5 pt-1.5 border-t border-border/40 opacity-80">{s.detail}</div>}
-                    {s?.errorMessage && <div className="mt-1.5 pt-1.5 border-t border-border/40 text-error">{s.errorMessage}</div>}
-                  </TooltipContent>
-                </Tooltip>
-                {idx < STAGE_CATALOG.length - 1 && (
-                  <div className={cn(
-                    "h-px w-3 shrink-0",
-                    status === "completed" ? "bg-success/40" : "bg-border",
-                  )} />
-                )}
-              </div>
+                      />
+                      <span className="text-[9px] font-mono tabular-nums uppercase tracking-wider opacity-70">
+                        {entry.stage}
+                      </span>
+                      <span className={cn(
+                        "text-[11px] font-medium truncate",
+                        !expanded && "max-w-[5.5rem]",
+                      )}>
+                        {entry.label}
+                      </span>
+                      {entry.reprocessable && status !== "pending" && onReprocess && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); onReprocess(entry.stage); }}
+                          className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity rounded p-0.5 hover:bg-accent"
+                          title={`Reprocessar etapa ${entry.stage}`}
+                          data-testid={`reprocess-${entry.stage}`}
+                        >
+                          <RotateCcw className="h-2.5 w-2.5" />
+                        </button>
+                      )}
+                    </div>
+                    {/* Descrição inline quando ativa. Detail do erro quando failed. */}
+                    {isActive && (
+                      <span className="text-[10px] text-current/80 line-clamp-2 w-full leading-tight pl-4">
+                        {entry.description}
+                      </span>
+                    )}
+                    {isFailed && s?.errorMessage && (
+                      <span className="text-[10px] text-current/80 line-clamp-2 w-full leading-tight pl-4">
+                        {s.errorMessage}
+                      </span>
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs text-xs leading-relaxed">
+                  <div className="font-semibold mb-1">Etapa {entry.stage} — {entry.label}</div>
+                  <div className="opacity-90">{entry.description}</div>
+                  {s?.detail && <div className="mt-1.5 pt-1.5 border-t border-border/40 opacity-80">{s.detail}</div>}
+                  {s?.errorMessage && <div className="mt-1.5 pt-1.5 border-t border-border/40 text-error">{s.errorMessage}</div>}
+                </TooltipContent>
+              </Tooltip>
             );
           })}
         </div>
