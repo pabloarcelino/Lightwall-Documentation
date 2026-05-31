@@ -14,6 +14,7 @@ import {
   profilePrices,
   wallFeedback,
   floorSideHints,
+  visionDirectRuns,
   type Product,
   type InsertProduct,
   type Project,
@@ -39,6 +40,8 @@ import {
   type InsertWallFeedback,
   type FloorSideHint,
   type InsertFloorSideHint,
+  type VisionDirectRun,
+  type InsertVisionDirectRun,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -89,6 +92,12 @@ export interface IStorage {
   getPipelineEvents(projectId: number): Promise<PipelineEvent[]>;
   deletePipelineEvents(projectId: number): Promise<void>;
   getAiRuns(projectId: number): Promise<AiRun[]>;
+
+  // ===== Vision Direct (experimental) =====
+  createVisionDirectRun(data: InsertVisionDirectRun): Promise<VisionDirectRun>;
+  getVisionDirectRun(id: number): Promise<VisionDirectRun | undefined>;
+  getVisionDirectRunsByUser(userId: number | null): Promise<VisionDirectRun[]>;
+  deleteVisionDirectRun(id: number): Promise<void>;
 
   // ===== Users =====
   getUsers(): Promise<User[]>;
@@ -383,6 +392,55 @@ export class DatabaseStorage implements IStorage {
 
   async deletePipelineEvents(projectId: number): Promise<void> {
     await db.delete(pipelineEvents).where(eq(pipelineEvents.projectId, projectId));
+  }
+
+  // ===== Vision Direct (experimental) =====
+  async createVisionDirectRun(data: InsertVisionDirectRun): Promise<VisionDirectRun> {
+    try {
+      const [created] = await db.insert(visionDirectRuns).values(data).returning();
+      return created;
+    } catch (err: any) {
+      console.warn(`[STORAGE] createVisionDirectRun falhou: ${err?.message || err}`);
+      throw err;
+    }
+  }
+
+  async getVisionDirectRun(id: number): Promise<VisionDirectRun | undefined> {
+    try {
+      const [row] = await db
+        .select()
+        .from(visionDirectRuns)
+        .where(eq(visionDirectRuns.id, id))
+        .limit(1);
+      return row;
+    } catch (err: any) {
+      console.warn(`[STORAGE] getVisionDirectRun falhou: ${err?.message || err}`);
+      return undefined;
+    }
+  }
+
+  async getVisionDirectRunsByUser(userId: number | null): Promise<VisionDirectRun[]> {
+    try {
+      const query = db
+        .select()
+        .from(visionDirectRuns)
+        .orderBy(desc(visionDirectRuns.createdAt));
+      if (userId != null) {
+        return await query.where(eq(visionDirectRuns.userId, userId));
+      }
+      return await query;
+    } catch (err: any) {
+      console.warn(`[STORAGE] getVisionDirectRunsByUser falhou: ${err?.message || err}`);
+      return [];
+    }
+  }
+
+  async deleteVisionDirectRun(id: number): Promise<void> {
+    try {
+      await db.delete(visionDirectRuns).where(eq(visionDirectRuns.id, id));
+    } catch (err: any) {
+      console.warn(`[STORAGE] deleteVisionDirectRun falhou: ${err?.message || err}`);
+    }
   }
 
   // ===== AI audit =====

@@ -40,6 +40,33 @@ export async function bootstrapSchema(): Promise<void> {
         ON pipeline_events(project_id)
       `,
     },
+    {
+      name: "vision_direct_runs table",
+      sql: `
+        CREATE TABLE IF NOT EXISTS vision_direct_runs (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          file_name VARCHAR(255) NOT NULL,
+          file_type VARCHAR(20) NOT NULL,
+          page_count INTEGER NOT NULL DEFAULT 1,
+          pe_direito_usado_m DECIMAL(4,2),
+          pe_direito_fonte VARCHAR(20),
+          results JSONB NOT NULL,
+          cost_usd DECIMAL(6,4),
+          duration_ms INTEGER,
+          status VARCHAR(20) NOT NULL DEFAULT 'completed',
+          error_message TEXT,
+          created_at TIMESTAMP DEFAULT NOW()
+        )
+      `,
+    },
+    {
+      name: "vision_direct_runs user_id index",
+      sql: `
+        CREATE INDEX IF NOT EXISTS vision_direct_runs_user_idx
+        ON vision_direct_runs(user_id)
+      `,
+    },
   ];
 
   for (const stmt of statements) {

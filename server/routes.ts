@@ -548,6 +548,35 @@ const upload = multer({
 
 const DEFAULT_MAX_WALL_THICKNESS_M = 0.12;
 
+// Upload dedicado do Modo Visao Direta (experimental). Salva em pasta isolada
+// para nao misturar com uploads de projetos reais.
+const visionDirectUpload = multer({
+  dest: "server/uploads/vision-direct/",
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowedMimes = [
+      "application/pdf",
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp",
+      "image/bmp",
+      "image/tiff",
+    ];
+    const ext = path.extname(file.originalname).toLowerCase();
+    const allowedExts = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"];
+    if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
+      cb(null, true);
+    } else {
+      const err: any = new Error(
+        `Formato não suportado: "${file.originalname}". Use PDF, PNG, JPG, WEBP, BMP ou TIFF.`,
+      );
+      err.status = 400;
+      cb(err);
+    }
+  },
+});
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express,
@@ -4319,6 +4348,186 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Erro ao atualizar usuario:", error);
       res.status(500).json({ message: error?.message || "Erro ao atualizar usuario" });
+    }
+  });
+
+  // ============================================================
+  // Modo Visao Direta (experimental) — endpoints isolados
+  // ============================================================
+
+  // POST /api/vision-direct/analyze — upload + analise sincrona
+  app.post(
+    "/api/vision-direct/analyze",
+    visionDirectUpload.single("file"),
+    async (req: any, res) => {
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ message: "Nenhum arquivo enviado" });
+      }
+      const peDireitoRaw = Number(req.body?.peDireito);
+      const defaultPeDireitoM =
+        Number.isFinite(peDireitoRaw) && peDireitoRaw >= 2.0 && peDireitoRaw <= 6.0
+          ? peDireitoRaw
+          : 3.0;
+      const userId = req.user?.id ?? null;
+      try {
+        const { analyzeVisionDirect } = await import("./services/visionDirect/analyzer");
+        const ext = path.extname(file.originalname).toLowerCase();
+        const fileType =
+          ext === ".pdf"
+            ? "pdf"
+            : [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"].includes(ext)
+              ? "image"
+              : "image";
+        const result = await analyzeVisionDirect({
+          filePath: file.path,
+          fileType,
+          fileName: file.originalname,
+          defaultPeDireitoM,
+          userId: userId ?? undefined,
+        });
+        // Persistir
+        const run = await storage.createVisionDirectRun({
+          userId: userId ?? null,
+          fileName: file.originalname,
+          fileType,
+          pageCount: result.preflight.pageCount,
+          peDireitoUsadoM: String(result.peDireitoUsadoM) as any,
+          peDireitoFonte: result.peDireitoFonte,
+          results: result as any,
+          costUsd: String(result.costUsd.toFixed(4)) as any,
+          durationMs: result.durationMs,
+          status: "completed",
+          errorMessage: null,
+        });
+        // Limpa arquivo temp
+        try {
+          await fs.unlink(file.path);
+        } catch {
+          /* noop */
+        }
+        return res.json({ id: run.id, ...result });
+      } catch (err: any) {
+        console.error("[VISION-DIRECT] Erro:", err?.message || err);
+        // Limpa arquivo temp mesmo em erro
+        try {
+          await fs.unlink(file.path);
+        } catch {
+          /* noop */
+        }
+        return res
+          .status(500)
+          .json({ message: err?.message || "Erro durante analise" });
+      }
+    },
+  );
+
+  // GET /api/vision-direct — lista runs do usuario
+  app.get("/api/vision-direct", async (req: any, res) => {
+    try {
+      const userId = req.user?.id ?? null;
+      const runs = await storage.getVisionDirectRunsByUser(userId);
+      // Devolve forma compacta (sem results jsonb completo, so meta)
+      return res.json(
+        runs.map((r) => ({
+          id: r.id,
+          fileName: r.fileName,
+          fileType: r.fileType,
+          pageCount: r.pageCount,
+          peDireitoUsadoM: r.peDireitoUsadoM,
+          peDireitoFonte: r.peDireitoFonte,
+          costUsd: r.costUsd,
+          durationMs: r.durationMs,
+          status: r.status,
+          createdAt: r.createdAt,
+        })),
+      );
+    } catch (err: any) {
+      console.error("[VISION-DIRECT-LIST]", err?.message || err);
+      return res.status(500).json({ message: "Erro ao listar" });
+    }
+  });
+
+  // GET /api/vision-direct/:id — busca um run especifico
+  app.get("/api/vision-direct/:id", async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ message: "ID invalido" });
+      }
+      const run = await storage.getVisionDirectRun(id);
+      if (!run) return res.status(404).json({ message: "Nao encontrado" });
+      return res.json(run);
+    } catch (err: any) {
+      console.error("[VISION-DIRECT-GET]", err?.message || err);
+      return res.status(500).json({ message: "Erro ao buscar" });
+    }
+  });
+
+  // DELETE /api/vision-direct/:id — remove
+  app.delete("/api/vision-direct/:id", async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ message: "ID invalido" });
+      }
+      await storage.deleteVisionDirectRun(id);
+      return res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[VISION-DIRECT-DELETE]", err?.message || err);
+      return res.status(500).json({ message: "Erro ao excluir" });
+    }
+  });
+
+  // GET /api/vision-direct/:id/export/csv — exporta CSV simples
+  app.get("/api/vision-direct/:id/export/csv", async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id));
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ message: "ID invalido" });
+      }
+      const run = await storage.getVisionDirectRun(id);
+      if (!run) return res.status(404).json({ message: "Nao encontrado" });
+      const results: any = run.results;
+      const lines: string[] = [];
+      lines.push("Categoria,Area (m2)");
+      lines.push(`Paredes externas (liquida),${(results.totais?.paredes_externas_liquida_m2 ?? 0).toFixed(2)}`);
+      lines.push(`Paredes internas (liquida),${(results.totais?.paredes_internas_liquida_m2 ?? 0).toFixed(2)}`);
+      lines.push(`Muros,${(results.totais?.muros_m2 ?? 0).toFixed(2)}`);
+      lines.push(`Laje piso,${(results.totais?.laje_piso_m2 ?? 0).toFixed(2)}`);
+      lines.push(`Laje coberta,${(results.totais?.laje_coberta_m2 ?? 0).toFixed(2)}`);
+      lines.push("");
+      lines.push("Por pagina:");
+      lines.push("Pagina,Pavimento,Ext liquida,Int liquida,Muros,Piso,Coberta,Aberturas");
+      if (Array.isArray(results.pages)) {
+        for (const p of results.pages) {
+          lines.push(
+            [
+              p.pageIndex,
+              JSON.stringify(p.pavimento ?? ""),
+              (p.paredes_externas?.area_liquida_m2 ?? 0).toFixed(2),
+              (p.paredes_internas?.area_liquida_m2 ?? 0).toFixed(2),
+              (p.muros?.area_bruta_m2 ?? 0).toFixed(2),
+              (p.laje_piso_m2 ?? 0).toFixed(2),
+              (p.laje_coberta_m2 ?? 0).toFixed(2),
+              Array.isArray(p.aberturas) ? p.aberturas.length : 0,
+            ].join(","),
+          );
+        }
+      }
+      lines.push("");
+      lines.push(`Pe-direito usado (m),${run.peDireitoUsadoM ?? ""}`);
+      lines.push(`Fonte pe-direito,${run.peDireitoFonte ?? ""}`);
+      lines.push(`Tempo (s),${((run.durationMs ?? 0) / 1000).toFixed(1)}`);
+      lines.push(`Custo IA (USD),${run.costUsd ?? ""}`);
+      const csv = lines.join("\n");
+      const safeName = String(run.fileName).replace(/[^a-zA-Z0-9_\-.]/g, "_");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="vision-direct-${run.id}-${safeName}.csv"`);
+      return res.send(csv);
+    } catch (err: any) {
+      console.error("[VISION-DIRECT-CSV]", err?.message || err);
+      return res.status(500).json({ message: "Erro ao exportar" });
     }
   });
 

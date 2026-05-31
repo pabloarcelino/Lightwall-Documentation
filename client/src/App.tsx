@@ -17,6 +17,7 @@ import Usuarios from "@/pages/Usuarios";
 import TabelasPreco from "@/pages/TabelasPreco";
 import GuiaExterno from "@/pages/GuiaExterno";
 import AprendizadoIA from "@/pages/AprendizadoIA";
+import VisionDirect from "@/pages/VisionDirect";
 import Login from "@/pages/Login";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { AppShell } from "@/components/AppShell";
@@ -61,6 +62,8 @@ function Router() {
       <Route path="/usuarios" component={Usuarios} />
       <Route path="/tabelas-preco" component={TabelasPreco} />
       <Route path="/guia" component={GuiaExterno} />
+      <Route path="/vision-direct" component={VisionDirect} />
+      <Route path="/vision-direct/:id" component={VisionDirect} />
       <Route path="/aprendizado-ia">
         {() => (
           <AdminGuard>

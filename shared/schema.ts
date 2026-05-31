@@ -291,6 +291,33 @@ export const insertFloorSideHintSchema = createInsertSchema(floorSideHints).omit
 export type FloorSideHint = typeof floorSideHints.$inferSelect;
 export type InsertFloorSideHint = z.infer<typeof insertFloorSideHintSchema>;
 
+// ============================================================
+// Modo Visao Direta (experimental) — analise rapida em m² via Gemini.
+// Pipeline simplificado, completamente isolado do pipeline principal de 14
+// etapas. Cada upload gera 1 row aqui com resultado completo em jsonb.
+// ============================================================
+export const visionDirectRuns = pgTable("vision_direct_runs", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  fileName: varchar("file_name", { length: 255 }).notNull(),
+  fileType: varchar("file_type", { length: 20 }).notNull(),
+  pageCount: integer("page_count").notNull().default(1),
+  peDireitoUsadoM: decimal("pe_direito_usado_m", { precision: 4, scale: 2 }),
+  peDireitoFonte: varchar("pe_direito_fonte", { length: 20 }), // "corte" | "default"
+  results: jsonb("results").notNull(), // VisionDirectResult completo (pages[], totais, etc)
+  costUsd: decimal("cost_usd", { precision: 6, scale: 4 }),
+  durationMs: integer("duration_ms"),
+  status: varchar("status", { length: 20 }).notNull().default("completed"), // "completed" | "error"
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertVisionDirectRunSchema = createInsertSchema(visionDirectRuns).omit({
+  id: true,
+  createdAt: true,
+});
+export type VisionDirectRun = typeof visionDirectRuns.$inferSelect;
+export type InsertVisionDirectRun = z.infer<typeof insertVisionDirectRunSchema>;
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 

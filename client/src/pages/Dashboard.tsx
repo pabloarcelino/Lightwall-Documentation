@@ -25,6 +25,7 @@ import {
   BarChart3,
   ArrowRight,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 import { Link } from "wouter";
 import type { Project } from "@shared/schema";
@@ -170,11 +171,21 @@ export default function Dashboard() {
         title="Dashboard"
         description="Visão geral dos seus orçamentos e da calibração do sistema"
         actions={
-          <Link href="/new-project">
-            <Button className="gap-1.5" data-testid="button-new-project">
-              <Plus className="h-4 w-4" /> Novo projeto
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href="/vision-direct">
+              <Button variant="outline" className="gap-1.5" data-testid="button-vision-direct">
+                <Sparkles className="h-4 w-4 text-warning" /> Modo Visão Direta
+                <span className="text-[9px] uppercase tracking-wider font-semibold text-warning bg-warning/15 px-1 py-0.5 rounded">
+                  EXP
+                </span>
+              </Button>
+            </Link>
+            <Link href="/new-project">
+              <Button className="gap-1.5" data-testid="button-new-project">
+                <Plus className="h-4 w-4" /> Novo projeto
+              </Button>
+            </Link>
+          </div>
         }
       />
 
