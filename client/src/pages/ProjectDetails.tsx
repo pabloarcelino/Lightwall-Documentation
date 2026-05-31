@@ -83,7 +83,7 @@ import { ProjectHeader } from "@/components/project/ProjectHeader";
 import { DraftWorkspace } from "@/components/project/DraftWorkspace";
 import { ErrorState } from "@/components/project/ErrorState";
 import { CompletedFooter } from "@/components/project/CompletedFooter";
-import { ProjectMenu } from "@/components/project/ProjectMenu";
+import { ProjectSidebar } from "@/components/project/ProjectSidebar";
 import type { Product } from "@shared/schema";
 
 interface PipelineStep {
@@ -908,6 +908,50 @@ export default function ProjectDetails() {
     }
   }
 
+  // Conteúdos das seções da sidebar — montados uma vez, reusados.
+  const descriptionContent = budget?.projectDescription
+    ? <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap text-xs">{budget.projectDescription}</div>
+    : null;
+  const stagesContent = (
+    <div className="space-y-1.5 text-xs">
+      {(extractedData || []).filter((d: any) => d.elementType.startsWith("etapa")).map((d: any, i: number) => (
+        <details key={i} className="border border-border rounded p-1.5">
+          <summary className="font-mono text-[10px] cursor-pointer truncate">{d.elementType}</summary>
+          <pre className="text-[9px] mt-1.5 overflow-x-auto bg-muted/40 p-1.5 rounded">{JSON.stringify(d.data, null, 2).slice(0, 1500)}</pre>
+        </details>
+      ))}
+    </div>
+  );
+  const filesContent = (
+    <ul className="space-y-1 text-xs">
+      {(files || []).map((f: any) => (
+        <li key={f.id} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-accent/30 group">
+          <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
+          <span className="truncate flex-1" title={f.originalName}>{f.originalName}</span>
+          <button onClick={() => setViewingFile(f)} className="opacity-0 group-hover:opacity-100 text-[10px] text-primary hover:underline">
+            ver
+          </button>
+        </li>
+      ))}
+      {(files || []).length === 0 && (
+        <li className="text-muted-foreground italic py-1">Sem arquivos.</li>
+      )}
+    </ul>
+  );
+  const exportContent = (
+    <div className="space-y-1.5">
+      <Button size="sm" className="w-full justify-start" onClick={() => handleExport("excel")}>
+        <Download className="h-3 w-3 mr-1.5" /> Excel (XLSX)
+      </Button>
+      <Button size="sm" variant="outline" className="w-full justify-start" onClick={() => handleExport("pdf")}>
+        <Download className="h-3 w-3 mr-1.5" /> PDF
+      </Button>
+      <Button size="sm" variant="outline" className="w-full justify-start" onClick={() => handleExport("json")}>
+        <Download className="h-3 w-3 mr-1.5" /> JSON
+      </Button>
+    </div>
+  );
+
   return (
     <div className="min-h-screen flex flex-col bg-background" data-testid="project-page">
       <ProjectHeader
@@ -924,47 +968,11 @@ export default function ProjectDetails() {
         elapsedMs={headerElapsedMs}
         costUsd={headerCostUsd}
         tokens={headerTokens}
-        menu={
-          <ProjectMenu
-            hasBudget={!!budget}
-            hasExtractedData={(extractedData || []).length > 0}
-            isProcessing={isProcessing || project.status === "processing"}
-            descriptionContent={
-              budget?.projectDescription
-                ? <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">{budget.projectDescription}</div>
-                : null
-            }
-            stagesContent={
-              <div className="space-y-2 text-sm">
-                {(extractedData || []).filter((d: any) => d.elementType.startsWith("etapa")).map((d: any, i: number) => (
-                  <details key={i} className="border border-border rounded p-2">
-                    <summary className="font-mono text-xs cursor-pointer">{d.elementType}</summary>
-                    <pre className="text-[10px] mt-2 overflow-x-auto bg-muted/40 p-2 rounded">{JSON.stringify(d.data, null, 2).slice(0, 2000)}</pre>
-                  </details>
-                ))}
-              </div>
-            }
-            methodologyContent={<Metodologia />}
-            exportContent={
-              <div className="space-y-2">
-                <Button className="w-full" onClick={() => handleExport("excel")}>
-                  <Download className="h-4 w-4 mr-2" /> Excel (XLSX)
-                </Button>
-                <Button variant="outline" className="w-full" onClick={() => handleExport("pdf")}>
-                  <Download className="h-4 w-4 mr-2" /> PDF
-                </Button>
-                <Button variant="outline" className="w-full" onClick={() => handleExport("json")}>
-                  <Download className="h-4 w-4 mr-2" /> JSON
-                </Button>
-              </div>
-            }
-            onDelete={() => setShowDeleteConfirm(true)}
-          />
-        }
       />
 
-      <main className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex-1 overflow-auto container mx-auto px-4 py-4">
+      <main className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 overflow-auto px-4 py-4">
           {headerStatus === "draft" && (
             <DraftWorkspace
               files={files || []}
@@ -1067,6 +1075,28 @@ export default function ProjectDetails() {
             onReprocess={() => processMutation.mutate()}
           />
         )}
+        </div>
+        {/* Sidebar persistente direita — navegador do projeto */}
+        <ProjectSidebar
+          projectName={project.name}
+          clientName={project.clientName}
+          clientEmail={project.clientEmail}
+          buildingType={project.buildingType || "residencial"}
+          projectType={(project.projectType as "teste" | "real") || "real"}
+          fingerprint={(project as any).fileFingerprint}
+          elapsedMs={headerElapsedMs}
+          costUsd={headerCostUsd}
+          tokens={headerTokens}
+          hasBudget={!!budget}
+          hasExtractedData={(extractedData || []).length > 0}
+          isProcessing={isProcessing || project.status === "processing"}
+          filesContent={filesContent}
+          descriptionContent={descriptionContent}
+          stagesContent={stagesContent}
+          methodologyContent={<Metodologia />}
+          exportContent={exportContent}
+          onDelete={() => setShowDeleteConfirm(true)}
+        />
       </main>
 
       {/* Modais herdados (visualizacao de arquivo, confirmacao excluir) */}
