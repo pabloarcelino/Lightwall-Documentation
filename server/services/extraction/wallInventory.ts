@@ -308,13 +308,32 @@ export function mergeEndpointsIntoWalls(
     segByPav.get(k)!.push(s);
   }
 
+  // Log diagnostico — ajuda a entender mismatches de nome de pavimento entre
+  // Etapa 3 (que produz walls) e Etapa 3.5 (que produz segments).
+  const wallsByPav = new Map<string, number>();
+  for (const w of walls) {
+    const k = (w.nivel || "Terreo").toLowerCase();
+    wallsByPav.set(k, (wallsByPav.get(k) || 0) + 1);
+  }
+  const wPavStr = Array.from(wallsByPav.entries()).map(([k, n]) => `${k}:${n}`).join(",");
+  const sPavStr = Array.from(segByPav.entries()).map(([k, v]) => `${k}:${v.length}`).join(",");
+  console.log(`[INVENTARIO] Por pavimento: walls={${wPavStr}}, segments={${sPavStr}}`);
+
   // Cada segment so pode ser usado uma vez (evita 1 segment alimentar 2 walls).
   const usedSegmentIds = new Set<string>();
   let enriched = 0;
 
   for (const w of walls) {
     if (!w.bbox || w.endpoints) continue; // ja tem ou nao tem como casar
-    const candidates = segByPav.get((w.nivel || "Terreo").toLowerCase()) || segments;
+    const wPavKey = (w.nivel || "Terreo").toLowerCase();
+    // Quando o pavimento da wall e generico ("outro", "n/a", vazio) OU quando
+    // o segByPav do pavimento dela esta vazio, o match cross-pavimento entra:
+    // usa TODOS os segments. Isso resolve casos onde a Etapa 1 retorna
+    // "Outro" como pavimento (Gemini nao identificou nome real) mas a Etapa
+    // 3.5 detectou segments com nomes diferentes.
+    const sameLevel = segByPav.get(wPavKey) || [];
+    const isGenericPav = wPavKey === "outro" || wPavKey === "n/a" || wPavKey === "" || wPavKey === "todos";
+    const candidates = sameLevel.length > 0 && !isGenericPav ? sameLevel : segments;
 
     let bestSeg: WallSegment | null = null;
     let bestScore = 0;

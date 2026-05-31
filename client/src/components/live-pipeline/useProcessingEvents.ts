@@ -199,7 +199,12 @@ function reduceEvent(state: ProcessingState, e: PipelineEvent): ProcessingState 
   // estavel, ignora. Pra ai_call usamos callId; pra outros, combinacao de
   // kind+stage+pageIndex+phase suffices.
   const kind = eventKind(e);
-  const startedAt = state.startedAt ?? e.timestamp;
+  // Invariante: startedAt = min de todos os timestamps; finishedAt = max
+  // observado no evento terminal. Sem isso, eventos do server que chegam
+  // fora de ordem podiam dar finishedAt < startedAt -> tempo negativo.
+  const startedAt = state.startedAt != null
+    ? Math.min(state.startedAt, e.timestamp)
+    : e.timestamp;
   let finishedAt = state.finishedAt;
   let totalCostUsd = state.totalCostUsd;
   let totalTokens = state.totalTokens;
@@ -286,9 +291,11 @@ function reduceEvent(state: ProcessingState, e: PipelineEvent): ProcessingState 
       startedAt: prev?.startedAt ?? (sev.phase === "started" || sev.phase === "completed" || sev.phase === "failed" ? sev.timestamp : undefined),
       completedAt: sev.phase === "completed" || sev.phase === "failed" ? sev.timestamp : prev?.completedAt,
     });
-    // detectar conclusao do pipeline pela etapa especial "0" ou label Concluido/Erro
+    // detectar conclusao do pipeline pela etapa especial "0" ou label Concluido/Erro.
+    // Math.max garante invariante finishedAt >= startedAt mesmo se evento
+    // duplicado/fora de ordem chegar do server.
     if (sev.stage === "0" && (sev.label === "Concluido" || sev.label === "Erro")) {
-      finishedAt = sev.timestamp;
+      finishedAt = Math.max(finishedAt ?? 0, sev.timestamp);
     }
     const errors = sev.phase === "failed"
       ? [{ kind: "stage" as const, stage: sev.stage, message: sev.errorMessage || sev.detail || `Etapa ${sev.stage} (${sev.label}) falhou`, when: sev.timestamp }, ...state.errors]

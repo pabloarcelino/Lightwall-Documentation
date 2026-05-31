@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
-import { CircleDollarSign, Cpu, Clock, X, Loader2 } from "lucide-react";
+import { X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useProcessingEvents } from "./useProcessingEvents";
@@ -9,7 +9,6 @@ import { LiveStepper } from "./LiveStepper";
 import { EventTimeline } from "./EventTimeline";
 import { RenderedImagesGrid } from "./RenderedImagesGrid";
 import { ErrorsPanel } from "./ErrorsPanel";
-import { formatUsd, formatTokens, formatDuration } from "./AiCallCard";
 
 interface ProcessingLiveViewProps {
   projectId: number | string;
@@ -68,12 +67,6 @@ export function ProcessingLiveView({ projectId, isActive = true, onReprocess }: 
     onSseExhausted: handleSseExhausted,
   });
 
-  const elapsed = useMemo(() => {
-    if (!state.startedAt) return 0;
-    const end = state.finishedAt ?? Date.now();
-    return end - state.startedAt;
-  }, [state.startedAt, state.finishedAt]);
-
   const handleGoToStage = useCallback((stage: string) => {
     const el = document.getElementById(`stage-${stage}`);
     if (el) {
@@ -84,36 +77,33 @@ export function ProcessingLiveView({ projectId, isActive = true, onReprocess }: 
 
   return (
     <div className="space-y-4">
-      {/* Header de metricas ao vivo */}
-      <header className="rounded-xl border border-card-border bg-card px-4 py-3 flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2">
-          <span className={`h-2 w-2 rounded-full ${connected ? "bg-success animate-pulse" : "bg-muted-foreground"}`} />
-          <span className="text-xs font-medium uppercase tracking-wider">
-            {isActive ? (connected ? "Ao vivo" : "Reconectando") : "Historico"}
+      {/* Stepper sticky no topo. Status "Ao vivo" + Abortar do lado direito. */}
+      <div className="sticky top-[3.5rem] z-20 -mx-4 px-4 pt-3 pb-2 bg-background/95 backdrop-blur border-b border-border">
+        <div className="flex items-center gap-3 mb-2">
+          <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider">
+            <span className={`h-2 w-2 rounded-full ${connected ? "bg-success animate-pulse" : "bg-muted-foreground"}`} />
+            {isActive ? (connected ? "Ao vivo" : "Reconectando") : "Histórico"}
           </span>
-        </div>
-        <div className="h-6 w-px bg-border" />
-        <Metric icon={<Clock className="h-3.5 w-3.5" />} label="Tempo" value={state.startedAt ? formatDuration(elapsed) : "—"} />
-        <Metric icon={<Cpu className="h-3.5 w-3.5" />} label="Tokens" value={formatTokens(state.totalTokens)} />
-        <Metric icon={<CircleDollarSign className="h-3.5 w-3.5 text-success" />} label="Custo" value={formatUsd(state.totalCostUsd)} highlight />
-        <div className="ml-auto flex items-center gap-3">
-          <div className="text-[11px] text-muted-foreground">
-            {state.aiCalls.length} chamada{state.aiCalls.length !== 1 ? "s" : ""} • {state.renderedImages.filter(i => i.status === "ready").length}/{state.renderedImages.length} imagens
-          </div>
+          <span className="text-[11px] text-muted-foreground">
+            {state.aiCalls.length} chamada{state.aiCalls.length !== 1 ? "s" : ""}
+            {" • "}
+            {state.renderedImages.filter(i => i.status === "ready").length}/{state.renderedImages.length} imagens
+          </span>
           {isActive && !state.finishedAt && (
             <Button
               variant="destructive"
               size="sm"
               onClick={() => setConfirmAbort(true)}
               data-testid="abort-pipeline"
-              className="gap-1.5"
+              className="gap-1.5 ml-auto"
             >
               <X className="h-3.5 w-3.5" />
               Abortar
             </Button>
           )}
         </div>
-      </header>
+        <LiveStepper state={state} onReprocess={onReprocess} />
+      </div>
 
       {/* Confirmacao de aborto */}
       <Dialog open={confirmAbort} onOpenChange={(v) => !v && !aborting && setConfirmAbort(false)}>
@@ -135,9 +125,6 @@ export function ProcessingLiveView({ projectId, isActive = true, onReprocess }: 
         </DialogContent>
       </Dialog>
 
-      {/* Stepper horizontal ao vivo */}
-      <LiveStepper state={state} onReprocess={onReprocess} />
-
       {/* Erros, se houver */}
       {state.errors.length > 0 && (
         <ErrorsPanel errors={state.errors} onGoToStage={handleGoToStage} />
@@ -158,12 +145,3 @@ export function ProcessingLiveView({ projectId, isActive = true, onReprocess }: 
   );
 }
 
-function Metric({ icon, label, value, highlight }: { icon: React.ReactNode; label: string; value: string; highlight?: boolean }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      {icon}
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={`text-sm font-bold tabular-nums ${highlight ? "text-success" : "text-foreground"}`}>{value}</div>
-    </div>
-  );
-}

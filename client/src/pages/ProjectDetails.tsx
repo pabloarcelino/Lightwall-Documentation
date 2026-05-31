@@ -810,7 +810,7 @@ export default function ProjectDetails() {
     project.status === "error" ? "error" : "draft";
 
   const headerElapsedMs = telemetry.state.startedAt
-    ? (telemetry.state.finishedAt ?? Date.now()) - telemetry.state.startedAt
+    ? Math.max(0, (telemetry.state.finishedAt ?? Date.now()) - telemetry.state.startedAt)
     : null;
   const headerCostUsd = telemetry.state.totalCostUsd || null;
   const headerTokens = telemetry.state.totalTokens || null;

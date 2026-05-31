@@ -39,6 +39,10 @@ function inferStage(e: PipelineEvent): string {
   if (pv.startsWith("characterizeProject")) return "1.5";
   if (pv.startsWith("extractGeometry")) return "3";
   if (pv.startsWith("verify")) return "3.5";
+  if (pv.startsWith("wallInventory")) return "3.5";
+  if (pv.startsWith("cotaReader")) return "3.6";
+  if (pv.startsWith("envelope")) return "3.7";
+  if (pv.startsWith("selfCheck")) return "6.5";
   if (pv.startsWith("globalCrossValidation") || pv.startsWith("globalValidation")) return "4.6";
   if (pv.startsWith("description") || pv.startsWith("describe")) return "8";
   if (pv.startsWith("sectionInfo")) return "0.5";

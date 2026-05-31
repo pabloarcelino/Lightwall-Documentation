@@ -707,9 +707,15 @@ Se nao houver dados tabulares, retorne arrays vazios para as 3 categorias.
 ${skipBuildingTypeDetection ? "" : `TAREFA 3 - DETECCAO DO TIPO DE EDIFICACAO:
 ${BUILDING_TYPE_DETECTION_PROMPT}`}
 
+REGRA DO CAMPO "pavimento":
+- Use o nome LITERAL do pavimento como aparece no carimbo, legenda ou titulo da pagina (ex: "Terreo", "Superior", "1 Pavimento", "Subsolo", "Cobertura").
+- Se houver complemento ("SUBSOLO - AREA GOURMET", "PAVIMENTO SUPERIOR - QUARTOS"), pegue apenas o nome principal do nivel (Subsolo, Superior).
+- Se NAO houver indicacao visivel do nivel, use exatamente "Terreo" como default.
+- NUNCA use "Outro" — quando incerto, prefira "Terreo".
+
 Responda com seu raciocinio entre <RACIOCINIO> e </RACIOCINIO>, e depois APENAS o JSON:
 {
-  "classificacao": { "page_index": ${page.pageIndex}, "classificacao": "...", "pavimento": "Terreo|Superior|Subsolo|Coberta|Outro", "has_table": boolean, "has_scale": boolean },
+  "classificacao": { "page_index": ${page.pageIndex}, "classificacao": "...", "pavimento": "nome_literal_do_pavimento", "has_table": boolean, "has_scale": boolean },
   "tabelas": { "paredes_de_tabela": [], "esquadrias_de_tabela": [], "areas_de_tabela": [] }${skipBuildingTypeDetection ? "" : `,
   "tipo_edificacao": "residencial|comercial|institucional|industrial|outro"`}
 }`;
@@ -735,11 +741,20 @@ Responda com seu raciocinio entre <RACIOCINIO> e </RACIOCINIO>, e depois APENAS 
     }
   }
 
+  // Normaliza o pavimento ANTES de propagar pelo pipeline. Isso garante que
+  // walls da Etapa 3 e segments da Etapa 3.5 sempre tenham o mesmo nome
+  // canonico — sem isso o match em wallInventory falhava (ex: Etapa 1 dizia
+  // "Outro", Etapa 3.5 normalizava pra "Terreo").
+  const rawPav = parsed.classificacao?.pavimento;
+  const normalizedPav = normalizePavimento(rawPav);
+  if (rawPav && String(rawPav) !== normalizedPav) {
+    console.log(`[ETAPA1] Pag ${page.pageIndex} pavimento normalizado: "${rawPav}" → "${normalizedPav}"`);
+  }
   const classification: PageClassification = parsed.classificacao
     ? {
         page_index: page.pageIndex,
         classificacao: parsed.classificacao.classificacao || "planta_baixa",
-        pavimento: parsed.classificacao.pavimento || "Terreo",
+        pavimento: normalizedPav,
         has_table: !!parsed.classificacao.has_table,
         has_scale: !!parsed.classificacao.has_scale,
       }
@@ -767,6 +782,55 @@ function tryParseResponse(text: string): any | null {
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
   return repairJSON(jsonMatch[0]);
+}
+
+/**
+ * Normaliza o nome do pavimento que veio do Gemini. Objetivo: garantir
+ * consistencia entre Etapa 1 (classificacao) e Etapa 3.5 (inventario) pra
+ * que o match cross-pavimento em wallInventory funcione.
+ *
+ * Heuristica:
+ *  - "Outro" / vazio / null → "Terreo" (default)
+ *  - "Pav 1", "1 Pavimento", "1o Pavimento" → "Pavimento1" (apenas a parte titulo)
+ *  - "SUBSOLO - ÁREA GOURMET" → "Subsolo"
+ *  - "PAVIMENTO TERREO" → "Terreo"
+ *  - Casos conhecidos (terreo, superior, subsolo, cobertura) viram TitleCase canonico
+ */
+export function normalizePavimento(raw: any): string {
+  if (!raw || typeof raw !== "string") return "Terreo";
+  const trimmed = raw.trim();
+  if (!trimmed) return "Terreo";
+
+  // 1) Remove acentos pra match robusto
+  const noAcc = trimmed.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const lower = noAcc.toLowerCase();
+
+  // 2) Casos genericos -> default
+  if (lower === "outro" || lower === "n/a" || lower === "nenhum" || lower === "indefinido") {
+    return "Terreo";
+  }
+
+  // 3) Pega apenas a primeira parte antes de "-" / "," (ex: "SUBSOLO - AREA GOURMET" -> "SUBSOLO")
+  const firstPart = lower.split(/[-–—,]/)[0].trim();
+
+  // 4) Aliases conhecidos
+  if (/terreo|t[eé]rreo|pavimento terreo|pav terreo/i.test(firstPart)) return "Terreo";
+  if (/subsolo|sub-solo|sub solo|porao/i.test(firstPart)) return "Subsolo";
+  if (/superior|pavimento superior/i.test(firstPart)) return "Superior";
+  if (/cobertura|coberta|telhado/i.test(firstPart)) return "Cobertura";
+  if (/atico|sotao/i.test(firstPart)) return "Atico";
+
+  // 5) Numero de pavimento: "1 pavimento", "2o andar", "3 piso", "pav 4"
+  const numMatch = firstPart.match(/(?:pav(?:imento)?|andar|piso)\s*(\d+)|(\d+)\s*[oa°ª]?\s*(?:pav(?:imento)?|andar|piso)/i);
+  if (numMatch) {
+    const n = numMatch[1] || numMatch[2];
+    return `Pavimento${n}`;
+  }
+
+  // 6) Fallback: TitleCase do firstPart (max 30 chars)
+  const cleaned = firstPart.replace(/[^a-z0-9 ]/gi, "").slice(0, 30).trim();
+  if (!cleaned) return "Terreo";
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase();
 }
 
 async function runWithConcurrency<T>(
