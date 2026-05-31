@@ -161,31 +161,48 @@ ANTI-ZERO / ANTI-TEMPLATE
    * Banheiro ≈ 1.5-2.5m de lado
 - Faixas plausiveis (casa 50-150m²): externas 30-70m², internas 30-80m², laje piso 50-150m².
 - Quando estimar por falta de cota, defina confidence="low" e explique nas observacoes quais sinais voce usou.
-- Os valores no schema abaixo sao PLACEHOLDERS — substitua por numeros reais apurados, NAO copie o template.
+
+============================================================
+SOBRE OS NUMEROS DO SCHEMA ABAIXO
+============================================================
+Os 0.0 que aparecem no schema sao EXEMPLOS ILUSTRATIVOS apenas para mostrar o TIPO esperado (numero decimal). VOCE DEVE SUBSTITUIR CADA 0.0 por um numero real apurado da planta usando as etapas da fase 3.
+
+PERMITIDO devolver 0.0 SOMENTE quando aquela categoria GENUINAMENTE nao existe na planta:
+  - muros.area_bruta_m2 = 0.0 se nao ha vedacao de lote no desenho
+  - paredes_internas.area_liquida_m2 = 0.0 so se a planta for galpao/comodo unico sem divisorias
+  - laje_coberta_m2 = laje_piso_m2 se nao ha beiral tracejado
+
+PROIBIDO devolver todos os campos com 0.0. Toda planta residencial TEM paredes externas e laje de piso > 0.
 
 Responda EXCLUSIVAMENTE com este JSON (sem markdown, sem texto antes ou depois). Schema:
 {
-  "pavimento": "Terreo" | "Superior" | "Subsolo" | "Cobertura" | "Pavimento1" | etc,
+  "pavimento": "Terreo",
   "paredes_externas": {
-    "area_bruta_m2": <numero>,
-    "area_aberturas_m2": <numero>,
-    "area_liquida_m2": <numero>
+    "area_bruta_m2": 0.0,
+    "area_aberturas_m2": 0.0,
+    "area_liquida_m2": 0.0
   },
   "paredes_internas": {
-    "area_bruta_m2": <numero>,
-    "area_aberturas_m2": <numero>,
-    "area_liquida_m2": <numero>
+    "area_bruta_m2": 0.0,
+    "area_aberturas_m2": 0.0,
+    "area_liquida_m2": 0.0
   },
   "muros": {
-    "area_bruta_m2": <numero — ZERO se nao houver muro no desenho>,
-    "altura_assumida_m": <numero>
+    "area_bruta_m2": 0.0,
+    "altura_assumida_m": 2.0
   },
-  "laje_piso_m2": <numero>,
-  "laje_coberta_m2": <numero — igual a laje_piso_m2 se nao houver beiral tracejado>,
+  "laje_piso_m2": 0.0,
+  "laje_coberta_m2": 0.0,
   "aberturas": [
-    { "tipo": "janela" | "porta" | "cobogo" | "outro", "parede": "externa" | "interna", "largura_m": <numero>, "altura_m": <numero>, "area_m2": <numero> }
+    { "tipo": "janela", "parede": "externa", "largura_m": 0.0, "altura_m": 0.0, "area_m2": 0.0 }
   ],
-  "confidence": "high" | "medium" | "low",
+  "confidence": "high",
   "observacoes": "Cite quais sinais visuais voce usou (rotulos vistos, simbolos, projecao de beiral, presenca/ausencia de muro) e quaisquer estimativas feitas."
-}`;
+}
+
+Valores aceitos:
+  - pavimento: "Terreo", "Superior", "Subsolo", "Cobertura", "Pavimento1", etc.
+  - aberturas[].tipo: "janela", "porta", "cobogo", "outro"
+  - aberturas[].parede: "externa", "interna"
+  - confidence: "high", "medium", "low"`;
 }
