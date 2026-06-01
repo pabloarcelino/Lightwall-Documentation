@@ -40,17 +40,32 @@ export async function runVisionDirectForProject(
 
   try {
     await storage.updateProjectStatus(projectId, "processing");
+    console.log(`[VD-PROJECT] Projeto ${projectId}: status -> processing`);
 
     const project = await storage.getProject(projectId);
     if (!project) throw new Error(`Projeto ${projectId} nao encontrado`);
     const files = await storage.getProjectFiles(projectId);
     if (files.length === 0) throw new Error("Projeto sem arquivos enviados");
 
-    console.log(`[VD-PROJECT] Projeto ${projectId}: analisando ${files.length} arquivo(s)...`);
+    console.log(`[VD-PROJECT] Projeto ${projectId}: ${files.length} arquivo(s) registrados`);
 
-    // 1) Analisa cada arquivo via Vision Direct
+    // 1) Analisa cada arquivo via Vision Direct — valida existencia primeiro
     const perFileResults: Array<{ fileName: string; result: VisionDirectResult }> = [];
-    for (const file of files) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const tag = `${i + 1}/${files.length}`;
+      try {
+        await fs.access(file.filePath);
+      } catch {
+        console.warn(
+          `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} (${file.originalName}) INEXISTENTE no disco: ${file.filePath}`,
+        );
+        continue;
+      }
+      const fileStart = Date.now();
+      console.log(
+        `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} (${file.originalName}) iniciando analise...`,
+      );
       try {
         const result = await analyzeVisionDirect({
           filePath: file.filePath,
@@ -60,18 +75,23 @@ export async function runVisionDirectForProject(
           userId: input.userId ?? undefined,
         });
         perFileResults.push({ fileName: file.originalName, result });
+        console.log(
+          `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} OK em ${((Date.now() - fileStart) / 1000).toFixed(1)}s ` +
+            `(${result.pages.length} pag, custo US$ ${result.costUsd.toFixed(4)})`,
+        );
       } catch (err: any) {
         console.warn(
-          `[VD-PROJECT] Projeto ${projectId} arquivo ${file.originalName} falhou: ${err?.message || err}`,
+          `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} (${file.originalName}) falhou em ${((Date.now() - fileStart) / 1000).toFixed(1)}s: ${err?.message || err}`,
         );
       }
     }
 
     if (perFileResults.length === 0) {
-      throw new Error("Todas as analises de arquivo falharam");
+      throw new Error("Nenhum arquivo foi analisado com sucesso");
     }
 
     // 2) Consolida todos os arquivos num resultado unico
+    console.log(`[VD-PROJECT] Projeto ${projectId}: consolidando ${perFileResults.length} arquivo(s)...`);
     const consolidated = consolidateResults(perFileResults);
     console.log(
       `[VD-PROJECT] Projeto ${projectId} consolidado: ${consolidated.pages.length} pagina(s), ` +
@@ -79,34 +99,52 @@ export async function runVisionDirectForProject(
     );
 
     // 3) Limpa extractedData/budget antigos do projeto (caso seja reprocesso)
+    console.log(`[VD-PROJECT] Projeto ${projectId}: limpando dados antigos...`);
     await safeDeleteOldData(projectId);
 
-    // 4) Persiste extractedData no formato esperado pelo ProjectDetails
-    await persistExtractedData(projectId, consolidated);
+    // 4) Persiste extractedData (try/catch granular — nao bloqueia status final)
+    console.log(`[VD-PROJECT] Projeto ${projectId}: persistindo extractedData...`);
+    try {
+      await persistExtractedData(projectId, consolidated);
+      console.log(`[VD-PROJECT] Projeto ${projectId}: extractedData persistido`);
+    } catch (err: any) {
+      console.error(
+        `[VD-PROJECT] Projeto ${projectId} falha em persistExtractedData: ${err?.message || err}`,
+      );
+    }
 
-    // 5) Calcula budget e persiste
-    const budget = await buildBudget(consolidated, project.pricingProfileId ?? null, projectId);
-    await storage.createBudget({
-      projectId,
-      budgetData: budget as any,
-      totalArea: String(
-        (consolidated.totais.paredes_externas_liquida_m2 +
-          consolidated.totais.paredes_internas_liquida_m2 +
-          consolidated.totais.muros_m2 +
-          consolidated.totais.laje_piso_m2 +
-          consolidated.totais.laje_coberta_m2).toFixed(2),
-      ) as any,
-      totalCost: String((budget.resumo?.total_geral_paineis ?? 0).toFixed(2)) as any,
-      status: "finalizado",
-    } as any);
+    // 5) Calcula budget e persiste (try/catch granular)
+    console.log(`[VD-PROJECT] Projeto ${projectId}: calculando budget...`);
+    try {
+      const budget = await buildBudget(consolidated, project.pricingProfileId ?? null, projectId);
+      await storage.createBudget({
+        projectId,
+        budgetData: budget as any,
+        totalArea: String(
+          (consolidated.totais.paredes_externas_liquida_m2 +
+            consolidated.totais.paredes_internas_liquida_m2 +
+            consolidated.totais.muros_m2 +
+            consolidated.totais.laje_piso_m2 +
+            consolidated.totais.laje_coberta_m2).toFixed(2),
+        ) as any,
+        totalCost: String((budget.resumo?.total_geral_paineis ?? 0).toFixed(2)) as any,
+        status: "finalizado",
+      } as any);
+      console.log(`[VD-PROJECT] Projeto ${projectId}: budget persistido`);
+    } catch (err: any) {
+      console.error(
+        `[VD-PROJECT] Projeto ${projectId} falha em buildBudget/createBudget: ${err?.message || err}`,
+      );
+    }
 
-    // 6) Marca projeto como concluido
+    // 6) Marca projeto como concluido — SEMPRE chega aqui se chegou ao consolidated
     await storage.updateProjectStatus(projectId, "completed");
-    console.log(`[VD-PROJECT] Projeto ${projectId} concluido com sucesso`);
+    console.log(`[VD-PROJECT] Projeto ${projectId}: status -> completed`);
   } catch (err: any) {
-    console.error(`[VD-PROJECT] Projeto ${projectId} falhou:`, err?.message || err);
+    console.error(`[VD-PROJECT] Projeto ${projectId} falhou: ${err?.message || err}`);
     try {
       await storage.updateProjectStatus(projectId, "error");
+      console.log(`[VD-PROJECT] Projeto ${projectId}: status -> error`);
     } catch {
       /* noop */
     }

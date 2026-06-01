@@ -1024,13 +1024,28 @@ export default function ProjectDetails() {
                 Latência típica: 30-90s por arquivo. Você pode fechar esta página — o resultado
                 aparece quando voltar.
               </p>
+              <div className="mt-6 pt-4 border-t border-border/40">
+                <p className="text-[11px] text-muted-foreground">
+                  Se demorar mais que 5 minutos, algo deu errado — clique abaixo para reiniciar.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => processMutation.mutate()}
+                  disabled={processMutation.isPending}
+                  data-testid="processing-restart"
+                >
+                  Reiniciar análise
+                </Button>
+              </div>
             </Card>
           )}
 
           {headerStatus === "error" && (
             <ErrorState
-              message="O pipeline falhou durante o processamento."
-              hint="Verifique os arquivos enviados ou tente reprocessar. Detalhes técnicos no menu (⋮) → Etapas."
+              message="A análise da planta falhou."
+              hint="Verifique se os arquivos enviados são plantas arquitetônicas válidas. Os logs do servidor têm detalhes técnicos. Clique abaixo para tentar novamente."
               onReprocess={() => processMutation.mutate()}
               isReprocessing={processMutation.isPending}
             />

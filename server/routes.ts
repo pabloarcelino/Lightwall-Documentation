@@ -1373,19 +1373,34 @@ export async function registerRoutes(
       // 1) Devolve 202 imediatamente — analise roda em background
       res.status(202).json({ ok: true, projectId, status: "processing" });
 
-      // 2) Dispara em background (IIFE async)
+      // 2) Dispara em background (IIFE async) — BLINDADA: qualquer erro
+      // (incluindo import falho, crash sincrono fora do try interno do
+      // adapter) atualiza projects.status="error" para destravar a UI.
       (async () => {
-        const { runVisionDirectForProject } = await import(
-          "./services/visionDirect/projectAdapter"
-        );
-        await runVisionDirectForProject({
-          projectId,
-          userId,
-          defaultPeDireitoM,
-        });
-      })().catch((err: any) => {
-        console.error(`[VD-PROJECT] handler background failed for ${projectId}:`, err?.message || err);
-      });
+        try {
+          const { runVisionDirectForProject } = await import(
+            "./services/visionDirect/projectAdapter"
+          );
+          await runVisionDirectForProject({
+            projectId,
+            userId,
+            defaultPeDireitoM,
+          });
+        } catch (err: any) {
+          console.error(
+            `[VD-PROJECT] handler background failed for ${projectId}:`,
+            err?.message || err,
+          );
+          try {
+            await storage.updateProjectStatus(projectId, "error");
+          } catch (statusErr: any) {
+            console.error(
+              `[VD-PROJECT] alem disso, updateProjectStatus("error") falhou:`,
+              statusErr?.message || statusErr,
+            );
+          }
+        }
+      })();
     } catch (err: any) {
       console.error("[VD-PROJECT-START]", err?.message || err);
       // Se ainda nao respondemos, devolve erro
