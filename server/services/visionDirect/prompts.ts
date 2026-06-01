@@ -51,49 +51,95 @@ Responda EXCLUSIVAMENTE com JSON valido, sem markdown:
  * com legenda no canto. Devolve a imagem editada como inline data.
  */
 export function buildImageAnnotationPrompt(): string {
-  return `Esta e uma planta arquitetonica. Crie uma VERSAO ANOTADA desta mesma imagem aplicando os seguintes destaques:
+  return `Esta e uma planta arquitetonica. Crie uma VERSAO ANOTADA pintando TODAS as paredes do desenho.
 
-1) PINTE em VERMELHO semi-transparente (50% opacidade) as PAREDES EXTERNAS (aquelas que tocam o ambiente externo: rua, jardim, ar livre, garagem aberta, varanda aberta).
-2) PINTE em VERDE semi-transparente (50% opacidade) as PAREDES INTERNAS (aquelas que separam ambientes internos da casa — ambas as faces dao para dentro).
-3) PINTE em AZUL semi-transparente (50% opacidade) os MUROS (vedacao do terreno, fora da edificacao, dentro do lote).
-4) PRESERVE o restante da planta intacto: textos, cotas, simbolos, mobiliario, hachuras, carimbo. NAO REDESENHE — apenas adicione as cores sobre as paredes existentes.
-5) Adicione uma LEGENDA pequena no canto inferior direito mostrando:
-   - Quadrado vermelho: "Paredes externas"
-   - Quadrado verde: "Paredes internas"
-   - Quadrado azul: "Muros"
+============================================================
+CONVENCAO DE CORES — FIXA E NAO-NEGOCIAVEL
+============================================================
+SEMPRE use exatamente este mapeamento (NAO INVENTE convencoes proprias):
+- VERMELHO #FF0000 a 50% opacidade  ->  PAREDES EXTERNAS (edificacao)
+- VERDE    #00C853 a 50% opacidade  ->  PAREDES INTERNAS (divisorias)
+- AZUL     #2962FF a 50% opacidade  ->  MUROS (vedacao do terreno/lote)
 
-REGRA CRITICA — UMA COR POR PAREDE (nao duplicar):
-- Cada parede fisica do desenho recebe UMA UNICA cor sobre toda sua extensao.
-- NUNCA pinte duas cores paralelas na mesma parede (ex: contorno vermelho de um lado + verde do outro). Isso esta PROIBIDO.
-- NUNCA pinte uma linha de cor PARALELA a outra parede ja pintada — uma parede no desenho ocupa UM trecho geometrico unico; cubra com UMA cor.
-- Hierarquia de prevalencia quando ha ambiguidade:
-    a) Se PELO MENOS UMA face da parede toca ambiente externo -> VERMELHO (externa prevalece)
-    b) Caso contrario, se ambas as faces tocam interno -> VERDE (interna)
-    c) Se esta no contorno do lote, fora da edificacao -> AZUL (muro)
+LEGENDA OBRIGATORIA no canto inferior direito, com EXATAMENTE essas 3 linhas e nessa ORDEM:
+  [quadrado vermelho] Paredes externas
+  [quadrado verde]    Paredes internas
+  [quadrado azul]     Muros
 
-REGRA TOPOLOGICA: paredes internas NUNCA podem estar fora do poligono formado pelas paredes externas. Antes de pintar uma parede como interna, confirme que ela esta DENTRO do contorno fechado.
+NUNCA escreva outras palavras na legenda. NUNCA inverta cores. NUNCA omita uma linha. Se ha so 1 ou 2 categorias na planta, ainda assim escreva as 3 linhas da legenda com seus respectivos quadrados de cor.
 
-RESULTADO ESPERADO: a mesma planta original, com cada parede destacada em UMA UNICA cor (vermelho OU verde OU azul, nunca duas), e legenda no canto. Mantenha o mesmo tamanho e proporcao.`;
+============================================================
+DEFINICOES — leia com cuidado
+============================================================
+PAREDE EXTERNA (VERMELHO): parede da EDIFICACAO COBERTA que tem ao menos UMA face em contato com ambiente externo (rua, jardim, quintal, varanda aberta, garagem aberta, divisa com vizinho). E uma das paredes que FORMA o contorno do volume coberto da casa.
+
+PAREDE INTERNA (VERDE): parede DENTRO da edificacao coberta que separa dois ambientes internos cobertos+fechados (ex: SALA/QUARTO, COZINHA/BANHEIRO, HALL/CORREDOR). Geralmente mais finas que as externas. Inclui divisorias de drywall.
+
+MURO (AZUL): vedacao do TERRENO/LOTE, fora da edificacao coberta. Pista visual primaria: existem AREAS verdes (jardim/grama) ou cinzas (calcada/passeio/piso descoberto) DESENHADAS ao redor da edificacao, e ha LINHAS no perimetro dessas areas externas separando-as da rua ou do lote vizinho. O muro PODE encostar na parede externa ou continuar a partir dela. Em plantas SUBSOLO/PAVIMENTO sem jardim ao redor, normalmente nao ha muro.
+
+============================================================
+REGRA CRITICA — COBERTURA TOTAL DAS PAREDES
+============================================================
+Toda parede desenhada na planta DEVE receber UMA cor. NAO DEIXE NENHUMA PAREDE SEM COR.
+
+Antes de finalizar, percorra a planta cômodo por cômodo e confira:
+- Toda parede que circunda cada cômodo coberto esta pintada?
+- Toda parede entre dois cômodos cobertos esta pintada de verde?
+- Toda parede no contorno do volume coberto esta pintada de vermelho?
+- O contorno do lote (se houver) esta pintado de azul?
+
+Especial atencao: paredes INTERNAS finas (divisorias de banheiro, closet, corredor, despensa) sao facilmente esquecidas. Pinte TODAS.
+
+============================================================
+REGRA CRITICA — UMA UNICA COR POR PAREDE FISICA
+============================================================
+Cada parede do desenho recebe UMA UNICA cor sobre toda sua extensao.
+
+PROIBIDO:
+- Pintar duas cores paralelas na mesma parede (ex: linha vermelha de um lado + linha verde do outro).
+- Desenhar uma faixa de cor PARALELA a uma parede ja pintada (uma parede e UMA linha unica).
+- Trocar a cor no meio da parede.
+
+HIERARQUIA DE PREVALENCIA (use quando uma parede pode ter duas leituras):
+  1. Se ao menos UMA face toca ambiente externo -> VERMELHO (externa)
+  2. Caso ambas as faces toquem interno coberto -> VERDE (interna)
+  3. Se esta no contorno do LOTE, fora da edificacao -> AZUL (muro)
+
+Exemplo: a parede que separa SALA (interna) da VARANDA ABERTA (externa) e VERMELHA (externa prevalece). Nao pinte essa parede tambem com verde.
+
+REGRA TOPOLOGICA: parede VERDE (interna) NUNCA pode estar fora do contorno fechado formado pelas paredes VERMELHAS (externas). Antes de pintar verde, confirme que esta DENTRO da edificacao.
+
+============================================================
+PRESERVACAO DO DESENHO ORIGINAL
+============================================================
+PRESERVE intacto: textos, cotas, simbolos, mobiliario, hachuras, carimbo, tabela de areas, titulo. NAO REDESENHE — apenas adicione as cores transparentes sobre as paredes existentes.
+
+RESULTADO: a planta original identica, com TODAS as paredes destacadas em UMA UNICA cor (vermelho/verde/azul conforme convencao fixa), e legenda padronizada no canto. Mesmo tamanho e proporcao.`;
 }
 
 export function buildAreaPrompt(peDireitoM: number): string {
   return `Engenheiro orcamentista. Meca areas em m² desta planta. Pe-direito = ${peDireitoM.toFixed(2)}m.
 
-DEFINICOES (hierarquia: externa > interna > muro — cada parede UMA classe):
-- EXTERNA: ao menos 1 face fora da residencia (rua, jardim, quintal, varanda/garagem ABERTA, divisa com vizinho).
-- INTERNA: ambas as faces em comodos internos cobertos+fechados. So conta paredes do piso ao teto.
-- MURO: vedacao do TERRENO (fora da edificacao). Se nao ha contorno de lote no desenho -> 0.
+DEFINICOES (hierarquia: externa > interna > muro — cada parede UMA UNICA classe):
+- EXTERNA: parede da EDIFICACAO COBERTA com ao menos 1 face fora da residencia (rua, jardim, quintal, varanda/garagem ABERTA, divisa com vizinho).
+- INTERNA: ambas as faces em comodos internos cobertos+fechados. So conta paredes do piso ao teto. Inclui divisorias finas (banheiro, closet, corredor, despensa, drywall).
+- MURO: vedacao do TERRENO/LOTE, FORA da edificacao coberta. SINAL VISUAL: a planta mostra areas verdes (jardim/grama) ou cinzas (calcada/passeio/piso descoberto) AO REDOR da edificacao, e ha linhas no perimetro dessas areas externas. O contorno do lote ESTA presente quando a planta mostra "terreno" (jardim/quintal/garagem) alem do volume coberto. Se a planta mostra SO o interior da edificacao (sem terreno ao redor, ex: apartamento, pavimento superior, subsolo enterrado) -> muros = 0.
 - LAJE PISO: area horizontal coberta+fechada (exclui varanda aberta, jardim, garagem aberta).
 - LAJE COBERTA: = laje_piso, salvo se houver linhas tracejadas de beiral no perimetro (entao maior).
 
-CONTEXTO VISUAL (use ativamente): rotulos textuais (SALA/QUARTO/COZINHA/BANHEIRO/GARAGEM/VARANDA/JARDIM/RUA), mobiliario (sanitario=banheiro, fogao/pia dupla=cozinha, cama=quarto, sofa=sala, carro=garagem), linhas tracejadas no perimetro=beiral, cotas dimensionais, carimbo=pavimento.
+IMPORTANTE — REGRA ANTI-PARALELA: nao pode haver duas paredes paralelas no mesmo lugar fisico. Cada trecho de parede do desenho recebe UMA UNICA classificacao. Onde tem parede EXTERNA, nao tem parede INTERNA paralela colada nela — se voce duvidar entre as duas, externa prevalece.
+
+REGRA — IDENTIFIQUE TODAS AS PAREDES: varra a planta comodo por comodo. Toda parede desenhada (espessa ou fina) DEVE entrar em uma das 3 classes. Atencao especial as divisorias FINAS de banheiro, closet, corredor — sao facilmente esquecidas.
+
+CONTEXTO VISUAL (use ativamente): rotulos textuais (SALA/QUARTO/COZINHA/BANHEIRO/GARAGEM/VARANDA/JARDIM/RUA), mobiliario (sanitario=banheiro, fogao/pia dupla=cozinha, cama=quarto, sofa=sala, carro=garagem), linhas tracejadas no perimetro=beiral, cotas dimensionais, carimbo=pavimento. Para MUROS: olhe se ha JARDIM/GRAMA/CALCADA desenhados em volta da edificacao — se sim, ha lote e provavelmente muro no perimetro.
 
 CALCULO:
-1) Classifique cada parede usando a hierarquia acima.
+1) Classifique cada parede usando a hierarquia acima (varredura completa, sem deixar parede sem classe).
 2) Some comprimentos por classe (use as cotas), multiplique por ${peDireitoM.toFixed(2)}m -> area_bruta.
 3) Liste aberturas (porta, janela, cobogo) com largura x altura. area_liquida = bruta - aberturas.
+4) Para MURO: se ha jardim/quintal/calcada desenhados, identifique o perimetro do LOTE (nao o da edificacao), some seus lados (descontando portao se visivel) e multiplique por altura (cota visivel ou 2.0m).
 
-ANTI-ZERO: toda planta residencial tem paredes externas > 0 e laje de piso > 0. Se cotas ilegiveis, estime visualmente (porta=0.8m, sala=4-6m, quarto=3-4m, banheiro=1.5-2.5m) e marque confidence="low".
+ANTI-ZERO: toda planta residencial tem paredes externas > 0 e laje de piso > 0. Plantas TERREO de casa quase sempre tem MURO > 0 (a casa fica num lote com vedacao). Se cotas ilegiveis, estime visualmente (porta=0.8m, sala=4-6m, quarto=3-4m, banheiro=1.5-2.5m) e marque confidence="low".
 
 OBRIGATORIO preencher TODOS os 5 campos numericos: paredes_externas, paredes_internas, muros, laje_piso_m2, laje_coberta_m2. NAO ENVIE JSON parcial — se um campo nao se aplica, use 0.0 explicito.
 
