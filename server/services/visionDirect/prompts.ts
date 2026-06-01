@@ -107,14 +107,19 @@ AS 4 REGIOES (uma camada unica)
 
 REGIAO VERMELHA (paredes externas + ambientes cobertos-abertos):
 - Forma uma MOLDURA continua: a faixa de paredes externas da edificacao coberta inteira + o interior dos ambientes cobertos-abertos (garagem aberta, varanda coberta, alpendre, santuario sem porta). Tudo isso e UMA UNICA regiao vermelha conectada.
-- A moldura vermelha cobre a espessura completa de cada parede externa (face externa + miolo + face interna). NAO faca duas linhas paralelas.
-- Os "baloes" da garagem/varanda/etc se conectam visualmente a moldura externa formando UMA mancha vermelha unica.
+
+CRITICO — ESPESSURA DA FAIXA VERMELHA NAS PAREDES EXTERNAS:
+- A faixa vermelha que cobre as paredes externas tem que ter EXATAMENTE A MESMA LARGURA das paredes no desenho. As paredes da planta tem uma espessura visivel (geralmente 15-25cm representados como faixa entre duas linhas paralelas) — a regiao vermelha COBRE TODA essa espessura, da linha externa ate a linha interna.
+- NAO pinte uma linha fina vermelha. NAO pinte so o contorno externo. PINTE uma faixa GROSSA que vai EXATAMENTE de uma face da parede ate a outra face, cobrindo o miolo inteiro.
+- Olhe a parede no desenho original: ela tem largura X. A faixa vermelha tem que ter LARGURA X tambem. Nem mais, nem menos.
+- Posicione a faixa EXATAMENTE EM CIMA das paredes (nao do lado de fora delas, nao do lado de dentro — em cima delas, da exata largura delas).
+
 - VALE PARA QUALQUER PAVIMENTO (subsolo, terreo, superior). Mesmo que o lado externo da parede de para terra/laje/nada desenhado, a parede do perimetro da edificacao coberta esta na regiao vermelha.
 
 REGIAO VERDE CLARA (comodos internos fechados + paredes internas):
 - Pinte todos os comodos internos fechados (sala, quarto, suite, banheiro, cozinha, copa, lavabo, closet, escritorio, corredor, hall, escada interna, deposito, despensa) cobrindo INCLUSIVE as paredes finas que separam dois desses comodos.
-- As divisorias internas ficam DENTRO da regiao verde clara (mesma cor das salas vizinhas). NAO pinte as divisorias separadamente — elas sao parte da mancha verde.
-- A regiao verde clara para EXATAMENTE no eixo das paredes externas (que sao vermelhas).
+- As divisorias internas finas ficam COMPLETAMENTE COBERTAS pela regiao verde clara — desde uma face ate a outra face, cobrindo a espessura inteira da divisoria. Use a MESMA LARGURA das paredes no desenho.
+- A regiao verde clara cobre tudo do interior coberto fechado ate o eixo central das paredes externas (onde encontra a regiao vermelha).
 
 REGIAO VERDE ESCURA (areas externas descobertas):
 - Jardim, grama, quintal, patio descoberto.
