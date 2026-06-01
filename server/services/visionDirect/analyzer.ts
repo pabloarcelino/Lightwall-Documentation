@@ -132,6 +132,62 @@ function extractJson(text: string): any | null {
 }
 
 // ============================================================
+// Rasterizacao de PDFs
+// ============================================================
+
+/**
+ * Converte paginas PDF em PNG. getFilePages() retorna PDFs individuais
+ * (mimeType="application/pdf", ~500KB-2MB cada). Mandar isso pro Gemini
+ * Pro em 2 chamadas paralelas por pagina sobrecarregava o gateway e
+ * causava HTTP 502.
+ *
+ * Rasterizando para PNG ~1024px de largura, cada payload cai para
+ * ~200-400KB. Paginas que ja sao raster (PNG/JPG) passam direto.
+ */
+async function rasterizePdfPages(
+  pages: Array<{ pageIndex: number; mimeType: string; base64: string }>,
+): Promise<Array<{ pageIndex: number; mimeType: string; base64: string }>> {
+  const out: typeof pages = [];
+  for (const p of pages) {
+    if (p.mimeType !== "application/pdf") {
+      out.push(p);
+      continue;
+    }
+    try {
+      const { pdfToPng } = await import("pdf-to-png-converter");
+      const pdfBuffer = Buffer.from(p.base64, "base64");
+      const rasterPages = await pdfToPng(pdfBuffer, {
+        viewportScale: 2.5,
+        pagesToProcess: [1],
+        disableFontFace: false,
+        useSystemFonts: false,
+      });
+      const sharp = (await import("sharp")).default;
+      const pngContent = rasterPages[0]?.content;
+      if (!pngContent) throw new Error("pdfToPng nao retornou conteudo");
+      const resized = await sharp(pngContent)
+        .resize({ width: 1600, withoutEnlargement: true })
+        .png({ compressionLevel: 9 })
+        .toBuffer();
+      out.push({
+        pageIndex: p.pageIndex,
+        mimeType: "image/png",
+        base64: resized.toString("base64"),
+      });
+      console.log(
+        `[VISION-DIRECT] Pag ${p.pageIndex} rasterizada: PDF ${Math.round(pdfBuffer.length / 1024)}KB -> PNG ${Math.round(resized.length / 1024)}KB`,
+      );
+    } catch (err: any) {
+      console.warn(
+        `[VISION-DIRECT] Pag ${p.pageIndex} rasterizacao falhou (${err?.message || err}); mantendo PDF`,
+      );
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+// ============================================================
 // Inventario de paredes (para o renderer SVG)
 // ============================================================
 
@@ -243,11 +299,18 @@ export async function analyzeVisionDirect(
   log(`Pre-flight: ${preflight.fileType} ${preflight.pageCount} pagina(s) vetorial=${preflight.isPdfVector}`);
 
   // ---------- 2) Split em páginas ----------
-  const pages = await getFilePages(input.filePath, input.fileType);
-  if (pages.length === 0) {
+  const rawPages = await getFilePages(input.filePath, input.fileType);
+  if (rawPages.length === 0) {
     throw new Error("Nenhuma pagina extraida do arquivo");
   }
-  log(`Split: ${pages.length} pagina(s) prontas para analise`);
+  log(`Split: ${rawPages.length} pagina(s) extraidas`);
+
+  // ---------- 2.5) Rasterizar PDFs em PNG ----------
+  // getFilePages retorna PDFs (1-2MB cada). Sem isso, 2 chamadas Gemini
+  // paralelas por pagina sobrecarregam o gateway -> HTTP 502. Em PNG,
+  // payload cai para ~200-400KB.
+  log(`Rasterizando paginas (se PDF)...`);
+  const pages = await rasterizePdfPages(rawPages);
 
   // ---------- 3) Classifica páginas ----------
   log(`Classificando paginas (Gemini Pro)...`);
