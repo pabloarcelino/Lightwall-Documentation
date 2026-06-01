@@ -69,13 +69,26 @@ LEGENDA OBRIGATORIA no canto inferior direito, com EXATAMENTE essas 3 linhas e n
 NUNCA escreva outras palavras na legenda. NUNCA inverta cores. NUNCA omita uma linha. Se ha so 1 ou 2 categorias na planta, ainda assim escreva as 3 linhas da legenda com seus respectivos quadrados de cor.
 
 ============================================================
-DEFINICOES — leia com cuidado
+COMO UMA PAREDE E DESENHADA NA PLANTA (LEIA COM ATENCAO)
 ============================================================
-PAREDE EXTERNA (VERMELHO): parede da EDIFICACAO COBERTA que tem ao menos UMA face em contato com ambiente externo (rua, jardim, quintal, varanda aberta, garagem aberta, divisa com vizinho). E uma das paredes que FORMA o contorno do volume coberto da casa.
+Em planta arquitetonica, CADA PAREDE e representada por DUAS LINHAS PARALELAS bem proximas (a face de um lado + a face do outro lado) com um MIOLO/ESPESSURA entre elas (geralmente preenchido com hachura, cinza, ou apenas vazio).
 
-PAREDE INTERNA (VERDE): parede DENTRO da edificacao coberta que separa dois ambientes internos cobertos+fechados (ex: SALA/QUARTO, COZINHA/BANHEIRO, HALL/CORREDOR). Geralmente mais finas que as externas. Inclui divisorias de drywall.
+Essas duas linhas + o miolo = UMA UNICA PAREDE FISICA. NAO sao duas paredes diferentes. NAO sao "uma parede externa + uma parede interna". Sao UMA peca so.
 
-MURO (AZUL): vedacao do TERRENO/LOTE, fora da edificacao coberta. Pista visual primaria: existem AREAS verdes (jardim/grama) ou cinzas (calcada/passeio/piso descoberto) DESENHADAS ao redor da edificacao, e ha LINHAS no perimetro dessas areas externas separando-as da rua ou do lote vizinho. O muro PODE encostar na parede externa ou continuar a partir dela. Em plantas SUBSOLO/PAVIMENTO sem jardim ao redor, normalmente nao ha muro.
+Quando voce pinta uma parede com uma cor, pinte a PECA INTEIRA: cubra simultaneamente a linha de um lado, o miolo, e a linha do outro lado com UMA UNICA cor solida (50% opacidade). NUNCA pinte a face de um lado de uma cor e a face do outro lado de cor diferente. NUNCA pinte o miolo de cor diferente das faces.
+
+ERRO TIPICO A EVITAR (chamado "sanduiche"): pintar a linha externa da parede de VERMELHO, o miolo de VERDE, e a linha interna de VERMELHO de novo. Isso esta ERRADO. A parede e UMA peca, recebe UMA cor.
+
+============================================================
+DEFINICOES — qual cor a parede inteira recebe
+============================================================
+PAREDE EXTERNA (VERMELHO): a PAREDE COMO UM TODO (suas 2 linhas + miolo) faz parte do contorno da edificacao coberta. Ou seja, a parede inteira separa o INTERIOR da casa de algum AMBIENTE EXTERNO (rua, jardim, quintal, varanda aberta, garagem aberta, divisa). Pista visual: do lado de FORA da parede ha jardim, calcada, rua, ar livre.
+
+PAREDE INTERNA (VERDE): a PAREDE COMO UM TODO esta DENTRO da edificacao coberta, separando dois comodos internos fechados (ex: separa SALA de QUARTO; separa COZINHA de BANHEIRO; separa HALL de CORREDOR). Pista visual: dos DOIS LADOS da parede ha comodos rotulados (SALA, QUARTO, etc.) com piso desenhado.
+
+MURO (AZUL): a peca como um todo e vedacao do TERRENO/LOTE, FORA da edificacao coberta. Pista visual: a linha esta no PERIMETRO do lote (separa jardim/grama do lote vizinho ou da rua), em local SEM edificacao coberta. Em plantas SUBSOLO/PAVIMENTO sem jardim ao redor, normalmente nao ha muro.
+
+Em resumo: olhe para cada parede inteira como um objeto unico. Se a parede inteira esta na BORDA da casa -> VERMELHO. Se a parede inteira esta DENTRO da casa -> VERDE. Se e vedacao do lote sem edificacao na mesma posicao -> AZUL.
 
 ============================================================
 REGRA CRITICA — COBERTURA TOTAL DAS PAREDES
@@ -96,10 +109,11 @@ REGRA CRITICA — UMA UNICA COR POR PAREDE FISICA
 Cada parede do desenho recebe UMA UNICA cor sobre toda sua extensao.
 
 PROIBIDO:
-- Pintar duas cores paralelas na mesma parede (ex: linha vermelha de um lado + linha verde do outro).
-- Desenhar uma faixa de cor PARALELA a uma parede ja pintada (uma parede e UMA linha unica).
+- Pintar duas cores paralelas na mesma parede (ex: linha vermelha de um lado + linha verde do outro). LEMBRE que uma parede tem 2 LINHAS de face + miolo — TUDO isso e uma parede so e recebe UMA cor.
+- "SANDUICHE": pintar a face de um lado da parede de vermelho, o miolo de verde, e a face do outro lado de vermelho de novo. Isso e o ERRO MAIS COMUM — pinte a peca INTEIRA de UMA cor.
+- Desenhar uma faixa de cor PARALELA a uma parede ja pintada (uma parede e UMA peca unica, mesmo tendo duas linhas paralelas que sao suas faces).
 - Trocar a cor no meio da parede.
-- Encostar uma linha vermelha e uma linha azul paralelas (isso e o BUG MAIS COMUM — leia o bloco abaixo).
+- Encostar uma linha vermelha e uma linha azul paralelas (parede externa que coincide com limite do lote = uma peca so, cor vermelha).
 
 ============================================================
 REGRA SUPER-CRITICA — NUNCA VERMELHO E AZUL COLADOS
