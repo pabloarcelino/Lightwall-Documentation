@@ -92,14 +92,43 @@ Casa residencial tipica: 15-40 segmentos. Plantas grandes: 50-100. Se passar de 
 }
 
 /**
- * @deprecated Substituido pelo renderer SVG deterministico
- * (renderAnnotatedImage). Mantido apenas para fallback/reversao manual.
- * Prompt para gerar a IMAGEM anotada via IA (gemini-2.5-flash-image), no
- * estilo do chat do Gemini Web. Recebe a planta original + instrucao de
- * pintar paredes externas em vermelho, internas em verde, e muros em azul,
- * com legenda no canto. Devolve a imagem editada como inline data.
+ * Prompt para gerar a IMAGEM anotada via gemini-2.5-flash-image (Nano Banana),
+ * estilo do Gemini Web chat. Estrategia centrada em AMBIENTES: pinta cada
+ * comodo + suas paredes delimitadoras com a mesma cor coerente. Versao
+ * enxuta que deixa o modelo "respirar" — versoes anteriores microgerenciavam
+ * com regras geometricas e produziam sanduiches e paredes paralelas erradas.
  */
 export function buildImageAnnotationPrompt(): string {
+  return `Voce ve uma planta arquitetonica. Crie uma versao ANOTADA por classificacao de AMBIENTES — para cada ambiente da planta, pinte o INTERIOR do ambiente E suas paredes delimitadoras com a mesma cor coerente.
+
+CONVENCAO DE CORES (semitransparente ~50%):
+- VERMELHO: PAREDES EXTERNAS (contorno da edificacao) + areas COBERTAS mas EXTERNAS (garagem aberta, varanda coberta sem fechamento, alpendre, santuario sem porta). Inclui suas paredes delimitadoras.
+- VERDE CLARO: COMODOS INTERNOS fechados (sala, quarto, suite, banheiro, cozinha, copa, lavabo, closet, escritorio, corredor, hall, escada interna, deposito, despensa). Inclui as paredes internas que separam dois desses ambientes.
+- VERDE ESCURO: AREAS EXTERNAS DESCOBERTAS (jardim, grama, quintal, patio descoberto). Sem fechamento por paredes da edificacao.
+- AZUL: MUROS do TERRENO/LOTE (vedacao do perimetro do lote, FORA da edificacao). So pinte se houver linhas claras de muro no contorno do lote.
+
+ESTRATEGIA (siga na ordem):
+1. Identifique CADA ambiente da planta usando os rotulos textuais (SALA, QUARTO, GARAGEM, JARDIM, etc.).
+2. Para cada ambiente, classifique a categoria (vermelho, verde claro, verde escuro ou azul).
+3. PINTE o INTERIOR do ambiente com uma camada semi-transparente da cor (overlay sobre piso/mobiliario).
+4. PINTE as PAREDES que DELIMITAM aquele ambiente com a MESMA cor (faixa mais opaca sobre as linhas da parede).
+5. Quando uma parede separa dois ambientes de cores DIFERENTES, a parede recebe a cor de MAIOR PREVALENCIA na ordem: VERMELHO > VERDE CLARO > VERDE ESCURO > AZUL.
+
+LEGENDA OBRIGATORIA no canto inferior direito com EXATAMENTE estas 4 linhas, nessa ordem:
+  [quadrado vermelho]      Paredes externas
+  [quadrado verde claro]   Paredes internas
+  [quadrado verde escuro]  Areas externas
+  [quadrado azul]          Muros
+
+PRESERVE intactos: textos, cotas, simbolos, mobiliario, hachuras, carimbo, tabela de areas, titulo, escala. NAO REDESENHE — apenas adicione as cores semitransparentes por cima.
+
+Mantenha o mesmo tamanho e proporcao da planta original.`;
+}
+
+/**
+ * @deprecated Versao anterior, mantida para fallback/reversao manual.
+ */
+export function buildImageAnnotationPromptOld(): string {
   return `Esta e uma planta arquitetonica. Crie uma VERSAO ANOTADA pintando TODAS as paredes do desenho.
 
 ============================================================
