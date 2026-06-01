@@ -294,8 +294,8 @@ export async function analyzeVisionDirect(
           // extractJson() captura JSON em texto livre ou markdown wrapper.
           config: {
             temperature: 0.1,
-            maxOutputTokens: 8192,
-            thinkingConfig: { thinkingBudget: 1024 },
+            maxOutputTokens: 16384,
+            thinkingConfig: { thinkingBudget: 2048 },
           },
         });
         const usage = response.usageMetadata;
@@ -375,6 +375,30 @@ export async function analyzeVisionDirect(
         : "low";
       result.observacoes =
         typeof areaJson.observacoes === "string" ? areaJson.observacoes.slice(0, 500) : "";
+
+      // Detecta JSON PARCIAL: JSON parseou mas faltaram campos numericos
+      // chave. Isso aconteceu (screenshot Mauricia/Vagner): Subsolo veio
+      // so com paredes_externas, os outros 4 campos ausentes -> zerados
+      // silenciosamente. Agora a UI mostra exatamente o que faltou.
+      const requiredFields: Array<keyof typeof areaJson> = [
+        "paredes_externas",
+        "paredes_internas",
+        "muros",
+        "laje_piso_m2",
+        "laje_coberta_m2",
+      ];
+      const missing = requiredFields.filter((k) => !(k in areaJson));
+      if (missing.length > 0) {
+        const diag =
+          `finish=${lastFinishReason ?? "?"} ` +
+          `tokens=in:${lastUsage?.input ?? "?"}/out:${lastUsage?.output ?? "?"}/think:${lastUsage?.thinking ?? "?"} ` +
+          `chars=${areaResult.length}`;
+        const partialMsg = `JSON parcial — campos ausentes: [${missing.join(", ")}]. ${diag}. Reprocesse a planta.`;
+        result.observacoes = result.observacoes
+          ? `${partialMsg} | IA: ${result.observacoes}`
+          : partialMsg;
+        console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex} ${partialMsg}`);
+      }
     }
 
     // Geracao da planta anotada via IA — best-effort, totalmente independente

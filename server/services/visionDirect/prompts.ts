@@ -77,147 +77,38 @@ RESULTADO ESPERADO: a mesma planta original, com cada parede destacada em UMA UN
 }
 
 export function buildAreaPrompt(peDireitoM: number): string {
-  return `Voce e um engenheiro orcamentista experiente analisando uma planta arquitetonica residencial. Use TODOS os elementos visuais da imagem para entender o contexto antes de medir.
+  return `Engenheiro orcamentista. Meca areas em m² desta planta. Pe-direito = ${peDireitoM.toFixed(2)}m.
 
-PE-DIREITO A USAR: ${peDireitoM.toFixed(2)}m (multiplique TODOS os comprimentos de parede por este valor).
+DEFINICOES (hierarquia: externa > interna > muro — cada parede UMA classe):
+- EXTERNA: ao menos 1 face fora da residencia (rua, jardim, quintal, varanda/garagem ABERTA, divisa com vizinho).
+- INTERNA: ambas as faces em comodos internos cobertos+fechados. So conta paredes do piso ao teto.
+- MURO: vedacao do TERRENO (fora da edificacao). Se nao ha contorno de lote no desenho -> 0.
+- LAJE PISO: area horizontal coberta+fechada (exclui varanda aberta, jardim, garagem aberta).
+- LAJE COBERTA: = laje_piso, salvo se houver linhas tracejadas de beiral no perimetro (entao maior).
 
-============================================================
-FASE 1 — LEITURA DO CONTEXTO VISUAL
-============================================================
-Antes de classificar qualquer parede, varra a imagem procurando:
+CONTEXTO VISUAL (use ativamente): rotulos textuais (SALA/QUARTO/COZINHA/BANHEIRO/GARAGEM/VARANDA/JARDIM/RUA), mobiliario (sanitario=banheiro, fogao/pia dupla=cozinha, cama=quarto, sofa=sala, carro=garagem), linhas tracejadas no perimetro=beiral, cotas dimensionais, carimbo=pavimento.
 
-1. ROTULOS TEXTUAIS de ambientes: SALA, QUARTO, SUITE, COZINHA, COPA, BANHEIRO, WC, LAVABO, AREA DE SERVICO, AREA, LAVANDERIA, GARAGEM, VARANDA, SACADA, TERRACO, CHURRASQUEIRA, JARDIM, QUINTAL, RUA, CALCADA, ENTRADA, HALL, CORREDOR, ESCRITORIO, DEPOSITO, DESPENSA. Use-os para saber qual ambiente esta de cada lado de cada parede.
+CALCULO:
+1) Classifique cada parede usando a hierarquia acima.
+2) Some comprimentos por classe (use as cotas), multiplique por ${peDireitoM.toFixed(2)}m -> area_bruta.
+3) Liste aberturas (porta, janela, cobogo) com largura x altura. area_liquida = bruta - aberturas.
 
-2. SIMBOLOS DE MOBILIARIO/EQUIPAMENTO que confirmam o tipo do comodo quando o rotulo esta ausente ou ilegivel:
-   - Vaso sanitario, bide, pia com cuba pequena = BANHEIRO/WC
-   - Pia grande com cuba dupla, fogao, geladeira = COZINHA
-   - Cama, criado-mudo, guarda-roupa = QUARTO
-   - Sofa, mesa de centro, TV = SALA
-   - Carro/garagem hachurada = GARAGEM
-   - Tanque, maquina de lavar = AREA DE SERVICO
-   - Churrasqueira, bancada externa = AREA GOURMET/VARANDA
+ANTI-ZERO: toda planta residencial tem paredes externas > 0 e laje de piso > 0. Se cotas ilegiveis, estime visualmente (porta=0.8m, sala=4-6m, quarto=3-4m, banheiro=1.5-2.5m) e marque confidence="low".
 
-3. LINHAS TRACEJADAS no PERIMETRO externo da edificacao = projecao do TELHADO/BEIRAL/LAJE DE COBERTURA. Se houver, a coberta e MAIOR que o piso.
+OBRIGATORIO preencher TODOS os 5 campos numericos: paredes_externas, paredes_internas, muros, laje_piso_m2, laje_coberta_m2. NAO ENVIE JSON parcial — se um campo nao se aplica, use 0.0 explicito.
 
-4. HACHURAS dentro das paredes (preenchidas, listradas, com pontilhado) = indicam tipo construtivo (alvenaria/concreto/drywall). TODAS contam como parede — nao filtre por tipo.
-
-5. COTAS DIMENSIONAIS (numeros em metros ou centimetros proximos das paredes) = comprimento real para o calculo. Procure tambem cotas gerais nas bordas da planta.
-
-6. CONTORNO DO LOTE (linhas finas mais externas, geralmente com texto "DIVISA", "MURO", "PORTAO", "PASSEIO", "MEIO-FIO", "RUA") = onde fica o muro do terreno (se existir).
-
-7. CARIMBO ou TITULO da prancha (TERREO, SUPERIOR, COBERTURA, SUBSOLO, PAV. 1, PAV. 2) = define o campo "pavimento" da resposta.
-
-============================================================
-FASE 2 — DEFINICOES REFINADAS
-============================================================
-
-PAREDES EXTERNAS — pelo menos UMA face em contato com a PARTE DE FORA da residencia. "Fora" inclui:
-  - Rua, calcada, jardim, quintal, patio descoberto
-  - Varanda ABERTA (sem fechamento vertical do piso ao teto)
-  - Garagem ABERTA (sem porta basculante/portao com fechamento vertical)
-  - Area de servico externa descoberta
-  - Divisa com lote vizinho (caso de casa geminada: a parede compartilhada com o vizinho ainda e EXTERNA pela otica desta residencia)
-  Sinal visual primario: a parede esta na BORDA do poligono fechado da edificacao coberta. Do lado de fora ha rotulo externo (RUA/JARDIM/QUINTAL) OU simplesmente espaco em branco fora do poligono.
-
-REGRA CRITICA — UMA CLASSIFICACAO POR PAREDE FISICA: cada parede do desenho recebe UMA UNICA classificacao. NUNCA conte a mesma parede duas vezes (uma vez como externa e outra como interna). A hierarquia de prevalencia, em ordem:
-  1. Se PELO MENOS UMA face da parede toca o ambiente externo -> EXTERNA (prevalece sobre tudo)
-  2. Se ambas as faces tocam interno coberto/fechado -> INTERNA
-  3. Se esta no contorno do lote (fora da edificacao) -> MURO
-Exemplo: a parede que separa a SALA (interna) da VARANDA ABERTA (externa) e EXTERNA — nao conte essa parede tambem como interna entre os dois ambientes.
-
-PAREDES INTERNAS — AMBAS as faces tocam ambientes internos, cobertos e FECHADOS, da mesma residencia. Exemplos:
-  - Separa quarto/sala, banheiro/quarto, cozinha/sala, copa/cozinha, hall/corredor, etc.
-  - Drywall e divisorias leves CONTAM como interna se vao do piso ao teto separando ambientes cobertos.
-  - Paredes de MEIA-ALTURA (peitoris, balcoes de cozinha, parapeitos) NAO contam — soma so paredes que vao do piso ao teto.
-  Sinal visual primario: a parede esta DENTRO do poligono externo, com rotulo de comodo coberto/fechado de CADA UM dos dois lados (ex: "SALA" e "QUARTO 1").
-  REGRA TOPOLOGICA: nunca uma parede classificada como interna pode estar FORA do poligono das externas. Antes de marcar como interna, confirme que esta DENTRO do contorno fechado.
-
-MUROS — vedacao do TERRENO, fora da edificacao, sem cobertura. So conta quando ha SINAL VISUAL CLARO:
-  - Linhas no CONTORNO DO LOTE (nao da edificacao)
-  - Texto "MURO", "DIVISA", "PORTAO" proximo
-  - Pode haver abertura (portao de carro/pedestre)
-  Se NAO houver muro desenhado na planta (ex: apartamento, planta interna apenas, planta sem o lote completo), retorne area_bruta_m2 = 0 para muros. NAO INVENTE perimetro de lote.
-  Altura: use a cota visivel (1.80m, 2.00m, 2.20m, etc). Sem cota, use 2.0m.
-
-LAJE DE PISO — area horizontal da edificacao COBERTA E FECHADA:
-  - Inclui: quartos, salas, cozinhas, banheiros, hall, corredor, area de servico coberta, garagem fechada/coberta, escritorio
-  - EXCLUI: varandas/sacadas abertas, jardins, patios descobertos, garagem aberta sem cobertura, piscina
-  Sinal visual: poligono fechado da edificacao principal (linhas CONTINUAS das paredes externas — NAO as tracejadas de projecao de telhado).
-
-LAJE DE COBERTURA — projecao horizontal vista de cima, INCLUINDO BEIRAIS quando indicados:
-  - Sinal visual: linhas TRACEJADAS ao redor da edificacao = projecao do telhado/laje superior
-  - Se ha beiral: laje_coberta > laje_piso (a diferenca e a area do beiral)
-  - Se NAO ha projecao tracejada: laje_coberta = laje_piso
-  NAO invente beiral; se a planta nao mostra, considere igual ao piso.
-
-============================================================
-FASE 3 — CALCULO (siga a ordem)
-============================================================
-1) Identifique os comodos visiveis usando rotulos + simbolos da fase 1.
-2) Trace mentalmente o POLIGONO EXTERNO da edificacao coberta (linhas continuas).
-3) Para CADA parede, classifique: externa, interna ou muro (regras da fase 2). Em caso de duvida, leia o rotulo dos dois lados.
-4) Some os comprimentos por classe usando as cotas visiveis.
-5) Multiplique por ${peDireitoM.toFixed(2)}m -> bruta_externa, bruta_interna.
-6) Liste TODAS as aberturas visiveis (janela, porta, cobogo, outro) com dimensoes (largura x altura) em metros. Use simbolos: arco = porta, linha cortada na parede com 2 paralelas = janela, retangulo perfurado = cobogo.
-7) Atribua cada abertura a classe da parede onde esta (externa ou interna).
-8) area_liquida = area_bruta - soma(area das aberturas daquela classe).
-9) MUROS: se houver no desenho, meca perimetro do lote * altura. Se NAO houver, retorne zero.
-10) LAJE PISO: meca a area do poligono fechado em m². LAJE COBERTA: se houver tracejado de beiral, meca o poligono tracejado; senao, igual ao piso.
-
-============================================================
-ANTI-ZERO / ANTI-TEMPLATE
-============================================================
-- Toda planta arquitetonica residencial tem pelo menos paredes externas e laje de piso. NUNCA devolva tudo zero.
-- Se cotas estao ilegiveis, ESTIME visualmente usando referencias:
-   * Porta de comodo ≈ 0.80m de largura
-   * Janela tipica ≈ 1.20m de largura
-   * Sala/cozinha tipica ≈ 4-6m de lado
-   * Quarto tipico ≈ 3-4m de lado
-   * Banheiro ≈ 1.5-2.5m de lado
-- Faixas plausiveis (casa 50-150m²): externas 30-70m², internas 30-80m², laje piso 50-150m².
-- Quando estimar por falta de cota, defina confidence="low" e explique nas observacoes quais sinais voce usou.
-
-============================================================
-SOBRE OS NUMEROS DO SCHEMA ABAIXO
-============================================================
-Os 0.0 que aparecem no schema sao EXEMPLOS ILUSTRATIVOS apenas para mostrar o TIPO esperado (numero decimal). VOCE DEVE SUBSTITUIR CADA 0.0 por um numero real apurado da planta usando as etapas da fase 3.
-
-PERMITIDO devolver 0.0 SOMENTE quando aquela categoria GENUINAMENTE nao existe na planta:
-  - muros.area_bruta_m2 = 0.0 se nao ha vedacao de lote no desenho
-  - paredes_internas.area_liquida_m2 = 0.0 so se a planta for galpao/comodo unico sem divisorias
-  - laje_coberta_m2 = laje_piso_m2 se nao ha beiral tracejado
-
-PROIBIDO devolver todos os campos com 0.0. Toda planta residencial TEM paredes externas e laje de piso > 0.
-
-Responda EXCLUSIVAMENTE com este JSON (sem markdown, sem texto antes ou depois). Schema:
+Responda EXCLUSIVAMENTE com este JSON (sem markdown):
 {
   "pavimento": "Terreo",
-  "paredes_externas": {
-    "area_bruta_m2": 0.0,
-    "area_aberturas_m2": 0.0,
-    "area_liquida_m2": 0.0
-  },
-  "paredes_internas": {
-    "area_bruta_m2": 0.0,
-    "area_aberturas_m2": 0.0,
-    "area_liquida_m2": 0.0
-  },
-  "muros": {
-    "area_bruta_m2": 0.0,
-    "altura_assumida_m": 2.0
-  },
+  "paredes_externas": { "area_bruta_m2": 0.0, "area_aberturas_m2": 0.0, "area_liquida_m2": 0.0 },
+  "paredes_internas": { "area_bruta_m2": 0.0, "area_aberturas_m2": 0.0, "area_liquida_m2": 0.0 },
+  "muros": { "area_bruta_m2": 0.0, "altura_assumida_m": 2.0 },
   "laje_piso_m2": 0.0,
   "laje_coberta_m2": 0.0,
-  "aberturas": [
-    { "tipo": "janela", "parede": "externa", "largura_m": 0.0, "altura_m": 0.0, "area_m2": 0.0 }
-  ],
+  "aberturas": [ { "tipo": "janela", "parede": "externa", "largura_m": 0.0, "altura_m": 0.0, "area_m2": 0.0 } ],
   "confidence": "high",
-  "observacoes": "Cite quais sinais visuais voce usou (rotulos vistos, simbolos, projecao de beiral, presenca/ausencia de muro) e quaisquer estimativas feitas."
+  "observacoes": "Cite os sinais visuais usados (rotulos, mobiliario, beiral, muro) e estimativas."
 }
 
-Valores aceitos:
-  - pavimento: "Terreo", "Superior", "Subsolo", "Cobertura", "Pavimento1", etc.
-  - aberturas[].tipo: "janela", "porta", "cobogo", "outro"
-  - aberturas[].parede: "externa", "interna"
-  - confidence: "high", "medium", "low"`;
+Os 0.0 sao EXEMPLOS — substitua por numeros reais. Enums: pavimento (Terreo/Superior/Subsolo/Cobertura/Pavimento1/...), aberturas.tipo (janela/porta/cobogo/outro), aberturas.parede (externa/interna), confidence (high/medium/low).`;
 }
