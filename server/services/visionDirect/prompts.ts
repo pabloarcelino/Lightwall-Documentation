@@ -99,30 +99,59 @@ Casa residencial tipica: 15-40 segmentos. Plantas grandes: 50-100. Se passar de 
  * com regras geometricas e produziam sanduiches e paredes paralelas erradas.
  */
 export function buildImageAnnotationPrompt(): string {
-  return `Voce ve uma planta arquitetonica. Crie uma versao colorida pintando APENAS o INTERIOR de cada ambiente (comodo ou area) com uma camada semitransparente. NAO pinte sobre as paredes — as linhas pretas das paredes devem ficar VISIVEIS naturalmente entre as cores dos ambientes vizinhos.
+  return `Voce ve uma planta arquitetonica. Crie uma versao colorida pintando AMBIENTES E PAREDES com sua categoria correta, em camadas semitransparentes. O resultado deve ficar como uma planta colorida onde cada ambiente tem sua cor de fundo e cada parede tem uma cor solida.
 
-CONVENCAO DE CORES (overlay semitransparente ~40-50% opacidade sobre o piso/grama/mobiliario):
-- VERMELHO ROSADO: ambientes COBERTOS mas SEM fechamento externo (garagem aberta, varanda coberta, alpendre, santuario sem porta). Tipicamente tem laje em cima mas o ambiente comunica com o exterior.
-- VERDE CLARO: COMODOS INTERNOS fechados — sala, quarto, suite, banheiro, cozinha, copa, lavabo, closet, escritorio, corredor, hall, escada interna, deposito, despensa, area de servico fechada. Sao espacos uteis cobertos e completamente fechados por paredes.
-- VERDE ESCURO: AREAS EXTERNAS DESCOBERTAS — jardim, grama, quintal, patio descoberto, calcada interna do lote.
-- AZUL: AREA do MURO/LOTE — uma faixa estreita ao longo do perimetro do lote, ONDE houver linhas de muro desenhadas. So inclua se houver muro visivel no contorno do terreno.
+============================================================
+CATEGORIAS (4) — uma cor por categoria
+============================================================
+1) VERMELHO: paredes EXTERNAS da edificacao + ambientes COBERTOS-ABERTOS (garagem aberta, varanda coberta sem fechamento, alpendre, santuario sem porta). Cobertos por laje mas comunicam com o exterior.
+2) VERDE CLARO: paredes INTERNAS (divisorias entre dois comodos internos) + ambientes INTERNOS FECHADOS (sala, quarto, suite, banheiro, cozinha, copa, lavabo, closet, escritorio, corredor, hall, escada interna, deposito, despensa).
+3) VERDE ESCURO: AREAS EXTERNAS DESCOBERTAS (jardim, grama, quintal, patio descoberto, calcada interna do lote). Sem cobertura.
+4) AZUL: MUROS do TERRENO/LOTE (vedacao do perimetro do lote, FORA da edificacao). So inclua se houver linhas de muro no contorno do terreno.
 
-REGRA UNICA E CRITICA: cada parede do desenho separa DOIS ambientes. Como voce pinta APENAS o interior dos ambientes (nao as paredes), cada parede sera naturalmente vista como a fronteira preta entre as duas cores vizinhas. NUNCA pinte uma faixa de cor SOBRE uma parede. NUNCA pinte uma faixa COLADA paralelamente a uma parede. Os ambientes terminam EXATAMENTE na face interna da parede que os cerca — a parede em si (a linha preta) fica sem cor.
+============================================================
+COMO PINTAR — duas camadas, cor coerente por trecho
+============================================================
+CAMADA 1 — INTERIOR DOS AMBIENTES (overlay leve, ~30% opacidade):
+- Pinte o INTERIOR de cada ambiente com a cor da sua categoria (overlay leve sobre o piso/grama/mobiliario, preservando a leitura do desenho).
 
-PROCESSO:
-1. Identifique cada ambiente da planta pelos rotulos (SALA, QUARTO, GARAGEM, JARDIM, etc).
-2. Classifique a categoria de cada um (vermelho rosado, verde claro, verde escuro ou azul).
-3. Pinte o INTERIOR do ambiente com a cor da categoria — preencha todo o espaco delimitado pelas paredes daquele ambiente, mas PARE na face interna da parede sem invadi-la.
+CAMADA 2 — PAREDES (faixa solida, ~60% opacidade):
+- Cada parede do desenho recebe UMA UNICA cor solida sobre a peca inteira da parede (as duas faces + miolo). NUNCA pinte uma parede de duas cores diferentes. NUNCA crie "sanduiche" (uma cor numa face, outra cor na outra face).
+- A cor da parede e determinada pela REGRA DE PREVALENCIA abaixo.
 
-LEGENDA no canto inferior direito com 4 linhas:
-  [quadrado vermelho rosado] Areas externas cobertas (garagem/varanda)
-  [quadrado verde claro]      Areas internas fechadas
-  [quadrado verde escuro]     Areas externas descobertas (jardim)
-  [quadrado azul]             Muros do lote
+============================================================
+REGRA DE PREVALENCIA — cada parede toca 2 ambientes; cor da parede = ambiente de maior prevalencia
+============================================================
+Cada parede tem DUAS faces, cada face toca UM ambiente. Identifique a categoria do ambiente de cada face e aplique:
 
-(Se uma categoria nao existir na planta, ainda assim escreva sua linha na legenda — completude.)
+PREVALENCIA (do maior para o menor): VERMELHO > VERDE CLARO > VERDE ESCURO > AZUL.
 
-PRESERVE intactos: textos, cotas, simbolos, mobiliario, hachuras, carimbo, tabela do desenho, titulo, escala, todas as linhas pretas do desenho original (paredes, simbolos, mobiliario). NAO REDESENHE — apenas adicione as 4 cores semitransparentes preenchendo o INTERIOR dos ambientes.
+Exemplos:
+- Parede que separa SALA (verde claro) de QUARTO (verde claro) -> ambas faces verde claro -> parede VERDE CLARO (e uma divisoria interna).
+- Parede que separa SALA (verde claro) de JARDIM (verde escuro) -> uma face verde escuro -> a face externa toca area externa -> parede VERMELHA (e parede externa da edificacao).
+- Parede que separa SALA (verde claro) de GARAGEM ABERTA (vermelho) -> uma face vermelho -> parede VERMELHA.
+- Parede que separa GARAGEM ABERTA (vermelho) de JARDIM (verde escuro) -> uma face vermelho -> parede VERMELHA (e parede externa da garagem aberta).
+- Linha do contorno do LOTE em trecho onde nao ha edificacao colada -> AZUL (muro).
+
+============================================================
+REGRA ANTI-SANDUICHE / ANTI-COLAGEM
+============================================================
+- NUNCA pinte uma faixa VERDE CLARO colada/paralela a uma parede VERMELHA — se a parede e vermelha, o overlay verde claro do interior do comodo PARA na FACE INTERNA da parede vermelha, sem invadi-la nem desenhar outra faixa colada.
+- NUNCA pinte uma faixa VERDE CLARO ao longo do CONTORNO interno da edificacao — esse contorno e formado por paredes VERMELHAS, ele nao tem cor verde.
+- NUNCA pinte duas cores diferentes na mesma parede (sanduiche).
+- Onde duas paredes se encontram em angulo (T, L, perpendicular), cada uma mantem sua cor — elas se ENCOSTAM em ponto/canto, nunca se sobrepoe em paralelo.
+
+============================================================
+LEGENDA OBRIGATORIA no canto inferior direito (4 linhas, nessa ordem)
+============================================================
+  [quadrado vermelho]      Paredes externas / Areas cobertas abertas
+  [quadrado verde claro]   Paredes internas / Areas internas fechadas
+  [quadrado verde escuro]  Areas externas descobertas (jardim)
+  [quadrado azul]          Muros do lote
+
+(Se alguma categoria nao existir na planta, ainda assim escreva sua linha — completude da legenda.)
+
+PRESERVE intactos: textos, cotas, simbolos, mobiliario, hachuras, carimbo, tabela do desenho, titulo, escala. NAO REDESENHE — apenas adicione as cores semitransparentes (interior + paredes).
 
 Mantenha o mesmo tamanho e proporcao da planta original.`;
 }
