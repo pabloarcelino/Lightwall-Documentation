@@ -85,19 +85,52 @@ export default function VisionDirect() {
   const [fileName, setFileName] = useState<string>("");
   const progressTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Hidratar resultado salvo se houver :id
+  // Hidratar resultado salvo se houver :id.
+  // Se status="processing", entra em modo polling (mesmo que o usuario tenha
+  // reaberto a aba ou recarregado a pagina enquanto a analise rodava).
   useEffect(() => {
     const id = params?.id;
     if (!id) return;
-    fetch(`/api/vision-direct/${id}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data) {
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    const POLL_INTERVAL_MS = 2500;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const r = await fetch(`/api/vision-direct/${id}`);
+        if (!r.ok) return;
+        const data = await r.json();
+        if (cancelled) return;
+        if (data.fileName) setFileName(data.fileName);
+        if (data.status === "completed") {
           setResult({ id: data.id, ...(data.results as VisionDirectResult) });
-          setFileName(data.fileName);
+          setAnalyzing(false);
+        } else if (data.status === "error") {
+          setAnalyzing(false);
+          toast({
+            title: "Erro na analise",
+            description: data.errorMessage || "Falha no servidor",
+            variant: "destructive",
+          });
+        } else {
+          // status === "processing" — segue polling
+          setAnalyzing(true);
+          setProgressMsg("Analise em andamento...");
+          pollTimer = setTimeout(tick, POLL_INTERVAL_MS);
         }
-      })
-      .catch(() => {/* noop */});
+      } catch {
+        /* noop — vai tentar denovo */
+        if (!cancelled) pollTimer = setTimeout(tick, POLL_INTERVAL_MS);
+      }
+    };
+
+    tick();
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params?.id]);
 
   const submitFile = async (file: File) => {
@@ -106,15 +139,16 @@ export default function VisionDirect() {
     setFileName(file.name);
     setProgressMsg("Enviando arquivo...");
 
-    // Simula mensagens de progresso enquanto espera (o backend é síncrono)
+    // Mensagens roladas durante o polling
     const messages = [
       "Inspecionando arquivo...",
-      "Dividindo páginas...",
-      "Classificando páginas (planta/corte/fachada)...",
-      "Detectando pé-direito (se houver corte)...",
-      "Analisando planta — extraindo áreas em m²...",
-      "Calculando aberturas e descontos...",
-      "Agregando totais...",
+      "Rasterizando paginas (se PDF)...",
+      "Classificando paginas...",
+      "Detectando pe-direito...",
+      "Extraindo areas em m² + inventario de paredes (paralelo)...",
+      "Renderizando plantas anotadas...",
+      "Aguardando ultimas paginas...",
+      "Quase la — agregando totais...",
     ];
     let idx = 0;
     progressTimerRef.current = setInterval(() => {
@@ -122,12 +156,21 @@ export default function VisionDirect() {
         setProgressMsg(messages[idx]);
         idx++;
       }
-    }, 6000);
+    }, 8000);
+
+    const stopProgress = () => {
+      if (progressTimerRef.current) {
+        clearInterval(progressTimerRef.current);
+        progressTimerRef.current = null;
+      }
+    };
 
     try {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("peDireito", peDireito);
+
+      // 1) Inicia analise — devolve {id, status: "processing"} imediatamente
       const res = await fetch("/api/vision-direct/analyze", {
         method: "POST",
         body: formData,
@@ -136,22 +179,48 @@ export default function VisionDirect() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.message || `HTTP ${res.status}`);
       }
-      const data = await res.json();
-      setResult(data);
-      // Atualiza URL com o id para hidratação
-      if (data.id) {
-        window.history.replaceState({}, "", `/vision-direct/${data.id}`);
+      const startData = await res.json();
+      const runId = startData.id;
+      if (!runId) throw new Error("Servidor nao devolveu id da analise");
+      window.history.replaceState({}, "", `/vision-direct/${runId}`);
+
+      // 2) Polling ate status="completed" ou "error"
+      const POLL_INTERVAL_MS = 2500;
+      const MAX_WAIT_MS = 5 * 60 * 1000; // 5 minutos absolutos
+      const start = Date.now();
+      let finalRun: any = null;
+      while (Date.now() - start < MAX_WAIT_MS) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        const pollRes = await fetch(`/api/vision-direct/${runId}`);
+        if (!pollRes.ok) continue;
+        const run = await pollRes.json();
+        if (run.status === "completed") {
+          finalRun = run;
+          break;
+        }
+        if (run.status === "error") {
+          throw new Error(run.errorMessage || "Erro durante analise no servidor");
+        }
       }
-      toast({ title: "Análise concluída", description: `Tempo: ${fmtSeconds(data.durationMs)} · Custo: ${fmtUsd(data.costUsd)}` });
+      if (!finalRun) throw new Error("Tempo limite excedido (5 min)");
+
+      // 3) Mostra resultado
+      const results = finalRun.results as VisionDirectResult;
+      setResult({ id: finalRun.id, ...results });
+      toast({
+        title: "Analise concluida",
+        description: `Tempo: ${fmtSeconds(results.durationMs)} · Custo: ${fmtUsd(results.costUsd)}`,
+      });
     } catch (err: any) {
-      toast({ title: "Erro na análise", description: err?.message || "Falha desconhecida", variant: "destructive" });
+      toast({
+        title: "Erro na analise",
+        description: err?.message || "Falha desconhecida",
+        variant: "destructive",
+      });
     } finally {
       setAnalyzing(false);
       setProgressMsg("");
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-        progressTimerRef.current = null;
-      }
+      stopProgress();
     }
   };
 

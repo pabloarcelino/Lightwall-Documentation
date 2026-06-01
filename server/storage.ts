@@ -95,6 +95,7 @@ export interface IStorage {
 
   // ===== Vision Direct (experimental) =====
   createVisionDirectRun(data: InsertVisionDirectRun): Promise<VisionDirectRun>;
+  updateVisionDirectRun(id: number, patch: Partial<InsertVisionDirectRun>): Promise<void>;
   getVisionDirectRun(id: number): Promise<VisionDirectRun | undefined>;
   getVisionDirectRunsByUser(userId: number | null): Promise<VisionDirectRun[]>;
   deleteVisionDirectRun(id: number): Promise<void>;
@@ -402,6 +403,20 @@ export class DatabaseStorage implements IStorage {
     } catch (err: any) {
       console.warn(`[STORAGE] createVisionDirectRun falhou: ${err?.message || err}`);
       throw err;
+    }
+  }
+
+  async updateVisionDirectRun(
+    id: number,
+    patch: Partial<InsertVisionDirectRun>,
+  ): Promise<void> {
+    try {
+      await db
+        .update(visionDirectRuns)
+        .set(patch as any)
+        .where(eq(visionDirectRuns.id, id));
+    } catch (err: any) {
+      console.warn(`[STORAGE] updateVisionDirectRun falhou: ${err?.message || err}`);
     }
   }
 

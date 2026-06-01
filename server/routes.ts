@@ -4355,7 +4355,18 @@ export async function registerRoutes(
   // Modo Visao Direta (experimental) — endpoints isolados
   // ============================================================
 
-  // POST /api/vision-direct/analyze — upload + analise sincrona
+  // POST /api/vision-direct/analyze — upload + analise ASSINCRONA
+  //
+  // Motivo do redesenho: a analise leva 60-150s (2 chamadas Gemini Pro por
+  // pagina + render). Gateway/proxy (Replit/Cloudflare) corta HTTP em ~60s,
+  // resultando em HTTP 502 mesmo quando o servidor termina o trabalho.
+  //
+  // Novo fluxo:
+  //   1. Cria run com status="processing" + results vazio
+  //   2. Devolve {id, status: "processing"} IMEDIATAMENTE
+  //   3. Roda analyzeVisionDirect em background (sem await na resposta HTTP)
+  //   4. Frontend faz polling em GET /api/vision-direct/:id ate
+  //      status="completed" (sucesso) ou "error" (falha)
   app.post(
     "/api/vision-direct/analyze",
     visionDirectUpload.single("file"),
@@ -4370,46 +4381,31 @@ export async function registerRoutes(
           ? peDireitoRaw
           : 3.0;
       const userId = req.user?.id ?? null;
+      const ext = path.extname(file.originalname).toLowerCase();
+      const fileType =
+        ext === ".pdf"
+          ? "pdf"
+          : [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"].includes(ext)
+            ? "image"
+            : "image";
+
+      // 1. Cria run com status processing
+      let run: any;
       try {
-        const { analyzeVisionDirect } = await import("./services/visionDirect/analyzer");
-        const ext = path.extname(file.originalname).toLowerCase();
-        const fileType =
-          ext === ".pdf"
-            ? "pdf"
-            : [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"].includes(ext)
-              ? "image"
-              : "image";
-        const result = await analyzeVisionDirect({
-          filePath: file.path,
-          fileType,
-          fileName: file.originalname,
-          defaultPeDireitoM,
-          userId: userId ?? undefined,
-        });
-        // Persistir
-        const run = await storage.createVisionDirectRun({
+        run = await storage.createVisionDirectRun({
           userId: userId ?? null,
           fileName: file.originalname,
           fileType,
-          pageCount: result.preflight.pageCount,
-          peDireitoUsadoM: String(result.peDireitoUsadoM) as any,
-          peDireitoFonte: result.peDireitoFonte,
-          results: result as any,
-          costUsd: String(result.costUsd.toFixed(4)) as any,
-          durationMs: result.durationMs,
-          status: "completed",
+          pageCount: 0,
+          peDireitoUsadoM: String(defaultPeDireitoM) as any,
+          peDireitoFonte: "default",
+          results: {} as any,
+          costUsd: "0" as any,
+          durationMs: 0,
+          status: "processing",
           errorMessage: null,
         });
-        // Limpa arquivo temp
-        try {
-          await fs.unlink(file.path);
-        } catch {
-          /* noop */
-        }
-        return res.json({ id: run.id, ...result });
       } catch (err: any) {
-        console.error("[VISION-DIRECT] Erro:", err?.message || err);
-        // Limpa arquivo temp mesmo em erro
         try {
           await fs.unlink(file.path);
         } catch {
@@ -4417,8 +4413,48 @@ export async function registerRoutes(
         }
         return res
           .status(500)
-          .json({ message: err?.message || "Erro durante analise" });
+          .json({ message: `Falha ao iniciar run: ${err?.message || err}` });
       }
+
+      // 2. Devolve id imediatamente
+      res.json({ id: run.id, status: "processing" });
+
+      // 3. Processa em background — qualquer erro atualiza o run com status="error"
+      (async () => {
+        try {
+          const { analyzeVisionDirect } = await import("./services/visionDirect/analyzer");
+          const result = await analyzeVisionDirect({
+            filePath: file.path,
+            fileType,
+            fileName: file.originalname,
+            defaultPeDireitoM,
+            userId: userId ?? undefined,
+          });
+          await storage.updateVisionDirectRun(run.id, {
+            pageCount: result.preflight.pageCount,
+            peDireitoUsadoM: String(result.peDireitoUsadoM) as any,
+            peDireitoFonte: result.peDireitoFonte,
+            results: result as any,
+            costUsd: String(result.costUsd.toFixed(4)) as any,
+            durationMs: result.durationMs,
+            status: "completed",
+            errorMessage: null,
+          });
+          console.log(`[VISION-DIRECT] Run ${run.id} concluido em ${(result.durationMs / 1000).toFixed(1)}s`);
+        } catch (err: any) {
+          console.error(`[VISION-DIRECT] Run ${run.id} falhou:`, err?.message || err);
+          await storage.updateVisionDirectRun(run.id, {
+            status: "error",
+            errorMessage: String(err?.message || err).slice(0, 500),
+          });
+        } finally {
+          try {
+            await fs.unlink(file.path);
+          } catch {
+            /* noop */
+          }
+        }
+      })();
     },
   );
 
