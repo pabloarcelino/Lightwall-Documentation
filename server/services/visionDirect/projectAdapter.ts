@@ -378,6 +378,9 @@ async function persistExtractedData(
         aberturas: p.aberturas,
         confidence: p.confidence,
         observacoes: p.observacoes,
+        // Imagens consumidas por VisionDirectAnnotatedImages no frontend
+        annotatedImage: p.annotatedImage ?? null,
+        originalImage: p.originalImage ?? null,
       })),
     } as any,
     hasAssumption: 0,
