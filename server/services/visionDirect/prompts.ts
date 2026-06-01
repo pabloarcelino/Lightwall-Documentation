@@ -99,28 +99,30 @@ Casa residencial tipica: 15-40 segmentos. Plantas grandes: 50-100. Se passar de 
  * com regras geometricas e produziam sanduiches e paredes paralelas erradas.
  */
 export function buildImageAnnotationPrompt(): string {
-  return `Voce ve uma planta arquitetonica. Crie uma versao ANOTADA por classificacao de AMBIENTES — para cada ambiente da planta, pinte o INTERIOR do ambiente E suas paredes delimitadoras com a mesma cor coerente.
+  return `Voce ve uma planta arquitetonica. Crie uma versao colorida pintando APENAS o INTERIOR de cada ambiente (comodo ou area) com uma camada semitransparente. NAO pinte sobre as paredes — as linhas pretas das paredes devem ficar VISIVEIS naturalmente entre as cores dos ambientes vizinhos.
 
-CONVENCAO DE CORES (semitransparente ~50%):
-- VERMELHO: PAREDES EXTERNAS (contorno da edificacao) + areas COBERTAS mas EXTERNAS (garagem aberta, varanda coberta sem fechamento, alpendre, santuario sem porta). Inclui suas paredes delimitadoras.
-- VERDE CLARO: COMODOS INTERNOS fechados (sala, quarto, suite, banheiro, cozinha, copa, lavabo, closet, escritorio, corredor, hall, escada interna, deposito, despensa). Inclui as paredes internas que separam dois desses ambientes.
-- VERDE ESCURO: AREAS EXTERNAS DESCOBERTAS (jardim, grama, quintal, patio descoberto). Sem fechamento por paredes da edificacao.
-- AZUL: MUROS do TERRENO/LOTE (vedacao do perimetro do lote, FORA da edificacao). So pinte se houver linhas claras de muro no contorno do lote.
+CONVENCAO DE CORES (overlay semitransparente ~40-50% opacidade sobre o piso/grama/mobiliario):
+- VERMELHO ROSADO: ambientes COBERTOS mas SEM fechamento externo (garagem aberta, varanda coberta, alpendre, santuario sem porta). Tipicamente tem laje em cima mas o ambiente comunica com o exterior.
+- VERDE CLARO: COMODOS INTERNOS fechados — sala, quarto, suite, banheiro, cozinha, copa, lavabo, closet, escritorio, corredor, hall, escada interna, deposito, despensa, area de servico fechada. Sao espacos uteis cobertos e completamente fechados por paredes.
+- VERDE ESCURO: AREAS EXTERNAS DESCOBERTAS — jardim, grama, quintal, patio descoberto, calcada interna do lote.
+- AZUL: AREA do MURO/LOTE — uma faixa estreita ao longo do perimetro do lote, ONDE houver linhas de muro desenhadas. So inclua se houver muro visivel no contorno do terreno.
 
-ESTRATEGIA (siga na ordem):
-1. Identifique CADA ambiente da planta usando os rotulos textuais (SALA, QUARTO, GARAGEM, JARDIM, etc.).
-2. Para cada ambiente, classifique a categoria (vermelho, verde claro, verde escuro ou azul).
-3. PINTE o INTERIOR do ambiente com uma camada semi-transparente da cor (overlay sobre piso/mobiliario).
-4. PINTE as PAREDES que DELIMITAM aquele ambiente com a MESMA cor (faixa mais opaca sobre as linhas da parede).
-5. Quando uma parede separa dois ambientes de cores DIFERENTES, a parede recebe a cor de MAIOR PREVALENCIA na ordem: VERMELHO > VERDE CLARO > VERDE ESCURO > AZUL.
+REGRA UNICA E CRITICA: cada parede do desenho separa DOIS ambientes. Como voce pinta APENAS o interior dos ambientes (nao as paredes), cada parede sera naturalmente vista como a fronteira preta entre as duas cores vizinhas. NUNCA pinte uma faixa de cor SOBRE uma parede. NUNCA pinte uma faixa COLADA paralelamente a uma parede. Os ambientes terminam EXATAMENTE na face interna da parede que os cerca — a parede em si (a linha preta) fica sem cor.
 
-LEGENDA OBRIGATORIA no canto inferior direito com EXATAMENTE estas 4 linhas, nessa ordem:
-  [quadrado vermelho]      Paredes externas
-  [quadrado verde claro]   Paredes internas
-  [quadrado verde escuro]  Areas externas
-  [quadrado azul]          Muros
+PROCESSO:
+1. Identifique cada ambiente da planta pelos rotulos (SALA, QUARTO, GARAGEM, JARDIM, etc).
+2. Classifique a categoria de cada um (vermelho rosado, verde claro, verde escuro ou azul).
+3. Pinte o INTERIOR do ambiente com a cor da categoria — preencha todo o espaco delimitado pelas paredes daquele ambiente, mas PARE na face interna da parede sem invadi-la.
 
-PRESERVE intactos: textos, cotas, simbolos, mobiliario, hachuras, carimbo, tabela de areas, titulo, escala. NAO REDESENHE — apenas adicione as cores semitransparentes por cima.
+LEGENDA no canto inferior direito com 4 linhas:
+  [quadrado vermelho rosado] Areas externas cobertas (garagem/varanda)
+  [quadrado verde claro]      Areas internas fechadas
+  [quadrado verde escuro]     Areas externas descobertas (jardim)
+  [quadrado azul]             Muros do lote
+
+(Se uma categoria nao existir na planta, ainda assim escreva sua linha na legenda — completude.)
+
+PRESERVE intactos: textos, cotas, simbolos, mobiliario, hachuras, carimbo, tabela do desenho, titulo, escala, todas as linhas pretas do desenho original (paredes, simbolos, mobiliario). NAO REDESENHE — apenas adicione as 4 cores semitransparentes preenchendo o INTERIOR dos ambientes.
 
 Mantenha o mesmo tamanho e proporcao da planta original.`;
 }
