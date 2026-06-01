@@ -77,6 +77,12 @@ import { PageHeader } from "@/components/PageHeader";
 import { ProcessingLiveView } from "@/components/live-pipeline/ProcessingLiveView";
 import { useProcessingEvents } from "@/components/live-pipeline/useProcessingEvents";
 import { WorkspaceLayout } from "@/components/processing/WorkspaceLayout";
+import { VisionDirectSummary } from "@/components/visionDirect/Summary";
+import { VisionDirectAnnotatedImages } from "@/components/visionDirect/AnnotatedImages";
+import { VisionDirectConsolidatedTable } from "@/components/visionDirect/ConsolidatedTable";
+import { VisionDirectPageBreakdown } from "@/components/visionDirect/PageBreakdown";
+import { VisionDirectNotes } from "@/components/visionDirect/Notes";
+import type { VisionDirectResult } from "@/components/visionDirect/types";
 import { useNewWorkspaceUI } from "@/components/processing/useProcessingSync";
 import { LoadingState } from "@/components/ui/states";
 import { ProjectHeader } from "@/components/project/ProjectHeader";
@@ -677,7 +683,9 @@ export default function ProjectDetails() {
       if (selectedProductIdMuros) body.productIdMuros = parseInt(selectedProductIdMuros);
       if (selectedProductIdPiso) body.productIdPiso = parseInt(selectedProductIdPiso);
       if (selectedProductIdCoberta) body.productIdCoberta = parseInt(selectedProductIdCoberta);
-      const res = await fetch(`/api/projects/${projectId}/process`, {
+      // O motor antigo (pipeline 14 estagios) foi substituido pelo motor
+      // do Modo Visao Direta — mais simples e produz resultados melhores.
+      const res = await fetch(`/api/projects/${projectId}/process-direct`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1018,7 +1026,28 @@ export default function ProjectDetails() {
             />
           )}
 
+          {/* MODO VISAO DIRETA — projeto analisado pelo motor enxuto.
+              Renderiza UI simplificada (sumario + plantas anotadas + tabela
+              consolidada + detalhamento por pagina + observacoes). Sem
+              WorkspaceLayout (sem editor de paredes individuais). */}
           {headerStatus === "completed" && (() => {
+            const vdSummary = (extractedData || []).find((d: any) => d.elementType === "vision_direct_summary");
+            if (!vdSummary) return null;
+            const vdResult = vdSummary.data as VisionDirectResult;
+            return (
+              <div className="space-y-4">
+                <VisionDirectSummary result={vdResult} />
+                <VisionDirectAnnotatedImages pages={vdResult.pages} />
+                <VisionDirectConsolidatedTable totais={vdResult.totais} />
+                <VisionDirectPageBreakdown pages={vdResult.pages} />
+                <VisionDirectNotes pages={vdResult.pages} />
+              </div>
+            );
+          })()}
+
+          {/* MODO LEGADO (pipeline 14 estagios) — projetos antigos.
+              Mostrado APENAS se o projeto NAO tem vision_direct_summary. */}
+          {headerStatus === "completed" && !(extractedData || []).some((d: any) => d.elementType === "vision_direct_summary") && (() => {
             const fusao = (extractedData || []).find((d: any) => d.elementType === "etapa4_fusao");
             const annotatedPlan = (extractedData || []).find((d: any) => d.elementType === "etapa3_annotated_plan");
             const auditNotesData = (extractedData || []).find((d: any) => d.elementType === "audit_notes");

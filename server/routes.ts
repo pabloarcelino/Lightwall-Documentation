@@ -1343,6 +1343,63 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================
+  // POST /api/projects/:id/process-direct — motor enxuto (Vision Direct)
+  //
+  // Substitui a pipeline complexa de 14 estagios pelo motor do Modo Visao
+  // Direta. Devolve 202 imediatamente e processa em background. O frontend
+  // descobre conclusao via polling do GET /api/projects/:id (que retorna o
+  // projects.status atualizado) ou via SSE (mantido para compatibilidade).
+  // ============================================================
+  app.post("/api/projects/:id/process-direct", async (req: any, res) => {
+    try {
+      const projectId = parseInt(String(req.params.id));
+      if (!Number.isFinite(projectId)) {
+        return res.status(400).json({ message: "ID invalido" });
+      }
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Projeto nao encontrado" });
+      const files = await storage.getProjectFiles(projectId);
+      if (files.length === 0) {
+        return res.status(400).json({ message: "Projeto sem arquivos enviados" });
+      }
+      const peDireitoRaw = Number(req.body?.peDireito);
+      const defaultPeDireitoM =
+        Number.isFinite(peDireitoRaw) && peDireitoRaw >= 2.0 && peDireitoRaw <= 6.0
+          ? peDireitoRaw
+          : 3.0;
+      const userId = req.user?.id ?? null;
+
+      // 1) Devolve 202 imediatamente — analise roda em background
+      res.status(202).json({ ok: true, projectId, status: "processing" });
+
+      // 2) Dispara em background (IIFE async)
+      (async () => {
+        const { runVisionDirectForProject } = await import(
+          "./services/visionDirect/projectAdapter"
+        );
+        await runVisionDirectForProject({
+          projectId,
+          userId,
+          defaultPeDireitoM,
+        });
+      })().catch((err: any) => {
+        console.error(`[VD-PROJECT] handler background failed for ${projectId}:`, err?.message || err);
+      });
+    } catch (err: any) {
+      console.error("[VD-PROJECT-START]", err?.message || err);
+      // Se ainda nao respondemos, devolve erro
+      if (!res.headersSent) {
+        res.status(500).json({ message: err?.message || "Erro ao iniciar analise" });
+      }
+    }
+  });
+
+  /**
+   * @deprecated Pipeline complexa de 14 estagios. Mantida como fallback. O
+   * novo fluxo principal e POST /api/projects/:id/process-direct (motor do
+   * Modo Visao Direta).
+   */
   app.post("/api/projects/:id/process", async (req, res) => {
     const projectId = parseInt(String(req.params.id));
     const selectedProductIdExt = req.body?.productIdExt ? parseInt(req.body.productIdExt) : (req.body?.productId ? parseInt(req.body.productId) : null);
