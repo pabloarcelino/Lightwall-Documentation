@@ -380,7 +380,7 @@ async function persistExtractedData(
         observacoes: p.observacoes,
       })),
     } as any,
-    hasAssumption: false,
+    hasAssumption: 0,
   } as any);
 
   // Plantas anotadas — mesmo formato que a pipeline antiga usa (etapa3)
@@ -401,7 +401,7 @@ async function persistExtractedData(
       projectId,
       elementType: "etapa3_annotated_plan",
       data: { images } as any,
-      hasAssumption: false,
+      hasAssumption: 0,
     } as any);
   }
 
@@ -419,7 +419,7 @@ async function persistExtractedData(
       projectId,
       elementType: "audit_notes",
       data: { notes } as any,
-      hasAssumption: false,
+      hasAssumption: 0,
     } as any);
   }
 }

@@ -442,6 +442,12 @@ export default function ProjectDetails() {
       return res.json();
     },
     enabled: !!projectId,
+    // Polling 100% confiavel: refetch a cada 2.5s enquanto status=processing,
+    // para automaticamente quando muda para completed/error. Substitui o
+    // useEffect manual que so disparava na MUDANCA de status (bug que fazia
+    // polling morrer apos 1 iteracao).
+    refetchInterval: (query: any) =>
+      query.state.data?.project?.status === "processing" ? 2500 : false,
   });
 
   const { data: catalogProducts } = useQuery<Product[]>({
@@ -702,29 +708,26 @@ export default function ProjectDetails() {
     },
   });
 
-  // Polling enquanto o projeto esta em processing — o motor enxuto roda em
-  // background sem SSE. Refetch GET /api/projects/:id a cada 2.5s ate
-  // status virar "completed" ou "error", entao limpa o estado.
+  // Sincroniza isProcessing com transicoes de status. O polling em si e feito
+  // automaticamente pelo refetchInterval da useQuery acima (que para sozinho
+  // quando status vira completed/error).
   useEffect(() => {
-    if (data?.project?.status !== "processing") {
-      // Quando o status muda para completed/error fora do polling, sincroniza
-      if (isProcessing && data?.project?.status === "completed") {
+    const status = data?.project?.status;
+    if (status === "processing") {
+      if (!isProcessing) setIsProcessing(true);
+    } else if (status === "completed") {
+      if (isProcessing) {
         setIsProcessing(false);
         toast({ title: "Analise concluida!", description: "Quantitativos e plantas anotadas prontos." });
-      } else if (isProcessing && data?.project?.status === "error") {
+      }
+    } else if (status === "error") {
+      if (isProcessing) {
         setIsProcessing(false);
         toast({ title: "Erro na analise", description: "O motor de analise falhou. Tente reprocessar.", variant: "destructive" });
       }
-      return;
     }
-    // status === "processing" -> mantem isProcessing visivel e refaz polling
-    if (!isProcessing) setIsProcessing(true);
-    const t = setTimeout(() => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-    }, 2500);
-    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.project?.status, projectId]);
+  }, [data?.project?.status]);
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
