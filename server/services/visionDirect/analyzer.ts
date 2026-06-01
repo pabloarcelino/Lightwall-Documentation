@@ -367,54 +367,69 @@ export async function analyzeVisionDirect(
       annotatedImage: null,
     };
 
+    // Dispara area + inventario EM PARALELO. As 2 chamadas Gemini Pro
+    // sao independentes (uma extrai m², a outra extrai geometria) entao
+    // rodar simultaneamente corta o tempo total quase pela metade — critico
+    // pra ficar dentro do timeout do gateway (HTTP 502).
     let areaResult = "";
     let lastFinishReason: string | undefined;
     let lastUsage: { input?: number; output?: number; thinking?: number } | undefined;
-    try {
-      areaResult = await withRetry(async () => {
-        const ai = getActiveGenAI();
-        const response = await ai.models.generateContent({
-          model: MODEL_PRO,
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { inlineData: { mimeType: pg.mimeType, data: pg.base64 } },
-                { text: buildAreaPrompt(peDireitoUsadoM) },
-              ],
-            },
-          ],
-          // Sem responseMimeType: combinacao com thinkingConfig parece causar
-          // resposta vazia no Gemini 2.5 Pro. O regex /\{[\s\S]*\}/ em
-          // extractJson() captura JSON em texto livre ou markdown wrapper.
-          config: {
-            temperature: 0.1,
-            maxOutputTokens: 16384,
-            thinkingConfig: { thinkingBudget: 2048 },
+
+    const areaPromise = withRetry(async () => {
+      const ai = getActiveGenAI();
+      const response = await ai.models.generateContent({
+        model: MODEL_PRO,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inlineData: { mimeType: pg.mimeType, data: pg.base64 } },
+              { text: buildAreaPrompt(peDireitoUsadoM) },
+            ],
           },
-        });
-        const usage = response.usageMetadata;
-        const finishReason = response.candidates?.[0]?.finishReason;
-        lastFinishReason = finishReason;
-        lastUsage = {
-          input: usage?.promptTokenCount,
-          output: usage?.candidatesTokenCount,
-          thinking: usage?.thoughtsTokenCount,
-        };
-        console.log(
-          `[VISION-DIRECT] Pag ${pg.pageIndex} usage: input=${usage?.promptTokenCount} output=${usage?.candidatesTokenCount} thinking=${usage?.thoughtsTokenCount} finish=${finishReason}`,
-        );
-        totalCostUsd += estimateCost(MODEL_PRO, lastUsage);
-        const text = response.text ?? "";
-        if (!text && finishReason && finishReason !== "STOP") {
-          throw new Error(`Gemini Pro finalizou sem texto (finishReason=${finishReason})`);
-        }
-        return text;
-      }, "VISION-DIRECT-area");
-    } catch (err: any) {
-      console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex} chamada Gemini Pro falhou: ${err?.message || err}`);
+        ],
+        // Sem responseMimeType: combinacao com thinkingConfig parece causar
+        // resposta vazia no Gemini 2.5 Pro. O regex /\{[\s\S]*\}/ em
+        // extractJson() captura JSON em texto livre ou markdown wrapper.
+        config: {
+          temperature: 0.1,
+          maxOutputTokens: 16384,
+          thinkingConfig: { thinkingBudget: 2048 },
+        },
+      });
+      const usage = response.usageMetadata;
+      const finishReason = response.candidates?.[0]?.finishReason;
+      lastFinishReason = finishReason;
+      lastUsage = {
+        input: usage?.promptTokenCount,
+        output: usage?.candidatesTokenCount,
+        thinking: usage?.thoughtsTokenCount,
+      };
+      console.log(
+        `[VISION-DIRECT] Pag ${pg.pageIndex} area usage: input=${usage?.promptTokenCount} output=${usage?.candidatesTokenCount} thinking=${usage?.thoughtsTokenCount} finish=${finishReason}`,
+      );
+      totalCostUsd += estimateCost(MODEL_PRO, lastUsage);
+      const text = response.text ?? "";
+      if (!text && finishReason && finishReason !== "STOP") {
+        throw new Error(`Gemini Pro finalizou sem texto (finishReason=${finishReason})`);
+      }
+      return text;
+    }, "VISION-DIRECT-area").catch((err: any) => {
+      console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex} chamada area falhou: ${err?.message || err}`);
       result.observacoes = `Falha na chamada Gemini: ${err?.message || "desconhecida"}`;
-    }
+      return "";
+    });
+
+    const segsPromise = inventoryWallSegments(pg.base64, pg.mimeType, pg.pageIndex);
+
+    log(`Pag ${pg.pageIndex}: area + inventario em paralelo...`);
+    const parallelStart = Date.now();
+    let segs: ClassifiedSegment[];
+    [areaResult, segs] = await Promise.all([areaPromise, segsPromise]);
+    log(
+      `Pag ${pg.pageIndex}: area + inventario concluidos em ${((Date.now() - parallelStart) / 1000).toFixed(1)}s ` +
+        `(area=${areaResult.length}chars, inventario=${segs.length}segs)`,
+    );
 
     console.log(
       `[VISION-DIRECT] Pag ${pg.pageIndex} resposta IA (${areaResult.length} chars): ${areaResult.substring(0, 400)}`,
@@ -496,52 +511,48 @@ export async function analyzeVisionDirect(
       }
     }
 
-    // Planta anotada via renderer SVG deterministico:
-    //  1) Gemini 2.5 Pro enumera paredes (endpoints + classe) em coords 0-1000.
-    //  2) renderAnnotatedImage() pinta deterministicamente com Sharp+SVG.
-    // Substitui o gemini-2.5-flash-image que sofria de cobertura incompleta,
-    // sanduiche, legenda invertida. Best-effort: falha -> UI mostra a original.
-    log(`Pag ${pg.pageIndex}: inventariando paredes (Gemini Pro)...`);
-    const imgStart = Date.now();
-    try {
-      const segs = await inventoryWallSegments(pg.base64, pg.mimeType, pg.pageIndex);
-      if (segs.length === 0) {
-        throw new Error("inventario retornou zero paredes");
+    // Planta anotada via renderer SVG deterministico — usa os segments do
+    // inventario que ja foi rodado em paralelo com a area.
+    if (segs.length > 0) {
+      const renderStart = Date.now();
+      try {
+        const walls: RenderableWall[] = segs.map((s, i) => ({
+          id: `W${String(i + 1).padStart(3, "0")}`,
+          classe: s.classe,
+          endpoints: { p1: s.p1, p2: s.p2 },
+          thickness_pct: s.thickness_pct,
+        }));
+        const baseBuffer = Buffer.from(pg.base64, "base64");
+        const rendered = await renderAnnotatedImage(
+          baseBuffer,
+          pg.mimeType,
+          pg.pageIndex,
+          walls,
+          [],
+          {
+            pavimentoLabel: result.pavimento,
+            wallStyle: "filled",
+            showLegend: true,
+            showWallLabels: false,
+          },
+        );
+        result.annotatedImage = `data:image/png;base64,${rendered.pngBuffer.toString("base64")}`;
+        log(
+          `Pag ${pg.pageIndex}: planta anotada OK (${Math.round(rendered.pngBuffer.length / 1024)}KB, ${(
+            (Date.now() - renderStart) /
+            1000
+          ).toFixed(1)}s, ${walls.length} paredes)`,
+        );
+      } catch (imgErr: any) {
+        console.warn(
+          `[VISION-DIRECT] Pag ${pg.pageIndex} render falhou (${(
+            (Date.now() - renderStart) /
+            1000
+          ).toFixed(1)}s): ${imgErr?.message || imgErr}`,
+        );
       }
-      const walls: RenderableWall[] = segs.map((s, i) => ({
-        id: `W${String(i + 1).padStart(3, "0")}`,
-        classe: s.classe,
-        endpoints: { p1: s.p1, p2: s.p2 },
-        thickness_pct: s.thickness_pct,
-      }));
-      const baseBuffer = Buffer.from(pg.base64, "base64");
-      const rendered = await renderAnnotatedImage(
-        baseBuffer,
-        pg.mimeType,
-        pg.pageIndex,
-        walls,
-        [],
-        {
-          pavimentoLabel: result.pavimento,
-          wallStyle: "filled",
-          showLegend: true,
-          showWallLabels: false,
-        },
-      );
-      result.annotatedImage = `data:image/png;base64,${rendered.pngBuffer.toString("base64")}`;
-      log(
-        `Pag ${pg.pageIndex}: planta anotada OK (${Math.round(rendered.pngBuffer.length / 1024)}KB, ${(
-          (Date.now() - imgStart) /
-          1000
-        ).toFixed(1)}s, ${walls.length} paredes)`,
-      );
-    } catch (imgErr: any) {
-      console.warn(
-        `[VISION-DIRECT] Pag ${pg.pageIndex} planta anotada falhou (${(
-          (Date.now() - imgStart) /
-          1000
-        ).toFixed(1)}s): ${imgErr?.message || imgErr}`,
-      );
+    } else {
+      log(`Pag ${pg.pageIndex}: inventario sem paredes -> sem planta anotada`);
     }
 
     pageResults.push(result);
