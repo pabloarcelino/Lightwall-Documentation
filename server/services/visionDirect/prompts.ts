@@ -99,51 +99,53 @@ Casa residencial tipica: 15-40 segmentos. Plantas grandes: 50-100. Se passar de 
  * com regras geometricas e produziam sanduiches e paredes paralelas erradas.
  */
 export function buildImageAnnotationPrompt(): string {
-  return `Voce ve uma planta arquitetonica. Crie uma versao colorida em 2 passos:
-
-PASSO 1 — PINTE O INTERIOR DE CADA AMBIENTE (overlay semitransparente ~35% opacidade sobre o piso/grama/mobiliario):
-- VERDE CLARO: comodos INTERNOS fechados (sala, quarto, suite, banheiro, cozinha, copa, lavabo, closet, escritorio, corredor, hall, escada interna, deposito, despensa).
-- VERMELHO ROSADO: ambientes COBERTOS-ABERTOS (garagem aberta, varanda coberta sem fechamento, alpendre, santuario sem porta).
-- VERDE ESCURO: AREAS EXTERNAS DESCOBERTAS (jardim, grama, quintal, patio descoberto).
-- AZUL: faixa fina sobre os MUROS do lote (so se houver linhas de muro no contorno do terreno).
-
-REGRA ABSOLUTA PASSO 1: cada overlay PARA exatamente na face interna da parede que delimita o ambiente. NAO INVADE a parede. NAO se prolonga ate o lado de fora dela.
-
-PASSO 2 — PINTE AS PAREDES (cada parede recebe UMA cor solida):
-- PAREDES EXTERNAS (contorno externo da edificacao coberta): faixa VERMELHA opaca (~60% opacidade) sobre toda a espessura da parede. So o perimetro externo da edificacao recebe vermelho. Isso vale para QUALQUER pavimento incluindo subsolo e pavimento superior — mesmo quando o lado externo da parede da para terra/laje superior/nada desenhado, a parede do perimetro continua sendo externa.
-- PAREDES INTERNAS (divisorias entre dois comodos internos fechados): faixa VERDE opaca (~60% opacidade, verde mais escuro que o overlay do passo 1) sobre toda a espessura da parede.
-- Cada parede recebe UMA UNICA cor sobre a peca inteira (as duas faces + miolo). Vermelha se externa, verde se interna.
+  return `Voce ve uma planta arquitetonica. Pinte a planta dividindo-a em 4 REGIOES CONTIGUAS coloridas (overlay semitransparente ~50% opacidade). Cada regiao COBRE inclusive as paredes que delimitam ela — as paredes ficam dentro da regiao, NAO sao pintadas separadamente.
 
 ============================================================
-REGRA CRITICA E NAO-NEGOCIAVEL — ZERO SANDUICHE, ZERO PARALELO
+AS 4 REGIOES (uma camada unica)
 ============================================================
-NUNCA, em hipotese alguma:
-- Pinte uma faixa VERDE colada/paralela a uma parede VERMELHA. Onde a parede e vermelha (externa), NAO existe faixa verde encostando paralelamente. A parede e vermelha; logo ao lado (face interna) comeca o overlay verde claro leve do interior do comodo, mas NAO ha uma SEGUNDA faixa verde grossa colada.
-- Pinte uma faixa de uma cor em uma face da parede e outra cor na face oposta da mesma parede. Cada parede e UMA peca, recebe UMA cor.
-- Crie linhas paralelas de cores diferentes em qualquer trecho do desenho.
-- Pinte verde sobre o contorno externo da casa. O contorno externo e SEMPRE vermelho.
 
-Onde uma parede interna VERDE encontra uma parede externa VERMELHA (a interna chega no contorno em T), elas se ENCOSTAM em ponto. A verde termina ali; a vermelha continua ao longo do contorno. NUNCA a faixa verde da interna corre paralela ao lado da vermelha do contorno.
+REGIAO VERMELHA (paredes externas + ambientes cobertos-abertos):
+- Forma uma MOLDURA continua: a faixa de paredes externas da edificacao coberta inteira + o interior dos ambientes cobertos-abertos (garagem aberta, varanda coberta, alpendre, santuario sem porta). Tudo isso e UMA UNICA regiao vermelha conectada.
+- A moldura vermelha cobre a espessura completa de cada parede externa (face externa + miolo + face interna). NAO faca duas linhas paralelas.
+- Os "baloes" da garagem/varanda/etc se conectam visualmente a moldura externa formando UMA mancha vermelha unica.
+- VALE PARA QUALQUER PAVIMENTO (subsolo, terreo, superior). Mesmo que o lado externo da parede de para terra/laje/nada desenhado, a parede do perimetro da edificacao coberta esta na regiao vermelha.
 
-Resumo do que sera pintado:
-- Interior dos comodos internos: overlay verde claro leve (~35%).
-- Interior das areas cobertas-abertas (garagem/varanda): overlay vermelho rosado leve (~35%).
-- Jardim / area externa: overlay verde escuro leve (~35%).
-- Muros do lote: faixa azul fina sobre os contornos do lote.
-- Paredes externas (contorno da edificacao coberta): faixa vermelha solida (~60%).
-- Paredes internas (divisorias entre comodos internos): faixa verde solida (~60%).
+REGIAO VERDE CLARA (comodos internos fechados + paredes internas):
+- Pinte todos os comodos internos fechados (sala, quarto, suite, banheiro, cozinha, copa, lavabo, closet, escritorio, corredor, hall, escada interna, deposito, despensa) cobrindo INCLUSIVE as paredes finas que separam dois desses comodos.
+- As divisorias internas ficam DENTRO da regiao verde clara (mesma cor das salas vizinhas). NAO pinte as divisorias separadamente — elas sao parte da mancha verde.
+- A regiao verde clara para EXATAMENTE no eixo das paredes externas (que sao vermelhas).
+
+REGIAO VERDE ESCURA (areas externas descobertas):
+- Jardim, grama, quintal, patio descoberto.
+
+FAIXA AZUL (muros do lote — opcional):
+- Apenas se houver linhas de muro CLARAS no perimetro do lote.
 
 ============================================================
-LEGENDA OBRIGATORIA no canto inferior direito (4 linhas, nessa ordem)
+COMO AS REGIOES SE ENCONTRAM (regra unica anti-sanduiche)
+============================================================
+Cada parede do desenho e FRONTEIRA entre duas regioes. Como cada regiao cobre tudo ate o eixo central das paredes vizinhas, cada parede e pintada UMA UNICA VEZ pela regiao de MAIOR PRIORIDADE que a toca:
+
+PRIORIDADE: VERMELHO > VERDE CLARO > VERDE ESCURO > AZUL.
+
+Exemplos:
+- Parede entre SALA (verde claro) e QUARTO (verde claro) -> ambas verdes, parede toda verde clara (mancha continua).
+- Parede entre SALA (verde claro) e JARDIM (verde escuro) -> uma face e externa da edificacao -> parede toda VERMELHA (faz parte da moldura externa).
+- Parede entre SALA (verde claro) e GARAGEM aberta (vermelha) -> parede toda VERMELHA.
+- Parede entre GARAGEM aberta e JARDIM -> parede toda VERMELHA (e externa da garagem).
+
+POR CONSTRUCAO nao existe sanduiche: cada parede esta sob UMA UNICA regiao, sem faixas paralelas, sem duas cores na mesma parede.
+
+============================================================
+LEGENDA no canto inferior direito (4 linhas, nessa ordem)
 ============================================================
   [quadrado vermelho]      Paredes externas / Areas cobertas abertas
   [quadrado verde claro]   Paredes internas / Areas internas fechadas
   [quadrado verde escuro]  Areas externas descobertas (jardim)
   [quadrado azul]          Muros do lote
 
-(Se alguma categoria nao existir na planta, ainda assim escreva sua linha — completude da legenda.)
-
-PRESERVE intactos: textos, cotas, simbolos, mobiliario, hachuras, carimbo, tabela do desenho, titulo, escala. NAO REDESENHE — apenas adicione as cores semitransparentes.
+PRESERVE intactos: textos, cotas, simbolos, mobiliario, hachuras, carimbo, tabela do desenho, titulo, escala. NAO REDESENHE — apenas adicione as 4 regioes coloridas semitransparentes.
 
 Mantenha o mesmo tamanho e proporcao da planta original.`;
 }
