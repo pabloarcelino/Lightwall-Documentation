@@ -678,7 +678,8 @@ export default function ProjectDetails() {
       // Motor enxuto (Vision Direct): devolve 202 imediatamente. Acompanhamos
       // o progresso por polling do GET /api/projects/:id (status: processing
       // -> completed). Sem SSE / pipelineSteps que eram da pipeline antiga.
-      const body: Record<string, unknown> = { peDireito };
+      // Envia peDireito + scope (filtra categorias desmarcadas no backend).
+      const body: Record<string, unknown> = { peDireito, scope };
       const res = await fetch(`/api/projects/${projectId}/process-direct`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

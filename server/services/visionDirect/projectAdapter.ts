@@ -21,10 +21,70 @@ import {
 } from "../calculation/engine";
 import type { ExtractedWall, ExtractedSlab, ExtractedCorner } from "../gemini/planAnalyzer";
 
+export interface VisionDirectScope {
+  paredesExternas: boolean;
+  paredesInternas: boolean;
+  muros: boolean;
+  lajePiso: boolean;
+  lajeCoberta: boolean;
+  cantos: boolean;
+}
+
 export interface RunVisionDirectForProjectInput {
   projectId: number;
   userId: number | null;
   defaultPeDireitoM?: number;
+  scope?: VisionDirectScope;
+}
+
+const ALL_TRUE_SCOPE: VisionDirectScope = {
+  paredesExternas: true,
+  paredesInternas: true,
+  muros: true,
+  lajePiso: true,
+  lajeCoberta: true,
+  cantos: true,
+};
+
+/**
+ * Zera as categorias desmarcadas no scope. O motor calcula todas,
+ * mas categorias false sao zeradas antes de persistir + budget.
+ */
+function applyScopeFilter(
+  consolidated: VisionDirectResult,
+  scope: VisionDirectScope,
+): VisionDirectResult {
+  if (
+    scope.paredesExternas && scope.paredesInternas && scope.muros &&
+    scope.lajePiso && scope.lajeCoberta
+  ) {
+    return consolidated;
+  }
+  const filtered: VisionDirectResult = {
+    ...consolidated,
+    pages: consolidated.pages.map((p) => ({
+      ...p,
+      paredes_externas: scope.paredesExternas
+        ? p.paredes_externas
+        : { area_bruta_m2: 0, area_aberturas_m2: 0, area_liquida_m2: 0 },
+      paredes_internas: scope.paredesInternas
+        ? p.paredes_internas
+        : { area_bruta_m2: 0, area_aberturas_m2: 0, area_liquida_m2: 0 },
+      muros: scope.muros
+        ? p.muros
+        : { area_bruta_m2: 0, altura_assumida_m: 2.0 },
+      laje_piso_m2: scope.lajePiso ? p.laje_piso_m2 : 0,
+      laje_coberta_m2: scope.lajeCoberta ? p.laje_coberta_m2 : 0,
+    })),
+    totais: {
+      paredes_externas_liquida_m2: scope.paredesExternas ? consolidated.totais.paredes_externas_liquida_m2 : 0,
+      paredes_internas_liquida_m2: scope.paredesInternas ? consolidated.totais.paredes_internas_liquida_m2 : 0,
+      muros_m2: scope.muros ? consolidated.totais.muros_m2 : 0,
+      laje_piso_m2: scope.lajePiso ? consolidated.totais.laje_piso_m2 : 0,
+      laje_coberta_m2: scope.lajeCoberta ? consolidated.totais.laje_coberta_m2 : 0,
+    },
+  };
+  return filtered;
 }
 
 /**
@@ -37,6 +97,7 @@ export async function runVisionDirectForProject(
 ): Promise<void> {
   const { projectId } = input;
   const defaultPeDireitoM = input.defaultPeDireitoM ?? 3.0;
+  const scope = input.scope ?? ALL_TRUE_SCOPE;
 
   try {
     await storage.updateProjectStatus(projectId, "processing");
@@ -49,10 +110,13 @@ export async function runVisionDirectForProject(
 
     console.log(`[VD-PROJECT] Projeto ${projectId}: ${files.length} arquivo(s) registrados`);
 
-    // 1) Analisa cada arquivo via Vision Direct — valida existencia primeiro
-    const perFileResults: Array<{ fileName: string; result: VisionDirectResult }> = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    // 1) Analisa arquivos via Vision Direct EM PARALELO (limit 2 pra nao
+    // estourar rate limit do Gemini). Inclui validacao de existencia e
+    // TIMEOUT por arquivo de 5min — mata travamentos individuais.
+    const FILE_TIMEOUT_MS = 5 * 60 * 1000;
+    const CONCURRENCY = 2;
+
+    const jobs = files.map((file, i) => async () => {
       const tag = `${i + 1}/${files.length}`;
       try {
         await fs.access(file.filePath);
@@ -60,31 +124,54 @@ export async function runVisionDirectForProject(
         console.warn(
           `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} (${file.originalName}) INEXISTENTE no disco: ${file.filePath}`,
         );
-        continue;
+        return null;
       }
       const fileStart = Date.now();
       console.log(
         `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} (${file.originalName}) iniciando analise...`,
       );
       try {
-        const result = await analyzeVisionDirect({
+        const analyzePromise = analyzeVisionDirect({
           filePath: file.filePath,
           fileType: inferFileType(file.fileType, file.originalName),
           fileName: file.originalName,
           defaultPeDireitoM,
           userId: input.userId ?? undefined,
         });
-        perFileResults.push({ fileName: file.originalName, result });
+        const result = await Promise.race([
+          analyzePromise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`timeout ${FILE_TIMEOUT_MS / 1000}s`)), FILE_TIMEOUT_MS),
+          ),
+        ]);
         console.log(
           `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} OK em ${((Date.now() - fileStart) / 1000).toFixed(1)}s ` +
             `(${result.pages.length} pag, custo US$ ${result.costUsd.toFixed(4)})`,
         );
+        return { fileName: file.originalName, result };
       } catch (err: any) {
         console.warn(
           `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} (${file.originalName}) falhou em ${((Date.now() - fileStart) / 1000).toFixed(1)}s: ${err?.message || err}`,
         );
+        return null;
       }
+    });
+
+    // Executa jobs em paralelo com concorrencia limitada
+    const perFileResults: Array<{ fileName: string; result: VisionDirectResult }> = [];
+    const active: Promise<void>[] = [];
+    let next = 0;
+    const runNext = async (): Promise<void> => {
+      const idx = next++;
+      if (idx >= jobs.length) return;
+      const out = await jobs[idx]();
+      if (out) perFileResults.push(out);
+      return runNext();
+    };
+    for (let i = 0; i < Math.min(CONCURRENCY, jobs.length); i++) {
+      active.push(runNext());
     }
+    await Promise.all(active);
 
     if (perFileResults.length === 0) {
       throw new Error("Nenhum arquivo foi analisado com sucesso");
@@ -92,10 +179,13 @@ export async function runVisionDirectForProject(
 
     // 2) Consolida todos os arquivos num resultado unico
     console.log(`[VD-PROJECT] Projeto ${projectId}: consolidando ${perFileResults.length} arquivo(s)...`);
-    const consolidated = consolidateResults(perFileResults);
+    const rawConsolidated = consolidateResults(perFileResults);
+    const consolidated = applyScopeFilter(rawConsolidated, scope);
+    const scopeOff = Object.entries(scope).filter(([_, v]) => v === false).map(([k]) => k);
     console.log(
       `[VD-PROJECT] Projeto ${projectId} consolidado: ${consolidated.pages.length} pagina(s), ` +
-        `custo US$ ${consolidated.costUsd.toFixed(4)}, ${consolidated.durationMs}ms`,
+        `custo US$ ${consolidated.costUsd.toFixed(4)}, ${consolidated.durationMs}ms` +
+        (scopeOff.length ? ` (categorias zeradas pelo escopo: ${scopeOff.join(", ")})` : ""),
     );
 
     // 3) Limpa extractedData/budget antigos do projeto (caso seja reprocesso)

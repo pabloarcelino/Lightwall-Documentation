@@ -1368,6 +1368,18 @@ export async function registerRoutes(
         Number.isFinite(peDireitoRaw) && peDireitoRaw >= 2.0 && peDireitoRaw <= 6.0
           ? peDireitoRaw
           : 3.0;
+      // Escopo das categorias a calcular. Categorias false sao zeradas no
+      // resultado final (motor sempre devolve todas; a filtragem e na
+      // persistencia). Default: todas true.
+      const rawScope = (req.body?.scope ?? {}) as Record<string, unknown>;
+      const scope = {
+        paredesExternas: rawScope.paredesExternas !== false,
+        paredesInternas: rawScope.paredesInternas !== false,
+        muros: rawScope.muros !== false,
+        lajePiso: rawScope.lajePiso !== false,
+        lajeCoberta: rawScope.lajeCoberta !== false,
+        cantos: rawScope.cantos !== false,
+      };
       const userId = req.user?.id ?? null;
 
       // 1) Devolve 202 imediatamente — analise roda em background
@@ -1385,6 +1397,7 @@ export async function registerRoutes(
             projectId,
             userId,
             defaultPeDireitoM,
+            scope,
           });
         } catch (err: any) {
           console.error(
