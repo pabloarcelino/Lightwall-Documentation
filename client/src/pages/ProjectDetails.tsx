@@ -87,6 +87,7 @@ import { useNewWorkspaceUI } from "@/components/processing/useProcessingSync";
 import { LoadingState } from "@/components/ui/states";
 import { ProjectHeader } from "@/components/project/ProjectHeader";
 import { DraftWorkspace } from "@/components/project/DraftWorkspace";
+import { SimpleProjectConfig } from "@/components/project/SimpleProjectConfig";
 import { ErrorState } from "@/components/project/ErrorState";
 import { CompletedFooter } from "@/components/project/CompletedFooter";
 import { ProjectSidebar } from "@/components/project/ProjectSidebar";
@@ -358,7 +359,6 @@ export default function ProjectDetails() {
     muros: true,
     lajePiso: true,
     lajeCoberta: true,
-    cantos: true,
   });
   const [viewingFile, setViewingFile] = useState<any | null>(null);
   const [editingInfo, setEditingInfo] = useState(false);
@@ -989,28 +989,16 @@ export default function ProjectDetails() {
         <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 overflow-auto px-4 py-4">
           {headerStatus === "draft" && (
-            <DraftWorkspace
+            <SimpleProjectConfig
               files={files || []}
               onUpload={uploadFiles}
               onDeleteFile={handleDeleteFile}
-              onPreviewFile={(f) => setViewingFile(f)}
-              analysisMode={analysisMode}
-              onAnalysisModeChange={onAnalysisModeChange}
               peDireito={peDireito}
               onPeDireitoChange={onPeDireitoChange}
               scope={scope}
               onScopeChange={setScope}
-              panelExt={selectedProductIdExt}
-              panelInt={selectedProductIdInt}
-              panelMuros={selectedProductIdMuros}
-              panelPiso={selectedProductIdPiso}
-              panelCoberta={selectedProductIdCoberta}
-              onPanelChange={onPanelChange}
-              productOptions={productOptions}
               onProcess={() => processMutation.mutate()}
               isProcessing={isProcessing}
-              previewSrc={previewSrc}
-              previewMimeType={previewMimeType}
             />
           )}
 
@@ -1052,13 +1040,21 @@ export default function ProjectDetails() {
             />
           )}
 
-          {/* MODO VISAO DIRETA — projeto analisado pelo motor enxuto.
-              Renderiza UI simplificada (sumario + plantas anotadas + tabela
-              consolidada + detalhamento por pagina + observacoes). Sem
-              WorkspaceLayout (sem editor de paredes individuais). */}
+          {/* Resultado da analise — UI Vision Direta (unica opcao).
+              Se vision_direct_summary ausente: erro com botao Reprocessar.
+              Sem fallback para WorkspaceLayout legado. */}
           {headerStatus === "completed" && (() => {
             const vdSummary = (extractedData || []).find((d: any) => d.elementType === "vision_direct_summary");
-            if (!vdSummary) return null;
+            if (!vdSummary) {
+              return (
+                <ErrorState
+                  message="Análise concluída mas sem dados utilizáveis."
+                  hint="A persistência falhou. Clique abaixo para reprocessar — os logs do servidor têm detalhes."
+                  onReprocess={() => processMutation.mutate()}
+                  isReprocessing={processMutation.isPending}
+                />
+              );
+            }
             const vdResult = vdSummary.data as VisionDirectResult;
             return (
               <div className="space-y-4">
@@ -1068,49 +1064,6 @@ export default function ProjectDetails() {
                 <VisionDirectPageBreakdown pages={vdResult.pages} />
                 <VisionDirectNotes pages={vdResult.pages} />
               </div>
-            );
-          })()}
-
-          {/* MODO LEGADO (pipeline 14 estagios) — projetos antigos.
-              Mostrado APENAS se o projeto NAO tem vision_direct_summary. */}
-          {headerStatus === "completed" && !(extractedData || []).some((d: any) => d.elementType === "vision_direct_summary") && (() => {
-            const fusao = (extractedData || []).find((d: any) => d.elementType === "etapa4_fusao");
-            const annotatedPlan = (extractedData || []).find((d: any) => d.elementType === "etapa3_annotated_plan");
-            const auditNotesData = (extractedData || []).find((d: any) => d.elementType === "audit_notes");
-            const allWalls: any[] = (liveWalls || (fusao?.data as any)?.resultado?.walls || []) as any[];
-            const allSlabs: any[] = ((fusao?.data as any)?.resultado?.slabs || []) as any[];
-            const allNotes: any[] = ((auditNotesData?.data as any)?.notes || []) as any[];
-            const floorImages: Array<{ pavimento: string; image: string; mimeType?: string; isClientSideFallback?: boolean }> = [];
-            const imgsData = (annotatedPlan?.data as any)?.images;
-            if (Array.isArray(imgsData)) for (const img of imgsData) if (img?.image) floorImages.push({ pavimento: img.pavimento || "all", image: img.image, mimeType: img.mimeType });
-            else if ((annotatedPlan?.data as any)?.image) floorImages.push({ pavimento: "all", image: (annotatedPlan!.data as any).image, mimeType: (annotatedPlan!.data as any).mimeType });
-            if (floorImages.length === 0 && allWalls.some((w: any) => w.bbox || w.endpoints)) {
-              const refImgs: any[] = (annotatedPlan?.data as any)?.referenceImages || [];
-              const plantaBaixaRefs = refImgs.filter(r => r.pageType === "planta_baixa");
-              for (const r of plantaBaixaRefs) floorImages.push({ pavimento: r.pavimento || "all", image: r.image, mimeType: r.mimeType, isClientSideFallback: true });
-            }
-            const wallSegments = ((annotatedPlan?.data as any)?.wallSegments as any[]) || [];
-            const annotationErrors = ((annotatedPlan?.data as any)?.annotationErrors as any[]) || [];
-            const steps = pipelineSteps.filter(s => !s.parentStep).map(s => ({
-              step: s.step, label: s.label,
-              status: s.status === "done" ? ("done" as const) : s.status === "running" ? ("running" as const) : s.status === "error" ? ("error" as const) : ("pending" as const),
-            }));
-            const hasFailures = ((annotatedPlan?.data as any)?.annotationErrors?.length ?? 0) > 0 || allNotes.some((n: any) => n.severity === "error");
-            return (
-              <WorkspaceLayout
-                status="completed"
-                hasFailures={hasFailures}
-                steps={steps}
-                projectId={Number(projectId)}
-                walls={allWalls}
-                slabs={allSlabs}
-                auditNotes={allNotes}
-                floorImages={floorImages}
-                annotationErrors={annotationErrors}
-                wallSegments={wallSegments}
-                isProcessing={isProcessing}
-                onReprocess={() => processMutation.mutate()}
-              />
             );
           })()}
         </div>

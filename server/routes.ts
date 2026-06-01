@@ -1368,7 +1368,7 @@ export async function registerRoutes(
         Number.isFinite(peDireitoRaw) && peDireitoRaw >= 2.0 && peDireitoRaw <= 6.0
           ? peDireitoRaw
           : 3.0;
-      // Escopo das categorias a calcular. Categorias false sao zeradas no
+      // Escopo das 5 categorias a calcular. Categorias false sao zeradas no
       // resultado final (motor sempre devolve todas; a filtragem e na
       // persistencia). Default: todas true.
       const rawScope = (req.body?.scope ?? {}) as Record<string, unknown>;
@@ -1378,7 +1378,6 @@ export async function registerRoutes(
         muros: rawScope.muros !== false,
         lajePiso: rawScope.lajePiso !== false,
         lajeCoberta: rawScope.lajeCoberta !== false,
-        cantos: rawScope.cantos !== false,
       };
       const userId = req.user?.id ?? null;
 

@@ -27,7 +27,6 @@ export interface VisionDirectScope {
   muros: boolean;
   lajePiso: boolean;
   lajeCoberta: boolean;
-  cantos: boolean;
 }
 
 export interface RunVisionDirectForProjectInput {
@@ -43,7 +42,6 @@ const ALL_TRUE_SCOPE: VisionDirectScope = {
   muros: true,
   lajePiso: true,
   lajeCoberta: true,
-  cantos: true,
 };
 
 /**
@@ -188,22 +186,22 @@ export async function runVisionDirectForProject(
         (scopeOff.length ? ` (categorias zeradas pelo escopo: ${scopeOff.join(", ")})` : ""),
     );
 
+    if (consolidated.pages.length === 0) {
+      throw new Error("Consolidacao resultou em zero paginas analisadas");
+    }
+
     // 3) Limpa extractedData/budget antigos do projeto (caso seja reprocesso)
     console.log(`[VD-PROJECT] Projeto ${projectId}: limpando dados antigos...`);
     await safeDeleteOldData(projectId);
 
-    // 4) Persiste extractedData (try/catch granular — nao bloqueia status final)
+    // 4) Persiste extractedData — OBRIGATORIO. Falha aqui = projeto sem
+    // dados utilizaveis, status="error".
     console.log(`[VD-PROJECT] Projeto ${projectId}: persistindo extractedData...`);
-    try {
-      await persistExtractedData(projectId, consolidated);
-      console.log(`[VD-PROJECT] Projeto ${projectId}: extractedData persistido`);
-    } catch (err: any) {
-      console.error(
-        `[VD-PROJECT] Projeto ${projectId} falha em persistExtractedData: ${err?.message || err}`,
-      );
-    }
+    await persistExtractedData(projectId, consolidated);
+    console.log(`[VD-PROJECT] Projeto ${projectId}: extractedData persistido`);
 
-    // 5) Calcula budget e persiste (try/catch granular)
+    // 5) Calcula budget — SECUNDARIO. Falha aqui apenas loga warn; m² ja
+    // estao em extractedData e a UI principal consegue funcionar sem budget.
     console.log(`[VD-PROJECT] Projeto ${projectId}: calculando budget...`);
     try {
       const budget = await buildBudget(consolidated, project.pricingProfileId ?? null, projectId);
@@ -222,8 +220,8 @@ export async function runVisionDirectForProject(
       } as any);
       console.log(`[VD-PROJECT] Projeto ${projectId}: budget persistido`);
     } catch (err: any) {
-      console.error(
-        `[VD-PROJECT] Projeto ${projectId} falha em buildBudget/createBudget: ${err?.message || err}`,
+      console.warn(
+        `[VD-PROJECT] Projeto ${projectId} budget falhou (continuando sem budget): ${err?.message || err}`,
       );
     }
 
