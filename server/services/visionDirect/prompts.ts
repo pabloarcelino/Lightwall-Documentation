@@ -99,13 +99,31 @@ PROIBIDO:
 - Pintar duas cores paralelas na mesma parede (ex: linha vermelha de um lado + linha verde do outro).
 - Desenhar uma faixa de cor PARALELA a uma parede ja pintada (uma parede e UMA linha unica).
 - Trocar a cor no meio da parede.
+- Encostar uma linha vermelha e uma linha azul paralelas (isso e o BUG MAIS COMUM — leia o bloco abaixo).
 
-HIERARQUIA DE PREVALENCIA (use quando uma parede pode ter duas leituras):
+============================================================
+REGRA SUPER-CRITICA — NUNCA VERMELHO E AZUL COLADOS
+============================================================
+Quando a parede EXTERNA da casa coincide com o limite do LOTE (ex: a casa esta encostada na divisa, ou a parede da garagem aberta serve tambem de limite do terreno), essa parede e UMA UNICA parede fisica — NAO sao duas paredes diferentes.
+
+Nesse caso, pinte APENAS de VERMELHO (externa prevalece). NUNCA desenhe uma linha azul paralela colada/encostada na linha vermelha. NUNCA mostre vermelho e azul lado a lado na mesma posicao do desenho.
+
+Como saber se voce esta fazendo errado: olhe a planta depois de pintar. Se voce ve uma faixa vermelha e uma faixa azul paralelas, encostadas uma na outra ou separadas por 1-2mm — esta ERRADO. Apague uma das duas. A externa (vermelho) prevalece.
+
+Regra mecanica: para CADA trecho geometrico do desenho (cada segmento de linha que representa uma parede), escolha UMA cor com base na hierarquia abaixo, e pinte SO uma faixa daquela cor sobre a linha. Nunca duas faixas paralelas no mesmo trecho.
+
+============================================================
+HIERARQUIA DE PREVALENCIA (uma cor por trecho)
+============================================================
   1. Se ao menos UMA face toca ambiente externo -> VERMELHO (externa)
   2. Caso ambas as faces toquem interno coberto -> VERDE (interna)
-  3. Se esta no contorno do LOTE, fora da edificacao -> AZUL (muro)
+  3. Se esta no contorno do LOTE e NAO existe parede da edificacao na mesma posicao -> AZUL (muro)
 
-Exemplo: a parede que separa SALA (interna) da VARANDA ABERTA (externa) e VERMELHA (externa prevalece). Nao pinte essa parede tambem com verde.
+Exemplos:
+- Parede que separa SALA (interna) da VARANDA ABERTA (externa) -> VERMELHO unico. Nao pinte verde tambem.
+- Parede da garagem aberta que e tambem o limite do lote -> VERMELHO unico. Nao pinte azul paralelo.
+- Linha do perimetro do lote em trecho onde NAO ha edificacao (so jardim/grama externa) -> AZUL.
+- Onde a edificacao se afasta do limite do lote (ha jardim entre a parede externa e o muro) -> VERMELHO na parede da casa E AZUL na linha do muro, mas elas estao a varios metros de distancia, NAO encostadas/paralelas.
 
 REGRA TOPOLOGICA: parede VERDE (interna) NUNCA pode estar fora do contorno fechado formado pelas paredes VERMELHAS (externas). Antes de pintar verde, confirme que esta DENTRO da edificacao.
 
@@ -128,6 +146,8 @@ DEFINICOES (hierarquia: externa > interna > muro — cada parede UMA UNICA class
 - LAJE COBERTA: = laje_piso, salvo se houver linhas tracejadas de beiral no perimetro (entao maior).
 
 IMPORTANTE — REGRA ANTI-PARALELA: nao pode haver duas paredes paralelas no mesmo lugar fisico. Cada trecho de parede do desenho recebe UMA UNICA classificacao. Onde tem parede EXTERNA, nao tem parede INTERNA paralela colada nela — se voce duvidar entre as duas, externa prevalece.
+
+IMPORTANTE — EXTERNA vs MURO no MESMO TRECHO: quando a parede externa da edificacao coincide com o limite do lote (a casa esta encostada na divisa, ou a parede da garagem aberta tambem e limite do terreno), conte esse trecho APENAS como parede EXTERNA, NAO some o mesmo trecho tambem em muros. Muro entra so para os trechos do perimetro do lote onde NAO ha edificacao na mesma linha (ex: cerca/muro do jardim, frente do lote onde so tem grama, divisa lateral entre lote e vizinho sem casa encostada).
 
 REGRA — IDENTIFIQUE TODAS AS PAREDES: varra a planta comodo por comodo. Toda parede desenhada (espessa ou fina) DEVE entrar em uma das 3 classes. Atencao especial as divisorias FINAS de banheiro, closet, corredor — sao facilmente esquecidas.
 
