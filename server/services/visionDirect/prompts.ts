@@ -110,24 +110,9 @@ PASSO 1 — PINTE O INTERIOR DE CADA AMBIENTE (overlay semitransparente ~35% opa
 REGRA ABSOLUTA PASSO 1: cada overlay PARA exatamente na face interna da parede que delimita o ambiente. NAO INVADE a parede. NAO se prolonga ate o lado de fora dela.
 
 PASSO 2 — PINTE AS PAREDES (cada parede recebe UMA cor solida):
-- PAREDES EXTERNAS (contorno externo da edificacao coberta): faixa VERMELHA opaca (~60% opacidade) sobre toda a espessura da parede. So o perimetro externo da edificacao recebe vermelho.
+- PAREDES EXTERNAS (contorno externo da edificacao coberta): faixa VERMELHA opaca (~60% opacidade) sobre toda a espessura da parede. So o perimetro externo da edificacao recebe vermelho. Isso vale para QUALQUER pavimento incluindo subsolo e pavimento superior — mesmo quando o lado externo da parede da para terra/laje superior/nada desenhado, a parede do perimetro continua sendo externa.
 - PAREDES INTERNAS (divisorias entre dois comodos internos fechados): faixa VERDE opaca (~60% opacidade, verde mais escuro que o overlay do passo 1) sobre toda a espessura da parede.
 - Cada parede recebe UMA UNICA cor sobre a peca inteira (as duas faces + miolo). Vermelha se externa, verde se interna.
-
-============================================================
-DEFINICAO GEOMETRICA DE PAREDE EXTERNA (vale para QUALQUER pavimento)
-============================================================
-PAREDE EXTERNA = qualquer parede que esta no CONTORNO MAIS EXTERNO da edificacao coberta. E o LIMITE entre o volume coberto da edificacao e o "mundo fora" dela. NAO IMPORTA o que esta desenhado do lado de fora dessa parede:
-- pode ser jardim, rua, calcada (caso tipico do TERREO)
-- pode ser NADA visivel/desenhado (caso tipico do SUBSOLO enterrado, onde o lado externo da parede da para terra/contencao)
-- pode ser uma laje/projecao da edificacao acima (caso de PAVIMENTOS INTERMEDIARIOS / SUPERIORES)
-- pode ser divisa com vizinho ou outro lote
-
-COMO IDENTIFICAR VISUALMENTE: trace o POLIGONO FECHADO mais externo formado pelas paredes da edificacao coberta. Toda parede que faz parte desse poligono fechado e EXTERNA -> VERMELHA. Tudo dentro desse poligono (divisorias entre comodos) e INTERNA -> VERDE.
-
-REGRA SUPER-CRITICA PARA SUBSOLO E PAVIMENTOS SUPERIORES: mesmo que o pavimento NAO TENHA jardim/rua/varanda desenhados ao redor (so um espaco em branco ou hachura indicando terra/laje acima), as paredes do PERIMETRO da edificacao coberta SAO EXTERNAS (vermelhas). NUNCA confunda essas paredes com internas so porque o "lado de fora" nao tem nada desenhado. Se uma parede esta no contorno do poligono fechado da edificacao, ela e externa, ponto.
-
-CRITERIO DE DESAMBIGUACAO: se voce esta em duvida entre marcar uma parede como externa ou interna, pergunte: "essa parede tem outro espaco interno fechado e coberto do lado de fora dela na mesma planta?". Se SIM, e interna. Se NAO (do outro lado nao ha outro comodo, ou ha so terra/jardim/area aberta/nada desenhado), e EXTERNA.
 
 ============================================================
 REGRA CRITICA E NAO-NEGOCIAVEL — ZERO SANDUICHE, ZERO PARALELO
