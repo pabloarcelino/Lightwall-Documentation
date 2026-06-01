@@ -15,12 +15,15 @@
 import { withRetry } from "../gemini/client";
 import { repairJSON, getActiveGenAI, getFilePages } from "../gemini/planAnalyzer";
 import { inspectFile } from "../preflight/inspector";
-import { editImage } from "../../replit_integrations/image/client";
+import {
+  renderAnnotatedImage,
+  type RenderableWall,
+} from "../annotation/renderer";
 import {
   buildClassificationPrompt,
   buildSectionHeightPrompt,
   buildAreaPrompt,
-  buildImageAnnotationPrompt,
+  buildWallInventoryPrompt,
 } from "./prompts";
 
 // ============================================================
@@ -126,6 +129,71 @@ function extractJson(text: string): any | null {
   } catch {
     return null;
   }
+}
+
+// ============================================================
+// Inventario de paredes (para o renderer SVG)
+// ============================================================
+
+interface ClassifiedSegment {
+  p1: [number, number]; // 0-1000
+  p2: [number, number];
+  thickness_pct: number;
+  classe: "externa" | "interna" | "muro";
+}
+
+function validateSeg(raw: any): ClassifiedSegment | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (!Array.isArray(raw.p1) || !Array.isArray(raw.p2)) return null;
+  const x1 = Number(raw.p1[0]), y1 = Number(raw.p1[1]);
+  const x2 = Number(raw.p2[0]), y2 = Number(raw.p2[1]);
+  for (const v of [x1, y1, x2, y2]) {
+    if (!Number.isFinite(v) || v < 0 || v > 1000) return null;
+  }
+  if (Math.hypot(x2 - x1, y2 - y1) < 5) return null;
+  const classe = raw.classe === "interna" || raw.classe === "muro" ? raw.classe : "externa";
+  return {
+    p1: [x1, y1],
+    p2: [x2, y2],
+    thickness_pct: Math.max(0.3, Math.min(5, Number(raw.thickness_pct) || 1.2)),
+    classe,
+  };
+}
+
+async function inventoryWallSegments(
+  base64: string,
+  mimeType: string,
+): Promise<ClassifiedSegment[]> {
+  const text = await withRetry(async () => {
+    const ai = getActiveGenAI();
+    const response = await ai.models.generateContent({
+      model: MODEL_PRO,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { inlineData: { mimeType, data: base64 } },
+            { text: buildWallInventoryPrompt() },
+          ],
+        },
+      ],
+      config: {
+        temperature: 0.1,
+        maxOutputTokens: 16384,
+        thinkingConfig: { thinkingBudget: 8192 },
+      },
+    });
+    return response.text ?? "";
+  }, "VISION-DIRECT-inventory");
+
+  const json = extractJson(text);
+  if (!json || !Array.isArray(json.segments)) return [];
+  const segs: ClassifiedSegment[] = [];
+  for (const raw of json.segments) {
+    const seg = validateSeg(raw);
+    if (seg) segs.push(seg);
+  }
+  return segs;
 }
 
 // ============================================================
@@ -401,24 +469,49 @@ export async function analyzeVisionDirect(
       }
     }
 
-    // Geracao da planta anotada via IA — best-effort, totalmente independente
-    // do sucesso/falha do parse do JSON. Se falhar, UI mostra a original.
-    log(`Pag ${pg.pageIndex}: gerando planta anotada via IA...`);
+    // Planta anotada via renderer SVG deterministico:
+    //  1) Gemini 2.5 Pro enumera paredes (endpoints + classe) em coords 0-1000.
+    //  2) renderAnnotatedImage() pinta deterministicamente com Sharp+SVG.
+    // Substitui o gemini-2.5-flash-image que sofria de cobertura incompleta,
+    // sanduiche, legenda invertida. Best-effort: falha -> UI mostra a original.
+    log(`Pag ${pg.pageIndex}: inventariando paredes (Gemini Pro)...`);
     const imgStart = Date.now();
     try {
-      const annotated = await editImage(buildImageAnnotationPrompt(), [
-        { data: pg.base64, mimeType: pg.mimeType },
-      ]);
-      result.annotatedImage = annotated;
+      const segs = await inventoryWallSegments(pg.base64, pg.mimeType);
+      log(`Pag ${pg.pageIndex}: ${segs.length} parede(s) inventariada(s)`);
+      if (segs.length === 0) {
+        throw new Error("inventario retornou zero paredes");
+      }
+      const walls: RenderableWall[] = segs.map((s, i) => ({
+        id: `W${String(i + 1).padStart(3, "0")}`,
+        classe: s.classe,
+        endpoints: { p1: s.p1, p2: s.p2 },
+        thickness_pct: s.thickness_pct,
+      }));
+      const baseBuffer = Buffer.from(pg.base64, "base64");
+      const rendered = await renderAnnotatedImage(
+        baseBuffer,
+        pg.mimeType,
+        pg.pageIndex,
+        walls,
+        [],
+        {
+          pavimentoLabel: result.pavimento,
+          wallStyle: "filled",
+          showLegend: true,
+          showWallLabels: false,
+        },
+      );
+      result.annotatedImage = `data:image/png;base64,${rendered.pngBuffer.toString("base64")}`;
       log(
-        `Pag ${pg.pageIndex}: planta anotada OK (${Math.round(annotated.length / 1024)}KB, ${(
+        `Pag ${pg.pageIndex}: planta anotada OK (${Math.round(rendered.pngBuffer.length / 1024)}KB, ${(
           (Date.now() - imgStart) /
           1000
-        ).toFixed(1)}s)`,
+        ).toFixed(1)}s, ${walls.length} paredes)`,
       );
     } catch (imgErr: any) {
       console.warn(
-        `[VISION-DIRECT] Pag ${pg.pageIndex} geracao de imagem falhou (${(
+        `[VISION-DIRECT] Pag ${pg.pageIndex} planta anotada falhou (${(
           (Date.now() - imgStart) /
           1000
         ).toFixed(1)}s): ${imgErr?.message || imgErr}`,

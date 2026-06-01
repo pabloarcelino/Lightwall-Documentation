@@ -45,6 +45,55 @@ Responda EXCLUSIVAMENTE com JSON valido, sem markdown:
 }
 
 /**
+ * Prompt do INVENTARIO classificado de paredes (usado pelo renderer SVG
+ * deterministico). Pede ao Gemini 2.5 Pro: enumere cada parede da planta
+ * como segmento de reta com endpoints (0-1000) + classe (externa/interna/
+ * muro) + espessura. Output e usado pra renderizar overlay colorido no
+ * backend via Sharp+SVG (annotation/renderer.ts).
+ *
+ * Substitui o gemini-2.5-flash-image (que sofria de sanduiche, legenda
+ * invertida, cobertura incompleta). Aqui a IA so identifica geometria —
+ * o desenho final e deterministico.
+ */
+export function buildWallInventoryPrompt(): string {
+  return `TAREFA: enumere TODAS as paredes desta planta arquitetonica como segmentos de reta classificados.
+
+REGRAS DE CLASSIFICACAO (cada parede recebe UMA UNICA classe):
+- "externa": a parede da edificacao COBERTA com pelo menos uma face em contato com ambiente externo (rua, jardim, varanda/garagem aberta, divisa com vizinho). Forma o contorno do volume coberto.
+- "interna": a parede esta DENTRO da edificacao coberta, separando dois comodos internos fechados (ex: SALA/QUARTO, COZINHA/BANHEIRO). Inclui divisorias finas (banheiro, closet, corredor).
+- "muro": vedacao do TERRENO/LOTE, FORA da edificacao coberta (contorno do lote sem edificacao na mesma posicao).
+
+HIERARQUIA quando ambigua: externa > interna > muro. Onde a parede externa da casa coincide com o limite do lote, classifique como EXTERNA (nao duplicar como muro).
+
+PARA CADA parede que voce ve:
+- p1: extremidade inicial (x, y) em coordenadas normalizadas 0-1000.
+- p2: extremidade final (x, y) em coordenadas normalizadas 0-1000.
+- thickness_pct: espessura aparente em % do lado maior da imagem (tipico 0.8 a 2.5).
+- classe: "externa" | "interna" | "muro".
+
+INSTRUCOES:
+- Trace o segmento ao longo do EIXO CENTRAL da parede (no meio da espessura).
+- Em cantos (L), divida em 2 segmentos.
+- INCLUA TODAS as paredes — especialmente divisorias finas de banheiro/closet/corredor (sao as mais esquecidas).
+- INCLUA muros se houver contorno de lote visivel.
+- IGNORE mobiliario (sofa, cama, mesa, vaso, geladeira, carro).
+- Coordenadas: (0,0) = canto superior esquerdo; x cresce para direita; y cresce para baixo.
+
+Output JSON valido, sem texto antes ou depois, sem markdown:
+{
+  "segments": [
+    { "p1": [120, 200], "p2": [480, 200], "thickness_pct": 1.2, "classe": "externa" },
+    { "p1": [300, 200], "p2": [300, 400], "thickness_pct": 0.9, "classe": "interna" },
+    ...
+  ]
+}
+
+Casa residencial tipica: 15-40 segmentos. Plantas grandes: 50-100. Se passar de 150, voce esta confundindo mobiliario/cotas com paredes.`;
+}
+
+/**
+ * @deprecated Substituido pelo renderer SVG deterministico
+ * (renderAnnotatedImage). Mantido apenas para fallback/reversao manual.
  * Prompt para gerar a IMAGEM anotada via IA (gemini-2.5-flash-image), no
  * estilo do chat do Gemini Web. Recebe a planta original + instrucao de
  * pintar paredes externas em vermelho, internas em verde, e muros em azul,
