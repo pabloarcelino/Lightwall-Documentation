@@ -157,12 +157,28 @@ REGRA CRITICA — UMA UNICA COR POR PAREDE FISICA
 ============================================================
 Cada parede do desenho recebe UMA UNICA cor sobre toda sua extensao.
 
+REGRA GEOMETRICA FUNDAMENTAL — PARALELO PROIBIDO, PERPENDICULAR PERMITIDO:
+- Cores DIFERENTES podem se ENCOSTAR somente em angulo (perpendicular, em L, em T, em cruz). Quando uma parede VERDE chega na parede VERMELHA fazendo um T, a ponta delas se encontram em 90° — isso e CORRETO.
+- Cores DIFERENTES NUNCA podem ser PARALELAS na MESMA direcao no MESMO trecho do desenho. Se voce ja pintou um trecho horizontal de VERMELHO, NUNCA pinte uma faixa VERDE horizontal colada/sobreposta a ele. Se voce ja pintou um trecho vertical de VERMELHO, NUNCA pinte uma faixa VERDE vertical encostada nele.
+- Essa regra resolve a maior fonte de erros: marcar uma mesma parede com dois tipos diferentes. Isso traz IMPRECISAO. UMA parede recebe UMA classe; classes diferentes so se encontram em angulo, NUNCA paralelas no mesmo eixo.
+
+EXEMPLOS GEOMETRICOS:
+- CORRETO: parede vermelha horizontal no topo da casa. Parede verde vertical descendo dessa parede para dentro da casa. Elas se encontram em T — ponta a ponta. OK.
+- ERRADO: parede vermelha horizontal no topo. E EM CIMA OU LOGO ABAIXO dela, uma faixa verde tambem horizontal. Duas cores paralelas no mesmo trecho = MESMA parede marcada como dois tipos. ERRADO. Apague a verde.
+
 PROIBIDO:
 - Pintar duas cores paralelas na mesma parede (ex: linha vermelha de um lado + linha verde do outro). LEMBRE que uma parede tem 2 LINHAS de face + miolo — TUDO isso e uma parede so e recebe UMA cor.
 - "SANDUICHE": pintar a face de um lado da parede de vermelho, o miolo de verde, e a face do outro lado de vermelho de novo. Isso e o ERRO MAIS COMUM — pinte a peca INTEIRA de UMA cor.
 - Desenhar uma faixa de cor PARALELA a uma parede ja pintada (uma parede e UMA peca unica, mesmo tendo duas linhas paralelas que sao suas faces).
 - Trocar a cor no meio da parede.
 - Encostar uma linha vermelha e uma linha azul paralelas (parede externa que coincide com limite do lote = uma peca so, cor vermelha).
+- Encostar uma linha vermelha e uma linha verde paralelas no contorno externo da edificacao. Se a parede esta no contorno -> SO VERMELHO. Se ha uma parede interna que CHEGA nessa parede externa, ela termina ali em T, NAO vira uma faixa verde paralela ao lado da vermelha.
+
+AUTOCHECAGEM ANTES DE FINALIZAR:
+Olhe a imagem que voce pintou. Percorra cada trecho de parede:
+1. Existe um trecho onde aparecem duas cores diferentes UMA AO LADO DA OUTRA, na mesma direcao (ambas horizontais ou ambas verticais)? Isso e ERRO. Apague uma das duas. A regra de prevalencia: VERMELHO > VERDE > AZUL. Mantenha a de maior prevalencia.
+2. Existe parede onde a cor de cada FACE e diferente da cor do MIOLO (sanduiche)? Isso e ERRO. Reescolha UMA cor para a peca toda.
+3. Onde duas cores diferentes se encontram, elas se encontram em ANGULO (T, L, cruz, 90°), nao paralelas? Se sim, OK.
 
 ============================================================
 REGRA SUPER-CRITICA — NUNCA VERMELHO E AZUL COLADOS
@@ -208,7 +224,7 @@ DEFINICOES (hierarquia: externa > interna > muro — cada parede UMA UNICA class
 - LAJE PISO: area horizontal coberta+fechada (exclui varanda aberta, jardim, garagem aberta).
 - LAJE COBERTA: = laje_piso, salvo se houver linhas tracejadas de beiral no perimetro (entao maior).
 
-IMPORTANTE — REGRA ANTI-PARALELA: nao pode haver duas paredes paralelas no mesmo lugar fisico. Cada trecho de parede do desenho recebe UMA UNICA classificacao. Onde tem parede EXTERNA, nao tem parede INTERNA paralela colada nela — se voce duvidar entre as duas, externa prevalece.
+IMPORTANTE — REGRA ANTI-PARALELA / NAO SOBREPOR CLASSES: cada trecho geometrico de parede no desenho recebe UMA UNICA classificacao. Classes diferentes (externa, interna, muro) NUNCA podem coexistir no MESMO trecho de parede no MESMO sentido/direcao. So podem se ENCONTRAR em angulo (em T, em L, perpendiculares) — quando uma parede interna chega na parede externa do contorno da casa fazendo um T, a interna TERMINA ali, ela NAO continua paralela ao longo da externa. Onde tem parede EXTERNA num trecho, esse trecho INTEIRO e externa (nao some uma interna paralela colada nela). Hierarquia de prevalencia: externa > interna > muro.
 
 IMPORTANTE — EXTERNA vs MURO no MESMO TRECHO: quando a parede externa da edificacao coincide com o limite do lote (a casa esta encostada na divisa, ou a parede da garagem aberta tambem e limite do terreno), conte esse trecho APENAS como parede EXTERNA, NAO some o mesmo trecho tambem em muros. Muro entra so para os trechos do perimetro do lote onde NAO ha edificacao na mesma linha (ex: cerca/muro do jardim, frente do lote onde so tem grama, divisa lateral entre lote e vizinho sem casa encostada).
 
