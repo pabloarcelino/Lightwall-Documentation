@@ -1082,10 +1082,30 @@ export async function registerRoutes(
   app.get("/api/projects/:id", async (req, res) => {
     try {
       const id = parseInt(String(req.params.id));
-      const project = await storage.getProject(id);
+      let project = await storage.getProject(id);
       if (!project) {
         return res.status(404).json({ message: "Projeto não encontrado" });
       }
+
+      // AUTO-HEAL — se o projeto esta "processing" ha mais de 12 minutos
+      // SEM atualizacao, considera zumbi e forca status="error". Garante
+      // que UIs nunca ficam travadas indefinidamente.
+      if (project.status === "processing" && project.updatedAt) {
+        const STALE_THRESHOLD_MS = 12 * 60 * 1000;
+        const ageMs = Date.now() - new Date(project.updatedAt).getTime();
+        if (ageMs > STALE_THRESHOLD_MS) {
+          console.warn(
+            `[AUTO-HEAL] Projeto ${id} esta processing ha ${Math.round(ageMs / 1000)}s sem updates. Forcando status=error.`,
+          );
+          try {
+            await storage.updateProjectStatus(id, "error");
+            project = (await storage.getProject(id)) ?? project;
+          } catch (err: any) {
+            console.error(`[AUTO-HEAL] falha ao destravar projeto ${id}: ${err?.message || err}`);
+          }
+        }
+      }
+
       const isAdmin = req.user?.role === "admin";
       const files = await storage.getProjectFiles(id);
       const extracted = await storage.getExtractedData(id);
@@ -1381,6 +1401,10 @@ export async function registerRoutes(
       };
       const userId = req.user?.id ?? null;
 
+      console.log(
+        `[VD-PROJECT] POST /process-direct projeto ${projectId} recebido (pe=${defaultPeDireitoM}, scope=${JSON.stringify(scope)})`,
+      );
+
       // 1) Devolve 202 imediatamente — analise roda em background
       res.status(202).json({ ok: true, projectId, status: "processing" });
 
@@ -1388,23 +1412,29 @@ export async function registerRoutes(
       // (incluindo import falho, crash sincrono fora do try interno do
       // adapter) atualiza projects.status="error" para destravar a UI.
       (async () => {
+        console.log(`[VD-PROJECT] IIFE projeto ${projectId} iniciando...`);
         try {
+          console.log(`[VD-PROJECT] IIFE projeto ${projectId} importando projectAdapter...`);
           const { runVisionDirectForProject } = await import(
             "./services/visionDirect/projectAdapter"
           );
+          console.log(`[VD-PROJECT] IIFE projeto ${projectId} import OK, chamando runVisionDirectForProject...`);
           await runVisionDirectForProject({
             projectId,
             userId,
             defaultPeDireitoM,
             scope,
           });
+          console.log(`[VD-PROJECT] IIFE projeto ${projectId} retornou normalmente`);
         } catch (err: any) {
           console.error(
             `[VD-PROJECT] handler background failed for ${projectId}:`,
             err?.message || err,
+            err?.stack,
           );
           try {
             await storage.updateProjectStatus(projectId, "error");
+            console.log(`[VD-PROJECT] IIFE projeto ${projectId}: status -> error (apos falha)`);
           } catch (statusErr: any) {
             console.error(
               `[VD-PROJECT] alem disso, updateProjectStatus("error") falhou:`,

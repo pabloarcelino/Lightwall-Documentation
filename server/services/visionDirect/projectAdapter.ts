@@ -97,7 +97,28 @@ export async function runVisionDirectForProject(
   const defaultPeDireitoM = input.defaultPeDireitoM ?? 3.0;
   const scope = input.scope ?? ALL_TRUE_SCOPE;
 
+  // Timeout absoluto: 10 minutos pra projeto inteiro. Se nao terminar
+  // ate la, forca status="error" pra destravar a UI. Garante que
+  // nenhum projeto fica "processing" para sempre, qualquer que seja
+  // a causa (deadlock, hang na rede, bug oculto).
+  const TOTAL_TIMEOUT_MS = 10 * 60 * 1000;
+  const absoluteTimeout = setTimeout(async () => {
+    console.error(
+      `[VD-PROJECT] Projeto ${projectId}: TIMEOUT ABSOLUTO 10min atingido. Forcando status=error.`,
+    );
+    try {
+      const proj = await storage.getProject(projectId);
+      if (proj?.status === "processing") {
+        await storage.updateProjectStatus(projectId, "error");
+        console.error(`[VD-PROJECT] Projeto ${projectId}: status -> error (timeout absoluto)`);
+      }
+    } catch (err: any) {
+      console.error(`[VD-PROJECT] Projeto ${projectId}: falha ao forcar error apos timeout: ${err?.message || err}`);
+    }
+  }, TOTAL_TIMEOUT_MS);
+
   try {
+    console.log(`[VD-PROJECT] Projeto ${projectId}: runVisionDirectForProject INICIO (defaultPe=${defaultPeDireitoM}m)`);
     await storage.updateProjectStatus(projectId, "processing");
     console.log(`[VD-PROJECT] Projeto ${projectId}: status -> processing`);
 
@@ -236,6 +257,9 @@ export async function runVisionDirectForProject(
     } catch {
       /* noop */
     }
+  } finally {
+    clearTimeout(absoluteTimeout);
+    console.log(`[VD-PROJECT] Projeto ${projectId}: runVisionDirectForProject FIM`);
   }
 }
 
