@@ -163,36 +163,63 @@ function validateSeg(raw: any): ClassifiedSegment | null {
 async function inventoryWallSegments(
   base64: string,
   mimeType: string,
+  pageIndex: number,
 ): Promise<ClassifiedSegment[]> {
-  const text = await withRetry(async () => {
-    const ai = getActiveGenAI();
-    const response = await ai.models.generateContent({
-      model: MODEL_PRO,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { inlineData: { mimeType, data: base64 } },
-            { text: buildWallInventoryPrompt() },
-          ],
+  const start = Date.now();
+  console.log(`[VISION-DIRECT] Pag ${pageIndex} inventario inicio (Gemini Pro)...`);
+  let text = "";
+  try {
+    text = await withRetry(async () => {
+      const ai = getActiveGenAI();
+      const response = await ai.models.generateContent({
+        model: MODEL_PRO,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inlineData: { mimeType, data: base64 } },
+              { text: buildWallInventoryPrompt() },
+            ],
+          },
+        ],
+        config: {
+          temperature: 0.1,
+          // Budgets enxutos para evitar timeout do gateway (HTTP 502).
+          // Output 8192 cabe ~80-100 segmentos; thinking 3072 e suficiente
+          // para inventario focado (so geometria + classe).
+          maxOutputTokens: 8192,
+          thinkingConfig: { thinkingBudget: 3072 },
         },
-      ],
-      config: {
-        temperature: 0.1,
-        maxOutputTokens: 16384,
-        thinkingConfig: { thinkingBudget: 8192 },
-      },
-    });
-    return response.text ?? "";
-  }, "VISION-DIRECT-inventory");
+      });
+      const usage = response.usageMetadata;
+      const finish = response.candidates?.[0]?.finishReason;
+      console.log(
+        `[VISION-DIRECT] Pag ${pageIndex} inventario usage: in=${usage?.promptTokenCount} out=${usage?.candidatesTokenCount} think=${usage?.thoughtsTokenCount} finish=${finish}`,
+      );
+      return response.text ?? "";
+    }, "VISION-DIRECT-inventory");
+  } catch (err: any) {
+    console.warn(
+      `[VISION-DIRECT] Pag ${pageIndex} inventario falhou em ${((Date.now() - start) / 1000).toFixed(1)}s: ${err?.message || err}`,
+    );
+    return [];
+  }
 
   const json = extractJson(text);
-  if (!json || !Array.isArray(json.segments)) return [];
+  if (!json || !Array.isArray(json.segments)) {
+    console.warn(
+      `[VISION-DIRECT] Pag ${pageIndex} inventario JSON invalido (${text.length} chars)`,
+    );
+    return [];
+  }
   const segs: ClassifiedSegment[] = [];
   for (const raw of json.segments) {
     const seg = validateSeg(raw);
     if (seg) segs.push(seg);
   }
+  console.log(
+    `[VISION-DIRECT] Pag ${pageIndex} inventario concluido em ${((Date.now() - start) / 1000).toFixed(1)}s — ${segs.length} segmento(s)`,
+  );
   return segs;
 }
 
@@ -477,8 +504,7 @@ export async function analyzeVisionDirect(
     log(`Pag ${pg.pageIndex}: inventariando paredes (Gemini Pro)...`);
     const imgStart = Date.now();
     try {
-      const segs = await inventoryWallSegments(pg.base64, pg.mimeType);
-      log(`Pag ${pg.pageIndex}: ${segs.length} parede(s) inventariada(s)`);
+      const segs = await inventoryWallSegments(pg.base64, pg.mimeType, pg.pageIndex);
       if (segs.length === 0) {
         throw new Error("inventario retornou zero paredes");
       }
