@@ -675,49 +675,55 @@ export default function ProjectDetails() {
   const processMutation = useMutation({
     mutationFn: async () => {
       setIsProcessing(true);
-      setPipelineVisible(true);
-      startSSE();
-      const body: Record<string, unknown> = { scope, analysisMode, peDireito };
-      if (selectedProductIdExt) body.productIdExt = parseInt(selectedProductIdExt);
-      if (selectedProductIdInt) body.productIdInt = parseInt(selectedProductIdInt);
-      if (selectedProductIdMuros) body.productIdMuros = parseInt(selectedProductIdMuros);
-      if (selectedProductIdPiso) body.productIdPiso = parseInt(selectedProductIdPiso);
-      if (selectedProductIdCoberta) body.productIdCoberta = parseInt(selectedProductIdCoberta);
-      // O motor antigo (pipeline 14 estagios) foi substituido pelo motor
-      // do Modo Visao Direta — mais simples e produz resultados melhores.
+      // Motor enxuto (Vision Direct): devolve 202 imediatamente. Acompanhamos
+      // o progresso por polling do GET /api/projects/:id (status: processing
+      // -> completed). Sem SSE / pipelineSteps que eram da pipeline antiga.
+      const body: Record<string, unknown> = { peDireito };
       const res = await fetch(`/api/projects/${projectId}/process-direct`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) {
+      if (!res.ok && res.status !== 202) {
         const errData = await res.json().catch(() => ({ message: "Erro ao processar projeto" }));
-        if (res.status === 409 && errData.duplicateProjectId) {
-          return { duplicate: true, ...errData };
-        }
         throw new Error(errData.message || "Erro ao processar projeto");
       }
       return res.json();
     },
-    onSuccess: (data: any) => {
-      if (data?.duplicate) {
-        setIsProcessing(false);
-        toast({
-          title: "Projeto Duplicado",
-          description: `Arquivos identicos ja processados no projeto "${data.duplicateProjectName}". Redirecionando...`,
-          variant: "destructive",
-        });
-        setTimeout(() => setLocation(`/project/${data.duplicateProjectId}`), 2000);
-        return;
-      }
-      toast({ title: "Sucesso!", description: "Projeto processado com sucesso" });
+    onSuccess: () => {
+      // Nao mostra toast de sucesso aqui — analise so comecou. Toast vem
+      // quando o polling detectar status="completed".
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
     },
     onError: (error: Error) => {
-      toast({ title: "Erro", description: error.message || "Erro ao processar projeto", variant: "destructive" });
+      toast({ title: "Erro", description: error.message || "Erro ao iniciar processamento", variant: "destructive" });
       setIsProcessing(false);
     },
   });
+
+  // Polling enquanto o projeto esta em processing — o motor enxuto roda em
+  // background sem SSE. Refetch GET /api/projects/:id a cada 2.5s ate
+  // status virar "completed" ou "error", entao limpa o estado.
+  useEffect(() => {
+    if (data?.project?.status !== "processing") {
+      // Quando o status muda para completed/error fora do polling, sincroniza
+      if (isProcessing && data?.project?.status === "completed") {
+        setIsProcessing(false);
+        toast({ title: "Analise concluida!", description: "Quantitativos e plantas anotadas prontos." });
+      } else if (isProcessing && data?.project?.status === "error") {
+        setIsProcessing(false);
+        toast({ title: "Erro na analise", description: "O motor de analise falhou. Tente reprocessar.", variant: "destructive" });
+      }
+      return;
+    }
+    // status === "processing" -> mantem isProcessing visivel e refaz polling
+    if (!isProcessing) setIsProcessing(true);
+    const t = setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+    }, 2500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.project?.status, projectId]);
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
@@ -1007,14 +1013,18 @@ export default function ProjectDetails() {
             />
           )}
 
-          {headerStatus === "processing" && projectId && (
-            <ProcessingLiveView
-              projectId={projectId}
-              isActive
-              onReprocess={(stage) => {
-                fetch(`/api/projects/${projectId}/reprocess/${stage}`, { method: "POST" }).catch(() => {});
-              }}
-            />
+          {headerStatus === "processing" && (
+            <Card className="p-12 text-center">
+              <Loader2 className="h-12 w-12 text-primary animate-spin mx-auto mb-4" />
+              <h3 className="text-base font-semibold mb-1">Analisando planta…</h3>
+              <p className="text-sm text-muted-foreground">
+                Identificando ambientes, medindo áreas e gerando plantas anotadas pela IA.
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-4">
+                Latência típica: 30-90s por arquivo. Você pode fechar esta página — o resultado
+                aparece quando voltar.
+              </p>
+            </Card>
           )}
 
           {headerStatus === "error" && (
