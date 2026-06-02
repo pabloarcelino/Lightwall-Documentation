@@ -82,6 +82,8 @@ import { VisionDirectAnnotatedImages } from "@/components/visionDirect/Annotated
 import { VisionDirectConsolidatedTable } from "@/components/visionDirect/ConsolidatedTable";
 import { VisionDirectPageBreakdown } from "@/components/visionDirect/PageBreakdown";
 import { VisionDirectNotes } from "@/components/visionDirect/Notes";
+import { VisionDirectLiveView } from "@/components/visionDirect/LiveView";
+import { VisionDirectPipelineTimeline } from "@/components/visionDirect/PipelineTimeline";
 import type { VisionDirectResult } from "@/components/visionDirect/types";
 import { useNewWorkspaceUI } from "@/components/processing/useProcessingSync";
 import { LoadingState } from "@/components/ui/states";
@@ -1028,33 +1030,8 @@ export default function ProjectDetails() {
             />
           )}
 
-          {headerStatus === "processing" && (
-            <Card className="p-12 text-center">
-              <Loader2 className="h-12 w-12 text-primary animate-spin mx-auto mb-4" />
-              <h3 className="text-base font-semibold mb-1">Analisando planta…</h3>
-              <p className="text-sm text-muted-foreground">
-                Identificando ambientes, medindo áreas e gerando plantas anotadas pela IA.
-              </p>
-              <p className="text-[11px] text-muted-foreground mt-4">
-                Latência típica: 30-90s por arquivo. Você pode fechar esta página — o resultado
-                aparece quando voltar.
-              </p>
-              <div className="mt-6 pt-4 border-t border-border/40">
-                <p className="text-[11px] text-muted-foreground">
-                  Se demorar mais que 5 minutos, algo deu errado — clique abaixo para reiniciar.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-2"
-                  onClick={() => processMutation.mutate()}
-                  disabled={processMutation.isPending}
-                  data-testid="processing-restart"
-                >
-                  Reiniciar análise
-                </Button>
-              </div>
-            </Card>
+          {headerStatus === "processing" && projectId && (
+            <VisionDirectLiveView projectId={Number(projectId)} />
           )}
 
           {headerStatus === "error" && (
@@ -1089,6 +1066,7 @@ export default function ProjectDetails() {
                 <VisionDirectConsolidatedTable totais={vdResult.totais} />
                 <VisionDirectPageBreakdown pages={vdResult.pages} />
                 <VisionDirectNotes pages={vdResult.pages} />
+                {projectId && <VisionDirectPipelineTimeline projectId={Number(projectId)} />}
               </div>
             );
           })()}

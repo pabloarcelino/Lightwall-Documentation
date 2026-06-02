@@ -20,6 +20,12 @@ import {
   type BudgetResult,
 } from "../calculation/engine";
 import type { ExtractedWall, ExtractedSlab, ExtractedCorner } from "../gemini/planAnalyzer";
+import {
+  clearAbort,
+  throwIfAborted,
+  PipelineAbortedError,
+} from "../pipelineAbort";
+import { emitStage, emitAuditFinding } from "../audit/aiEvents";
 
 export interface VisionDirectScope {
   paredesExternas: boolean;
@@ -127,8 +133,12 @@ export async function runVisionDirectForProject(
     }
   }, TOTAL_TIMEOUT_MS);
 
+  // Limpa flag de aborto de runs anteriores (cooperativo).
+  clearAbort(projectId);
+
   try {
     console.log(`[VD-PROJECT] Projeto ${projectId}: runVisionDirectForProject INICIO (defaultPe=${defaultPeDireitoM}m)`);
+    emitStage({ projectId, stage: "vd_start", label: "Iniciando analise", phase: "started" });
     await storage.updateProjectStatus(projectId, "processing");
     console.log(`[VD-PROJECT] Projeto ${projectId}: status -> processing`);
 
@@ -138,6 +148,7 @@ export async function runVisionDirectForProject(
     if (files.length === 0) throw new Error("Projeto sem arquivos enviados");
 
     console.log(`[VD-PROJECT] Projeto ${projectId}: ${files.length} arquivo(s) registrados`);
+    emitStage({ projectId, stage: "vd_files", label: `${files.length} arquivo(s)`, phase: "completed", detail: `${files.length} arquivo(s) registrado(s)` });
 
     // 1) Analisa arquivos via Vision Direct EM PARALELO (limit 2 pra nao
     // estourar rate limit do Gemini). Inclui validacao de existencia e
@@ -155,10 +166,21 @@ export async function runVisionDirectForProject(
         );
         return null;
       }
+      // Checkpoint de aborto antes de cada arquivo.
+      try { throwIfAborted(projectId); } catch (e) {
+        if (e instanceof PipelineAbortedError) throw e;
+        throw e;
+      }
       const fileStart = Date.now();
       console.log(
         `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} (${file.originalName}) iniciando analise...`,
       );
+      emitStage({
+        projectId,
+        stage: `vd_file_${i + 1}`,
+        label: `Arquivo ${tag} — ${file.originalName}`,
+        phase: "started",
+      });
       try {
         const analyzePromise = analyzeVisionDirect({
           filePath: file.filePath,
@@ -177,11 +199,25 @@ export async function runVisionDirectForProject(
           `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} OK em ${((Date.now() - fileStart) / 1000).toFixed(1)}s ` +
             `(${result.pages.length} pag, custo US$ ${result.costUsd.toFixed(4)})`,
         );
+        emitStage({
+          projectId,
+          stage: `vd_file_${i + 1}`,
+          label: `Arquivo ${tag} — ${file.originalName}`,
+          phase: "completed",
+          detail: `${result.pages.length} pag · US$ ${result.costUsd.toFixed(4)} · ${((Date.now() - fileStart) / 1000).toFixed(1)}s`,
+        });
         return { fileName: file.originalName, result };
       } catch (err: any) {
         console.warn(
           `[VD-PROJECT] Projeto ${projectId} arquivo ${tag} (${file.originalName}) falhou em ${((Date.now() - fileStart) / 1000).toFixed(1)}s: ${err?.message || err}`,
         );
+        emitStage({
+          projectId,
+          stage: `vd_file_${i + 1}`,
+          label: `Arquivo ${tag} — ${file.originalName}`,
+          phase: "failed",
+          errorMessage: err?.message || String(err),
+        });
         return null;
       }
     });
@@ -207,6 +243,7 @@ export async function runVisionDirectForProject(
     }
 
     // 2) Consolida todos os arquivos num resultado unico
+    emitStage({ projectId, stage: "vd_consolidate", label: "Consolidando resultados", phase: "started" });
     console.log(`[VD-PROJECT] Projeto ${projectId}: consolidando ${perFileResults.length} arquivo(s)...`);
     const rawConsolidated = consolidateResults(perFileResults);
     const consolidated = applyScopeFilter(rawConsolidated, scope);
@@ -216,6 +253,14 @@ export async function runVisionDirectForProject(
         `custo US$ ${consolidated.costUsd.toFixed(4)}, ${consolidated.durationMs}ms` +
         (scopeOff.length ? ` (categorias zeradas pelo escopo: ${scopeOff.join(", ")})` : ""),
     );
+    emitStage({
+      projectId,
+      stage: "vd_consolidate",
+      label: "Consolidando resultados",
+      phase: "completed",
+      detail: `${consolidated.pages.length} pag · US$ ${consolidated.costUsd.toFixed(4)}` +
+        (scopeOff.length ? ` · escopo OFF: ${scopeOff.join(", ")}` : ""),
+    });
 
     if (consolidated.pages.length === 0) {
       throw new Error("Consolidacao resultou em zero paginas analisadas");
@@ -227,12 +272,15 @@ export async function runVisionDirectForProject(
 
     // 4) Persiste extractedData — OBRIGATORIO. Falha aqui = projeto sem
     // dados utilizaveis, status="error".
+    emitStage({ projectId, stage: "vd_persist", label: "Persistindo resultados", phase: "started" });
     console.log(`[VD-PROJECT] Projeto ${projectId}: persistindo extractedData...`);
     await persistExtractedData(projectId, consolidated);
     console.log(`[VD-PROJECT] Projeto ${projectId}: extractedData persistido`);
+    emitStage({ projectId, stage: "vd_persist", label: "Persistindo resultados", phase: "completed" });
 
     // 5) Calcula budget — SECUNDARIO. Falha aqui apenas loga warn; m² ja
     // estao em extractedData e a UI principal consegue funcionar sem budget.
+    emitStage({ projectId, stage: "vd_budget", label: "Calculando orcamento", phase: "started" });
     console.log(`[VD-PROJECT] Projeto ${projectId}: calculando budget...`);
     try {
       const budget = await buildBudget(consolidated, project.pricingProfileId ?? null, projectId, productIds);
@@ -250,17 +298,42 @@ export async function runVisionDirectForProject(
         status: "finalizado",
       } as any);
       console.log(`[VD-PROJECT] Projeto ${projectId}: budget persistido`);
+      emitStage({ projectId, stage: "vd_budget", label: "Calculando orcamento", phase: "completed" });
     } catch (err: any) {
       console.warn(
         `[VD-PROJECT] Projeto ${projectId} budget falhou (continuando sem budget): ${err?.message || err}`,
       );
+      emitStage({
+        projectId,
+        stage: "vd_budget",
+        label: "Calculando orcamento",
+        phase: "failed",
+        errorMessage: err?.message || String(err),
+      });
     }
 
     // 6) Marca projeto como concluido — SEMPRE chega aqui se chegou ao consolidated
     await storage.updateProjectStatus(projectId, "completed");
     console.log(`[VD-PROJECT] Projeto ${projectId}: status -> completed`);
+    emitStage({ projectId, stage: "vd_done", label: "Analise concluida", phase: "completed" });
   } catch (err: any) {
-    console.error(`[VD-PROJECT] Projeto ${projectId} falhou: ${err?.message || err}`);
+    const aborted = err instanceof PipelineAbortedError;
+    console.error(`[VD-PROJECT] Projeto ${projectId} ${aborted ? "ABORTADO pelo usuario" : "falhou"}: ${err?.message || err}`);
+    emitStage({
+      projectId,
+      stage: "vd_done",
+      label: aborted ? "Analise cancelada" : "Analise interrompida",
+      phase: "failed",
+      errorMessage: err?.message || String(err),
+    });
+    if (aborted) {
+      emitAuditFinding({
+        projectId,
+        severity: "warning",
+        code: "USER_ABORT",
+        message: "Análise cancelada pelo usuário.",
+      });
+    }
     try {
       await storage.updateProjectStatus(projectId, "error");
       console.log(`[VD-PROJECT] Projeto ${projectId}: status -> error`);
