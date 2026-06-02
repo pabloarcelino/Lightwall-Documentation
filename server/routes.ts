@@ -1467,6 +1467,35 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================
+  // POST /api/projects/:id/vision-direct/edit — edicao manual de quantitativos
+  //
+  // Recebe pages atualizadas (com novos m² por categoria), substitui no
+  // vision_direct_summary, recalcula totais + budget. NAO reanalisa as
+  // imagens (nao chama Gemini). Sincrono.
+  // ============================================================
+  app.post("/api/projects/:id/vision-direct/edit", async (req, res) => {
+    try {
+      const projectId = parseInt(String(req.params.id));
+      if (!Number.isFinite(projectId)) {
+        return res.status(400).json({ message: "ID invalido" });
+      }
+      const body = req.body || {};
+      const editedPages = Array.isArray(body.pages) ? body.pages : [];
+      if (editedPages.length === 0) {
+        return res.status(400).json({ message: "Nenhuma pagina enviada" });
+      }
+      const { applyVisionDirectEdit } = await import(
+        "./services/visionDirect/projectAdapter"
+      );
+      await applyVisionDirectEdit(projectId, editedPages);
+      return res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[VD-EDIT]", err?.message || err);
+      return res.status(500).json({ message: err?.message || "Erro ao salvar edicao" });
+    }
+  });
+
   /**
    * @deprecated Pipeline complexa de 14 estagios. Mantida como fallback. O
    * novo fluxo principal e POST /api/projects/:id/process-direct (motor do

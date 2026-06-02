@@ -84,6 +84,7 @@ import { VisionDirectPageBreakdown } from "@/components/visionDirect/PageBreakdo
 import { VisionDirectNotes } from "@/components/visionDirect/Notes";
 import { VisionDirectLiveView } from "@/components/visionDirect/LiveView";
 import { VisionDirectPipelineTimeline } from "@/components/visionDirect/PipelineTimeline";
+import { VisionDirectQuantEditor } from "@/components/visionDirect/QuantEditor";
 import type { VisionDirectResult } from "@/components/visionDirect/types";
 import { useNewWorkspaceUI } from "@/components/processing/useProcessingSync";
 import { LoadingState } from "@/components/ui/states";
@@ -1061,9 +1062,23 @@ export default function ProjectDetails() {
             const vdResult = vdSummary.data as VisionDirectResult;
             return (
               <div className="space-y-4">
-                <VisionDirectSummary result={vdResult} />
+                <VisionDirectSummary
+                  result={vdResult}
+                  budgetTotalCost={
+                    (project as any)?.budgetTotalCost
+                      ? Number((project as any).budgetTotalCost)
+                      : null
+                  }
+                />
                 <VisionDirectAnnotatedImages pages={vdResult.pages} />
                 <VisionDirectConsolidatedTable totais={vdResult.totais} />
+                {projectId && (
+                  <VisionDirectQuantEditor
+                    projectId={Number(projectId)}
+                    pages={vdResult.pages}
+                    onSaved={() => queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] })}
+                  />
+                )}
                 <VisionDirectPageBreakdown pages={vdResult.pages} />
                 <VisionDirectNotes pages={vdResult.pages} />
                 {projectId && <VisionDirectPipelineTimeline projectId={Number(projectId)} />}

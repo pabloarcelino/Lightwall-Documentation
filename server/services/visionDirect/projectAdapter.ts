@@ -283,18 +283,24 @@ export async function runVisionDirectForProject(
     emitStage({ projectId, stage: "vd_budget", label: "Calculando orcamento", phase: "started" });
     console.log(`[VD-PROJECT] Projeto ${projectId}: calculando budget...`);
     try {
-      const budget = await buildBudget(consolidated, project.pricingProfileId ?? null, projectId, productIds);
+      const baseBudget = await buildBudget(consolidated, project.pricingProfileId ?? null, projectId, productIds);
+
+      // Enriquece JSONB com totalCost + totalArea + pavimentos[] com
+      // custo_total por categoria — compatibiliza com CompletedFooter.
+      const enriched = await enrichBudgetForFooter(
+        consolidated,
+        baseBudget,
+        project.pricingProfileId ?? null,
+        productIds,
+      );
+      const totalAreaStr = String(enriched.totalArea.toFixed(2));
+      const totalCostStr = String(enriched.totalCost.toFixed(2));
+
       await storage.createBudget({
         projectId,
-        budgetData: budget as any,
-        totalArea: String(
-          (consolidated.totais.paredes_externas_liquida_m2 +
-            consolidated.totais.paredes_internas_liquida_m2 +
-            consolidated.totais.muros_m2 +
-            consolidated.totais.laje_piso_m2 +
-            consolidated.totais.laje_coberta_m2).toFixed(2),
-        ) as any,
-        totalCost: String((budget.resumo?.total_geral_paineis ?? 0).toFixed(2)) as any,
+        budgetData: enriched as any,
+        totalArea: totalAreaStr as any,
+        totalCost: totalCostStr as any,
         status: "finalizado",
       } as any);
       console.log(`[VD-PROJECT] Projeto ${projectId}: budget persistido`);
@@ -625,4 +631,206 @@ function buildSyntheticSlab(
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+// ============================================================
+// Edicao manual de quantitativos
+// ============================================================
+
+export interface VisionDirectEditedPage {
+  pageIndex: number;
+  paredes_externas: number;
+  paredes_internas: number;
+  muros: number;
+  laje_piso: number;
+  laje_coberta: number;
+}
+
+/**
+ * Aplica edicao manual: substitui os m² liquidos por pagina no
+ * vision_direct_summary, recalcula totais, recalcula budget e atualiza
+ * registros. Nao chama Gemini.
+ */
+export async function applyVisionDirectEdit(
+  projectId: number,
+  editedPages: VisionDirectEditedPage[],
+): Promise<void> {
+  const allExtracted = await storage.getExtractedData(projectId);
+  const summary = allExtracted.find((d: any) => d.elementType === "vision_direct_summary");
+  if (!summary) throw new Error("vision_direct_summary nao encontrado");
+
+  const data = (summary.data ?? {}) as any;
+  const pages = Array.isArray(data.pages) ? data.pages : [];
+  if (pages.length === 0) throw new Error("Summary sem paginas");
+
+  // Snapshot prévio (so na primeira edicao)
+  const hasSnapshot = allExtracted.some((d: any) => d.elementType === "vision_direct_summary_original");
+  if (!hasSnapshot) {
+    await storage.addExtractedData({
+      projectId,
+      elementType: "vision_direct_summary_original",
+      data: structuredClone(data) as any,
+      hasAssumption: 0,
+    } as any);
+  }
+
+  // Aplica edits por pageIndex
+  const editsByIdx = new Map<number, VisionDirectEditedPage>();
+  for (const ep of editedPages) editsByIdx.set(ep.pageIndex, ep);
+
+  for (const p of pages) {
+    const e = editsByIdx.get(p.pageIndex);
+    if (!e) continue;
+    const extLiq = Math.max(0, Number(e.paredes_externas) || 0);
+    const intLiq = Math.max(0, Number(e.paredes_internas) || 0);
+    const muros = Math.max(0, Number(e.muros) || 0);
+    const piso = Math.max(0, Number(e.laje_piso) || 0);
+    const coberta = Math.max(0, Number(e.laje_coberta) || 0);
+    p.paredes_externas = {
+      area_bruta_m2: extLiq,
+      area_aberturas_m2: 0,
+      area_liquida_m2: extLiq,
+    };
+    p.paredes_internas = {
+      area_bruta_m2: intLiq,
+      area_aberturas_m2: 0,
+      area_liquida_m2: intLiq,
+    };
+    p.muros = { area_bruta_m2: muros, altura_assumida_m: p.muros?.altura_assumida_m ?? 2.0 };
+    p.laje_piso_m2 = piso;
+    p.laje_coberta_m2 = coberta;
+  }
+
+  // Recalcula totais
+  const totais = {
+    paredes_externas_liquida_m2: round2(sum(pages, (p: any) => p.paredes_externas.area_liquida_m2)),
+    paredes_internas_liquida_m2: round2(sum(pages, (p: any) => p.paredes_internas.area_liquida_m2)),
+    muros_m2: round2(sum(pages, (p: any) => p.muros.area_bruta_m2)),
+    laje_piso_m2: round2(sum(pages, (p: any) => p.laje_piso_m2)),
+    laje_coberta_m2: round2(sum(pages, (p: any) => p.laje_coberta_m2)),
+  };
+  data.totais = totais;
+  data.pages = pages;
+
+  await storage.updateExtractedDataByType(projectId, "vision_direct_summary", data);
+
+  // Recalcula budget a partir do consolidated reconstruido
+  const reconstructed: VisionDirectResult = {
+    peDireitoUsadoM: data.peDireitoUsadoM ?? 3.0,
+    peDireitoFonte: data.peDireitoFonte ?? "default",
+    pages: pages as PageResult[],
+    totais,
+    costUsd: data.costUsd ?? 0,
+    durationMs: data.durationMs ?? 0,
+    preflight: data.preflight ?? { fileType: "image", pageCount: pages.length, isPdfVector: null },
+  };
+  const project = await storage.getProject(projectId);
+  try {
+    const baseBudget = await buildBudget(reconstructed, project?.pricingProfileId ?? null, projectId, undefined);
+    const enriched = await enrichBudgetForFooter(reconstructed, baseBudget, project?.pricingProfileId ?? null, undefined);
+    await storage.deleteBudget(projectId);
+    await storage.createBudget({
+      projectId,
+      budgetData: enriched as any,
+      totalArea: String(enriched.totalArea.toFixed(2)) as any,
+      totalCost: String(enriched.totalCost.toFixed(2)) as any,
+      status: "finalizado",
+    } as any);
+  } catch (err: any) {
+    console.warn(`[VD-EDIT] Projeto ${projectId} budget recalc falhou: ${err?.message || err}`);
+  }
+  console.log(`[VD-EDIT] Projeto ${projectId}: edicao manual aplicada (${editedPages.length} paginas editadas)`);
+}
+
+// ============================================================
+// Enriquecimento do budget para o CompletedFooter
+// ============================================================
+
+/**
+ * Pega o BudgetResult cru de calculateBudget e o enriquece com custos por
+ * categoria e totais agregados, no formato esperado por CompletedFooter:
+ *   pavimentos: [
+ *     {
+ *       nome,
+ *       paredes_externas: { area_liquida_m2, custo_total },
+ *       paredes_internas: { area_liquida_m2, custo_total },
+ *       muros:            { area_liquida_m2, custo_total },
+ *       laje_piso:        { area_m2,         custo_total },
+ *       laje_coberta:     { area_m2,         custo_total },
+ *     }
+ *   ]
+ *   totalArea: number
+ *   totalCost: number
+ *
+ * Preço por categoria vem do produto selecionado (productIds.kind) ou,
+ * na falta, do catalogo via storage.getProducts() (primeiro 2P / SP).
+ */
+async function enrichBudgetForFooter(
+  consolidated: VisionDirectResult,
+  baseBudget: BudgetResult,
+  _pricingProfileId: number | null,
+  productIds?: VisionDirectProductIds,
+): Promise<any> {
+  // Resolve precos unitarios por categoria.
+  const products = await storage.getProducts().catch(() => [] as any[]);
+  const findById = (id?: number) => products.find((p: any) => p.id === id);
+  const find2P = () =>
+    products.find((p: any) => p.sku === "LW-2P-090") ||
+    products.find((p: any) => p.panelType === "2P");
+  const findSP = () =>
+    products.find((p: any) => p.sku === "LW-SP-090") ||
+    products.find((p: any) => p.panelType === "SP");
+  const priceOf = (id?: number, fallback?: any): number => {
+    const prod = findById(id) || fallback;
+    return prod ? Number(prod.unitPrice) || 0 : 0;
+  };
+  const prices = {
+    ext: priceOf(productIds?.ext, find2P()),
+    int: priceOf(productIds?.int, find2P()),
+    muros: priceOf(productIds?.muros, find2P()),
+    piso: priceOf(productIds?.piso, findSP()),
+    coberta: priceOf(productIds?.coberta, findSP()),
+  };
+
+  // Constroi pavimentos enriquecidos a partir dos pages
+  const byPav = new Map<string, PageResult[]>();
+  for (const p of consolidated.pages) {
+    const key = p.pavimento || `Pavimento ${p.pageIndex}`;
+    const list = byPav.get(key) ?? [];
+    list.push(p);
+    byPav.set(key, list);
+  }
+  const pavimentos: Array<Record<string, any>> = [];
+  let totalArea = 0;
+  let totalCost = 0;
+  for (const [nome, pages] of byPav) {
+    const ext = sum(pages, (p) => p.paredes_externas.area_liquida_m2);
+    const int_ = sum(pages, (p) => p.paredes_internas.area_liquida_m2);
+    const muros = sum(pages, (p) => p.muros.area_bruta_m2);
+    const piso = sum(pages, (p) => p.laje_piso_m2);
+    const coberta = sum(pages, (p) => p.laje_coberta_m2);
+    const extCost = round2(ext * prices.ext);
+    const intCost = round2(int_ * prices.int);
+    const murosCost = round2(muros * prices.muros);
+    const pisoCost = round2(piso * prices.piso);
+    const cobCost = round2(coberta * prices.coberta);
+    totalArea += ext + int_ + muros + piso + coberta;
+    totalCost += extCost + intCost + murosCost + pisoCost + cobCost;
+    pavimentos.push({
+      nome,
+      paredes_externas: { area_liquida_m2: round2(ext), custo_total: extCost, preco_unitario: prices.ext },
+      paredes_internas: { area_liquida_m2: round2(int_), custo_total: intCost, preco_unitario: prices.int },
+      muros: { area_liquida_m2: round2(muros), custo_total: murosCost, preco_unitario: prices.muros },
+      laje_piso: { area_m2: round2(piso), custo_total: pisoCost, preco_unitario: prices.piso },
+      laje_coberta: { area_m2: round2(coberta), custo_total: cobCost, preco_unitario: prices.coberta },
+    });
+  }
+
+  return {
+    pavimentos,
+    totalArea: round2(totalArea),
+    totalCost: round2(totalCost),
+    // Mantem o resultado cru de calculateBudget para futuras camadas
+    raw: baseBudget,
+  };
 }

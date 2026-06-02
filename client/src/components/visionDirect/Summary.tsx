@@ -1,12 +1,19 @@
-import { Clock, CircleDollarSign, FileText } from "lucide-react";
+import { Clock, CircleDollarSign, FileText, BadgeDollarSign } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { fmtM2, fmtSeconds, fmtUsd, type VisionDirectResult } from "./types";
 
 interface Props {
   result: VisionDirectResult;
+  /** Custo do orçamento em R$ (vem do budget.totalCost). Opcional. */
+  budgetTotalCost?: number | null;
 }
 
-export function VisionDirectSummary({ result }: Props) {
+function fmtBrl(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v) || v <= 0) return "—";
+  return `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export function VisionDirectSummary({ result, budgetTotalCost }: Props) {
   return (
     <Card className="p-4">
       <div className="flex flex-wrap items-center gap-4">
@@ -37,9 +44,25 @@ export function VisionDirectSummary({ result }: Props) {
             </span>
           </div>
         </div>
+        {budgetTotalCost != null && budgetTotalCost > 0 && (
+          <>
+            <div className="h-10 w-px bg-border" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                <BadgeDollarSign className="h-3 w-3" />
+                Custo do orçamento
+              </div>
+              <div className="text-2xl font-bold tabular-nums">{fmtBrl(budgetTotalCost)}</div>
+            </div>
+          </>
+        )}
         <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {fmtSeconds(result.durationMs)}</span>
-          <span className="flex items-center gap-1"><CircleDollarSign className="h-3 w-3 text-success" /> {fmtUsd(result.costUsd)}</span>
+          <span className="flex items-center gap-1" title="Duração da análise">
+            <Clock className="h-3 w-3" /> {fmtSeconds(result.durationMs)}
+          </span>
+          <span className="flex items-center gap-1" title="Custo das chamadas Gemini (IA)">
+            <CircleDollarSign className="h-3 w-3 text-success" /> IA {fmtUsd(result.costUsd)}
+          </span>
           <span className="flex items-center gap-1"><FileText className="h-3 w-3" /> {result.preflight.pageCount} pag</span>
         </div>
       </div>
