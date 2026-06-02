@@ -1,8 +1,9 @@
 import { useDropzone } from "react-dropzone";
-import { Upload, FileText, X, Play, Loader2, Eye } from "lucide-react";
+import { Upload, FileText, X, Play, Loader2, Eye, FlaskConical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export interface SimpleScope {
@@ -37,6 +38,16 @@ export interface ProductIds {
 const BUILDING_TYPES = ["residencial", "comercial", "industrial", "misto"] as const;
 type BuildingType = (typeof BUILDING_TYPES)[number];
 
+export interface TestModeValues {
+  enabled: boolean;
+  /** Areas reais conhecidas, em m². Null = sem valor. */
+  realAreaExt: number | null;
+  realAreaInt: number | null;
+  realAreaMuros: number | null;
+  realAreaPiso: number | null;
+  realAreaCoberta: number | null;
+}
+
 interface Props {
   files: SimpleProjectFile[];
   onUpload: (files: File[]) => Promise<void> | void;
@@ -53,6 +64,9 @@ interface Props {
   // Tipo de edificacao
   buildingType: BuildingType;
   onBuildingTypeChange: (v: BuildingType) => void;
+  // Modo Teste (compara extraido vs real para gerar acuracia)
+  testMode: TestModeValues;
+  onTestModeChange: (v: TestModeValues) => void;
   onProcess: () => void;
   isProcessing: boolean;
 }
@@ -73,6 +87,14 @@ const PANEL_LABELS: Record<keyof ProductIds, string> = {
   coberta: "Painel — Laje de cobertura",
 };
 
+const TEST_FIELDS: Array<{ key: keyof Omit<TestModeValues, "enabled">; label: string }> = [
+  { key: "realAreaExt", label: "Paredes externas" },
+  { key: "realAreaInt", label: "Paredes internas" },
+  { key: "realAreaMuros", label: "Muros" },
+  { key: "realAreaPiso", label: "Laje de piso" },
+  { key: "realAreaCoberta", label: "Laje de cobertura" },
+];
+
 export function SimpleProjectConfig(props: Props) {
   const {
     files, onUpload, onDeleteFile, onPreview,
@@ -80,6 +102,7 @@ export function SimpleProjectConfig(props: Props) {
     scope, onScopeChange,
     productIds, onProductIdChange, productOptions,
     buildingType, onBuildingTypeChange,
+    testMode, onTestModeChange,
     onProcess, isProcessing,
   } = props;
 
@@ -265,6 +288,60 @@ export function SimpleProjectConfig(props: Props) {
               })}
             </div>
           </details>
+        )}
+      </Card>
+
+      {/* Modo Teste — comparacao com valores reais conhecidos */}
+      <Card className="p-6">
+        <div className="flex items-center gap-3 mb-1">
+          <FlaskConical className={`h-4 w-4 ${testMode.enabled ? "text-warning" : "text-muted-foreground"}`} />
+          <div className="flex-1">
+            <h2 className="text-sm font-semibold">Projeto teste</h2>
+            <p className="text-[11px] text-muted-foreground">
+              Compare os valores extraídos com valores reais já conhecidos para medir a acurácia.
+            </p>
+          </div>
+          <Switch
+            checked={testMode.enabled}
+            onCheckedChange={(v) => onTestModeChange({ ...testMode, enabled: v })}
+            disabled={isProcessing}
+            data-testid="test-mode-toggle"
+          />
+        </div>
+
+        {testMode.enabled && (
+          <div className="mt-4 pt-4 border-t border-border">
+            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-2">
+              Áreas reais conhecidas (m²)
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {TEST_FIELDS.map((f) => (
+                <div key={f.key} className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">{f.label}</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    value={testMode[f.key] ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value === "" ? null : parseFloat(e.target.value);
+                      onTestModeChange({
+                        ...testMode,
+                        [f.key]: v !== null && Number.isFinite(v) ? v : null,
+                      });
+                    }}
+                    disabled={isProcessing}
+                    placeholder="(opcional)"
+                    className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm"
+                    data-testid={`real-${f.key}`}
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-3">
+              Após o processamento, será exibida a precisão de cada categoria comparando o valor extraído pela IA com o valor real preenchido.
+            </p>
+          </div>
         )}
       </Card>
 

@@ -85,6 +85,7 @@ import { VisionDirectNotes } from "@/components/visionDirect/Notes";
 import { VisionDirectLiveView } from "@/components/visionDirect/LiveView";
 import { VisionDirectPipelineTimeline } from "@/components/visionDirect/PipelineTimeline";
 import { VisionDirectQuantEditor } from "@/components/visionDirect/QuantEditor";
+import { VisionDirectAccuracy } from "@/components/visionDirect/Accuracy";
 import type { VisionDirectResult } from "@/components/visionDirect/types";
 import { useNewWorkspaceUI } from "@/components/processing/useProcessingSync";
 import { LoadingState } from "@/components/ui/states";
@@ -669,7 +670,17 @@ export default function ProjectDetails() {
   };
 
   const updateProjectMutation = useMutation({
-    mutationFn: async (patch: { discountPanelPct?: number; freightCost?: number; biomassCost?: number }) => {
+    mutationFn: async (patch: {
+      discountPanelPct?: number;
+      freightCost?: number;
+      biomassCost?: number;
+      projectType?: string;
+      realAreaExt?: string | null;
+      realAreaInt?: string | null;
+      realAreaMuros?: string | null;
+      realAreaPiso?: string | null;
+      realAreaCoberta?: string | null;
+    }) => {
       const res = await apiRequest("PUT", `/api/projects/${projectId}`, patch);
       return res.json();
     },
@@ -1040,6 +1051,24 @@ export default function ProjectDetails() {
               productOptions={productOptions}
               buildingType={(project?.buildingType as any) || "residencial"}
               onBuildingTypeChange={(v) => onBuildingTypeChange(v)}
+              testMode={{
+                enabled: project?.projectType === "teste",
+                realAreaExt: project?.realAreaExt ? Number(project.realAreaExt) : null,
+                realAreaInt: project?.realAreaInt ? Number(project.realAreaInt) : null,
+                realAreaMuros: (project as any)?.realAreaMuros ? Number((project as any).realAreaMuros) : null,
+                realAreaPiso: project?.realAreaPiso ? Number(project.realAreaPiso) : null,
+                realAreaCoberta: project?.realAreaCoberta ? Number(project.realAreaCoberta) : null,
+              }}
+              onTestModeChange={(tm) => {
+                updateProjectMutation.mutate({
+                  projectType: tm.enabled ? "teste" : "real",
+                  realAreaExt: tm.realAreaExt != null ? String(tm.realAreaExt) : null,
+                  realAreaInt: tm.realAreaInt != null ? String(tm.realAreaInt) : null,
+                  realAreaMuros: tm.realAreaMuros != null ? String(tm.realAreaMuros) : null,
+                  realAreaPiso: tm.realAreaPiso != null ? String(tm.realAreaPiso) : null,
+                  realAreaCoberta: tm.realAreaCoberta != null ? String(tm.realAreaCoberta) : null,
+                });
+              }}
               onProcess={() => processMutation.mutate()}
               isProcessing={isProcessing}
             />
@@ -1082,6 +1111,18 @@ export default function ProjectDetails() {
                 />
                 <VisionDirectAnnotatedImages pages={vdResult.pages} />
                 <VisionDirectConsolidatedTable totais={vdResult.totais} />
+                {project?.projectType === "teste" && (
+                  <VisionDirectAccuracy
+                    totais={vdResult.totais}
+                    realAreas={{
+                      paredes_externas: project?.realAreaExt ? Number(project.realAreaExt) : null,
+                      paredes_internas: project?.realAreaInt ? Number(project.realAreaInt) : null,
+                      muros: (project as any)?.realAreaMuros ? Number((project as any).realAreaMuros) : null,
+                      laje_piso: project?.realAreaPiso ? Number(project.realAreaPiso) : null,
+                      laje_coberta: project?.realAreaCoberta ? Number(project.realAreaCoberta) : null,
+                    }}
+                  />
+                )}
                 {projectId && (
                   <VisionDirectQuantEditor
                     projectId={Number(projectId)}
