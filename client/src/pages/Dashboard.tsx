@@ -20,8 +20,6 @@ import {
   Trash2,
   Target,
   FlaskConical,
-  TrendingUp,
-  TrendingDown,
   BarChart3,
   ArrowRight,
   Loader2,
@@ -36,30 +34,35 @@ import { cn } from "@/lib/utils";
 
 type ProjectWithBudget = Project & { budgetTotalCost: number | null };
 
-interface CalibrationData {
+type CatKey = "paredes_externas" | "paredes_internas" | "muros" | "laje_piso" | "laje_coberta";
+
+interface CategoryAccuracy {
+  calc: number;
+  real: number | null;
+  deviation: number | null;
+  accuracy: number | null;
+}
+
+interface VdProject {
+  projectId: number;
+  projectName: string;
+  clientName: string | null;
+  overallAccuracy: number | null;
+  categories: Record<CatKey, CategoryAccuracy>;
+}
+
+interface VdCalibrationData {
   hasData: boolean;
-  avgAccuracy: number | null;
-  avgAreaAccuracy: number | null;
-  avgDeviation: number | null;
+  globalAccuracy: number | null;
   projectCount: number;
-  categories: Array<{
-    category: string;
+  categoriesGlobal: Array<{
+    key: CatKey;
     label: string;
-    avgCost: number;
-    avgProportion: number;
-    avgErrorContribution: number;
-    projectsWithZero: number;
+    accuracy: number | null;
+    projectCount: number;
+    totalRealArea: number;
   }>;
-  patterns: string[];
-  projects: Array<{
-    projectId: number;
-    projectName: string;
-    realCost: number;
-    calcCost: number;
-    accuracy: number;
-    areaAccuracy: number | null;
-    deviation: number;
-  }>;
+  projects: VdProject[];
 }
 
 // ---------- Helpers de UI ----------
@@ -67,7 +70,7 @@ interface CalibrationData {
 function accuracyTone(accuracy: number | null | undefined): "success" | "warning" | "error" | "neutral" {
   if (accuracy == null) return "neutral";
   if (accuracy >= 90) return "success";
-  if (accuracy >= 70) return "warning";
+  if (accuracy >= 75) return "warning";
   return "error";
 }
 
@@ -135,7 +138,7 @@ function StatCard({ label, value, hint, Icon, tone = "default" }: StatCardProps)
 
 export default function Dashboard() {
   const { data: projects, isLoading } = useQuery<ProjectWithBudget[]>({ queryKey: ["/api/projects"] });
-  const { data: calibration } = useQuery<CalibrationData>({ queryKey: ["/api/calibration"] });
+  const { data: calibration } = useQuery<VdCalibrationData>({ queryKey: ["/api/calibration-vd"] });
   const qc = useQueryClient();
   const { toast } = useToast();
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
@@ -152,6 +155,7 @@ export default function Dashboard() {
     onSuccess: () => {
       toast({ title: "Projeto excluído", description: "O projeto foi removido com sucesso" });
       qc.invalidateQueries({ queryKey: ["/api/projects"] });
+      qc.invalidateQueries({ queryKey: ["/api/calibration-vd"] });
       setPendingDelete(null);
     },
     onError: (err: Error) => {
@@ -162,14 +166,14 @@ export default function Dashboard() {
 
   const completedCount = projects?.filter(p => p.status === "completed").length ?? 0;
   const testCount = projects?.filter(p => p.projectType === "teste").length ?? 0;
-  const globalAccuracy = calibration?.avgAreaAccuracy ?? null;
+  const globalAccuracy = calibration?.globalAccuracy ?? null;
   const globalTone = accuracyTone(globalAccuracy);
 
   return (
     <div className="lw-gradient-bg min-h-full">
       <PageHeader
         title="Dashboard"
-        description="Visão geral dos seus orçamentos e da calibração do sistema"
+        description="Visão geral dos seus orçamentos e da precisão do motor Visão Direta"
         actions={
           <div className="flex items-center gap-2">
             <Link href="/vision-direct">
@@ -222,20 +226,20 @@ export default function Dashboard() {
           />
         </section>
 
-        {/* Calibração */}
+        {/* Precisao por categoria (Vision Direta) */}
         {calibration?.hasData && (
           <section
             className="rounded-xl border border-card-border bg-card shadow-xs overflow-hidden"
-            data-testid="card-calibration"
+            data-testid="card-calibration-vd"
           >
             <div className="px-6 py-5 border-b border-border flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-semibold flex items-center gap-2">
                   <BarChart3 className="h-5 w-5 text-primary" />
-                  Calibração do sistema
+                  Precisão do motor Visão Direta
                 </h2>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  Comparações entre o orçamento calculado e o custo real informado
+                  Acurácia ponderada por área real (m²) — apenas projetos teste com valores informados
                 </p>
               </div>
               <Link href="/calibracao">
@@ -248,15 +252,21 @@ export default function Dashboard() {
             <div className="p-6 space-y-6">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <CalKpi
-                  label="Acurácia média (m²)"
-                  value={calibration.avgAreaAccuracy}
+                  label="Acurácia global (m²)"
+                  value={calibration.globalAccuracy}
                   formatter={v => `${v.toFixed(1)}%`}
-                  tone={accuracyTone(calibration.avgAreaAccuracy)}
-                  testId="text-cal-avg-accuracy"
+                  tone={accuracyTone(calibration.globalAccuracy)}
+                  testId="text-cal-global-accuracy"
                 />
-                <DeviationKpi value={calibration.avgDeviation} />
                 <CalKpi
-                  label="Projetos analisados"
+                  label="Categorias avaliadas"
+                  value={calibration.categoriesGlobal.filter(c => c.accuracy != null).length}
+                  formatter={v => `${v} / 5`}
+                  tone="neutral"
+                  testId="text-cal-categories-count"
+                />
+                <CalKpi
+                  label="Projetos teste"
                   value={calibration.projectCount}
                   formatter={v => String(v)}
                   tone="neutral"
@@ -264,47 +274,35 @@ export default function Dashboard() {
                 />
               </div>
 
-              {calibration.categories.length > 0 && (
+              {calibration.categoriesGlobal.length > 0 && (
                 <div>
                   <h3 className="text-xs font-semibold tracking-wider uppercase text-muted-foreground mb-2">
-                    Erro por categoria (contribuição média)
+                    Precisão por categoria (m²)
                   </h3>
                   <div className="space-y-1.5">
-                    {calibration.categories.map(cat => {
-                      const maxErr = Math.max(...calibration.categories.map(c => Math.abs(c.avgErrorContribution)));
-                      const barWidth = maxErr > 0 ? (Math.abs(cat.avgErrorContribution) / maxErr) * 100 : 0;
-                      const isOver = cat.avgErrorContribution > 0;
-                      const barTone = isOver ? "bg-warning/70" : "bg-error/70";
-                      const labelTone = isOver ? "text-warning" : "text-error";
+                    {calibration.categoriesGlobal.map(cat => {
+                      const barWidth = cat.accuracy ?? 0;
+                      const tone = accuracyTone(cat.accuracy);
+                      const barTone =
+                        tone === "success" ? "bg-success/70" :
+                        tone === "warning" ? "bg-warning/70" :
+                        tone === "error"   ? "bg-error/70"   :
+                        "bg-muted-foreground/40";
                       return (
-                        <div key={cat.category} className="flex items-center gap-3" data-testid={`cal-category-${cat.category}`}>
-                          <span className="text-xs w-32 text-muted-foreground truncate">{cat.label}</span>
+                        <div key={cat.key} className="flex items-center gap-3" data-testid={`cal-category-${cat.key}`}>
+                          <span className="text-xs w-36 text-muted-foreground truncate">{cat.label}</span>
                           <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                             <div className={cn("h-full rounded-full", barTone)} style={{ width: `${Math.min(barWidth, 100)}%` }} />
                           </div>
-                          <span className={cn("text-xs font-medium w-24 text-right", labelTone)}>
-                            {isOver ? "+" : ""}R$ {Math.abs(cat.avgErrorContribution).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}
+                          <span className={cn("text-xs font-medium w-28 text-right", toneTextClasses[tone])}>
+                            {cat.accuracy == null
+                              ? "—"
+                              : `${cat.accuracy.toFixed(1)}% (${cat.projectCount}p)`}
                           </span>
                         </div>
                       );
                     })}
                   </div>
-                </div>
-              )}
-
-              {calibration.patterns.length > 0 && (
-                <div>
-                  <h3 className="text-xs font-semibold tracking-wider uppercase text-muted-foreground mb-2">
-                    Padrões identificados
-                  </h3>
-                  <ul className="space-y-1">
-                    {calibration.patterns.slice(0, 3).map((pattern, i) => (
-                      <li key={i} className="text-sm text-muted-foreground flex gap-2" data-testid={`cal-pattern-${i}`}>
-                        <span className="text-warning mt-0.5">•</span>
-                        <span>{pattern}</span>
-                      </li>
-                    ))}
-                  </ul>
                 </div>
               )}
             </div>
@@ -333,8 +331,8 @@ export default function Dashboard() {
               <ul className="divide-y divide-border">
                 {projects.map(project => {
                   const status = projectStatusBadge(project.status);
-                  const calProj = calibration?.projects.find(p => p.projectId === project.id);
-                  const accuracy = calProj?.areaAccuracy ?? null;
+                  const vdProj = calibration?.projects.find(p => p.projectId === project.id);
+                  const accuracy = vdProj?.overallAccuracy ?? null;
                   const accTone = accuracyTone(accuracy);
 
                   return (
@@ -482,23 +480,6 @@ function CalKpi({
       <div className={cn("text-2xl font-bold", isNa ? "text-muted-foreground" : toneTextClasses[tone])} data-testid={testId}>
         {isNa ? "N/A" : formatter(value!)}
       </div>
-    </div>
-  );
-}
-
-function DeviationKpi({ value }: { value: number | null }) {
-  if (value == null) return <CalKpi label="Desvio médio" value={null} formatter={v => `${v}`} tone="neutral" testId="text-cal-avg-deviation" />;
-  const isOver = value > 0;
-  const Icon = isOver ? TrendingUp : TrendingDown;
-  const tone = isOver ? "warning" : "info";
-  return (
-    <div className="rounded-lg border border-border bg-background p-4 text-center">
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">Desvio médio</div>
-      <div className={cn("text-2xl font-bold flex items-center justify-center gap-1.5", toneTextClasses[tone])} data-testid="text-cal-avg-deviation">
-        <Icon className="h-5 w-5" />
-        {isOver ? "+" : ""}{value.toFixed(1)}%
-      </div>
-      <div className="text-[11px] text-muted-foreground mt-1">{isOver ? "superestimando" : "subestimando"}</div>
     </div>
   );
 }

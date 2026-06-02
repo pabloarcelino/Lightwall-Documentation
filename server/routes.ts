@@ -3804,6 +3804,162 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================
+  // GET /api/calibration-vd — Calibracao do motor Vision Direta
+  //
+  // Para cada projeto com projectType="teste" + valores reais
+  // preenchidos, compara o vision_direct_summary.totais (do motor enxuto)
+  // contra os realArea* manuais. Devolve precisao por categoria, por
+  // projeto, media geral ponderada.
+  //
+  // Substitui /api/calibration (que usava budget.totalCost vs realCost
+  // da pipeline antiga). O novo endpoint trabalha em m² extraidos, que
+  // e o que o motor Vision Direta produz.
+  // ============================================================
+  app.get("/api/calibration-vd", async (_req, res) => {
+    try {
+      const projects = await storage.getProjects();
+      const testProjects = projects.filter(
+        (p) => p.projectType === "teste" && (
+          (p.realAreaExt && parseFloat(p.realAreaExt) > 0) ||
+          (p.realAreaInt && parseFloat(p.realAreaInt) > 0) ||
+          (p.realAreaMuros && parseFloat(p.realAreaMuros) > 0) ||
+          (p.realAreaPiso && parseFloat(p.realAreaPiso) > 0) ||
+          (p.realAreaCoberta && parseFloat(p.realAreaCoberta) > 0)
+        ),
+      );
+
+      type CatKey = "paredes_externas" | "paredes_internas" | "muros" | "laje_piso" | "laje_coberta";
+      const CATEGORY_LABEL: Record<CatKey, string> = {
+        paredes_externas: "Paredes externas",
+        paredes_internas: "Paredes internas",
+        muros: "Muros",
+        laje_piso: "Laje de piso",
+        laje_coberta: "Laje de cobertura",
+      };
+
+      const computeAcc = (calc: number, real: number | null) => {
+        if (real == null || real <= 0) return { calc, real: null, deviation: null, accuracy: null };
+        const dev = ((calc - real) / real) * 100;
+        const acc = Math.max(0, (1 - Math.abs(calc - real) / real) * 100);
+        return {
+          calc: Math.round(calc * 100) / 100,
+          real: Math.round(real * 100) / 100,
+          deviation: Math.round(dev * 10) / 10,
+          accuracy: Math.round(acc * 10) / 10,
+        };
+      };
+
+      const perProject: Array<{
+        projectId: number;
+        projectName: string;
+        clientName: string | null;
+        overallAccuracy: number | null;
+        categories: Record<CatKey, ReturnType<typeof computeAcc>>;
+      }> = [];
+
+      // Agregadores globais ponderados por area real total por categoria
+      const globalSum: Record<CatKey, { accSum: number; realSum: number }> = {
+        paredes_externas: { accSum: 0, realSum: 0 },
+        paredes_internas: { accSum: 0, realSum: 0 },
+        muros: { accSum: 0, realSum: 0 },
+        laje_piso: { accSum: 0, realSum: 0 },
+        laje_coberta: { accSum: 0, realSum: 0 },
+      };
+
+      for (const project of testProjects) {
+        // Le o vision_direct_summary do banco
+        const extracted = await storage.getExtractedData(project.id);
+        const vdSummary = extracted.find((d: any) => d.elementType === "vision_direct_summary");
+        if (!vdSummary || !vdSummary.data) continue;
+        const totais = (vdSummary.data as any).totais;
+        if (!totais) continue;
+
+        const reals = {
+          paredes_externas: project.realAreaExt ? parseFloat(project.realAreaExt) : null,
+          paredes_internas: project.realAreaInt ? parseFloat(project.realAreaInt) : null,
+          muros: project.realAreaMuros ? parseFloat(project.realAreaMuros) : null,
+          laje_piso: project.realAreaPiso ? parseFloat(project.realAreaPiso) : null,
+          laje_coberta: project.realAreaCoberta ? parseFloat(project.realAreaCoberta) : null,
+        };
+        const calcs = {
+          paredes_externas: Number(totais.paredes_externas_liquida_m2 || 0),
+          paredes_internas: Number(totais.paredes_internas_liquida_m2 || 0),
+          muros: Number(totais.muros_m2 || 0),
+          laje_piso: Number(totais.laje_piso_m2 || 0),
+          laje_coberta: Number(totais.laje_coberta_m2 || 0),
+        };
+
+        const categories: Record<CatKey, ReturnType<typeof computeAcc>> = {
+          paredes_externas: computeAcc(calcs.paredes_externas, reals.paredes_externas),
+          paredes_internas: computeAcc(calcs.paredes_internas, reals.paredes_internas),
+          muros: computeAcc(calcs.muros, reals.muros),
+          laje_piso: computeAcc(calcs.laje_piso, reals.laje_piso),
+          laje_coberta: computeAcc(calcs.laje_coberta, reals.laje_coberta),
+        };
+
+        // Acuracia geral do projeto ponderada por area real
+        let projAccSum = 0;
+        let projRealSum = 0;
+        for (const cat of Object.keys(categories) as CatKey[]) {
+          const c = categories[cat];
+          if (c.accuracy != null && c.real != null && c.real > 0) {
+            projAccSum += c.accuracy * c.real;
+            projRealSum += c.real;
+            globalSum[cat].accSum += c.accuracy * c.real;
+            globalSum[cat].realSum += c.real;
+          }
+        }
+        const overallAccuracy = projRealSum > 0 ? Math.round((projAccSum / projRealSum) * 10) / 10 : null;
+
+        perProject.push({
+          projectId: project.id,
+          projectName: project.name,
+          clientName: project.clientName ?? null,
+          overallAccuracy,
+          categories,
+        });
+      }
+
+      // Acuracia global geral (ponderada por area real total de todas categorias)
+      let totalAccSum = 0;
+      let totalRealSum = 0;
+      const categoriesGlobal: Array<{
+        key: CatKey;
+        label: string;
+        accuracy: number | null;
+        projectCount: number;
+        totalRealArea: number;
+      }> = [];
+      for (const cat of Object.keys(globalSum) as CatKey[]) {
+        const { accSum, realSum } = globalSum[cat];
+        const acc = realSum > 0 ? Math.round((accSum / realSum) * 10) / 10 : null;
+        const projectCount = perProject.filter((p) => p.categories[cat].accuracy != null).length;
+        categoriesGlobal.push({
+          key: cat,
+          label: CATEGORY_LABEL[cat],
+          accuracy: acc,
+          projectCount,
+          totalRealArea: Math.round(realSum * 100) / 100,
+        });
+        totalAccSum += accSum;
+        totalRealSum += realSum;
+      }
+      const globalAccuracy = totalRealSum > 0 ? Math.round((totalAccSum / totalRealSum) * 10) / 10 : null;
+
+      return res.json({
+        hasData: perProject.length > 0,
+        globalAccuracy,
+        projectCount: perProject.length,
+        categoriesGlobal,
+        projects: perProject,
+      });
+    } catch (err: any) {
+      console.error("[CALIBRATION-VD]", err?.message || err);
+      return res.status(500).json({ message: "Erro ao calcular calibracao" });
+    }
+  });
+
   app.get("/api/calibration", async (_req, res) => {
     try {
       const allBudgetsWithProjects = await storage.getAllBudgetsWithProjects();
