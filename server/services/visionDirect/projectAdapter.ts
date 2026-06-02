@@ -26,6 +26,7 @@ import {
   PipelineAbortedError,
 } from "../pipelineAbort";
 import { emitStage, emitAuditFinding } from "../audit/aiEvents";
+import { applyProfilePrices } from "../pricing/profilePrices";
 
 export interface VisionDirectScope {
   paredesExternas: boolean;
@@ -188,6 +189,7 @@ export async function runVisionDirectForProject(
           fileName: file.originalName,
           defaultPeDireitoM,
           userId: input.userId ?? undefined,
+          projectId, // <- chave para auditAiCall persistir ai_runs
         });
         const result = await Promise.race([
           analyzePromise,
@@ -768,11 +770,14 @@ export async function applyVisionDirectEdit(
 async function enrichBudgetForFooter(
   consolidated: VisionDirectResult,
   baseBudget: BudgetResult,
-  _pricingProfileId: number | null,
+  pricingProfileId: number | null,
   productIds?: VisionDirectProductIds,
 ): Promise<any> {
-  // Resolve precos unitarios por categoria.
-  const products = await storage.getProducts().catch(() => [] as any[]);
+  // Resolve precos unitarios por categoria. applyProfilePrices aplica
+  // overrides do pricing profile do projeto (se houver) sobre o catalogo
+  // base.
+  const rawProducts = await storage.getProducts().catch(() => [] as any[]);
+  const products = await applyProfilePrices(rawProducts as any, pricingProfileId);
   const findById = (id?: number) => products.find((p: any) => p.id === id);
   const find2P = () =>
     products.find((p: any) => p.sku === "LW-2P-090") ||

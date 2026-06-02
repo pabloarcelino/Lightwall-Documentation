@@ -940,6 +940,20 @@ export default function ProjectDetails() {
     }
   }
 
+  // Custo final R$ — usado tanto pelo Summary quanto pelo CompletedFooter.
+  // Calcula como: subtotal de categorias - desconto% + frete + biomassa.
+  // Mantem-se sincronizado quando o usuario muda discount/freight/biomass
+  // sem precisar regravar budget.totalCost no banco.
+  const displayedBudgetTotalCost = (() => {
+    if (!budget) return null;
+    const subtotal = budgetCategories.reduce((s, c) => s + c.cost, 0);
+    if (subtotal <= 0) return null;
+    const discount = Number(project?.discountPanelPct || 0) / 100;
+    const freight = Number(project?.freightCost || 0);
+    const biomass = Number(project?.biomassCost || 0);
+    return Math.max(0, subtotal * (1 - discount) + freight + biomass);
+  })();
+
   // Conteúdos das seções da sidebar — montados uma vez, reusados.
   const descriptionContent = budget?.projectDescription
     ? <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap text-xs">{budget.projectDescription}</div>
@@ -1064,11 +1078,7 @@ export default function ProjectDetails() {
               <div className="space-y-4">
                 <VisionDirectSummary
                   result={vdResult}
-                  budgetTotalCost={
-                    (project as any)?.budgetTotalCost
-                      ? Number((project as any).budgetTotalCost)
-                      : null
-                  }
+                  budgetTotalCost={displayedBudgetTotalCost}
                 />
                 <VisionDirectAnnotatedImages pages={vdResult.pages} />
                 <VisionDirectConsolidatedTable totais={vdResult.totais} />

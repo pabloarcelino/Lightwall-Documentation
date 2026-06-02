@@ -16,12 +16,35 @@ import { withRetry } from "../gemini/client";
 import { repairJSON, getActiveGenAI, getFilePages } from "../gemini/planAnalyzer";
 import { inspectFile } from "../preflight/inspector";
 import { editImage } from "../../replit_integrations/image/client";
+import { auditAiCall } from "../audit/aiAuditor";
 import {
   buildClassificationPrompt,
   buildSectionHeightPrompt,
   buildAreaPrompt,
   buildImageAnnotationPrompt,
 } from "./prompts";
+
+/**
+ * Wrapper que envolve a chamada em auditAiCall quando projectId esta presente.
+ * Quando ausente (modo /vision-direct sem projeto), apenas executa direto.
+ */
+async function withAudit<T>(
+  projectId: number | undefined,
+  opts: { model: string; promptVersion: string; inputSummary: string; pageId?: number | null },
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (projectId === undefined) return fn();
+  return auditAiCall(
+    {
+      projectId,
+      pageId: opts.pageId ?? null,
+      promptVersion: opts.promptVersion,
+      model: opts.model,
+      inputSummary: opts.inputSummary,
+    },
+    fn,
+  );
+}
 
 // ============================================================
 // Tipos públicos
@@ -33,6 +56,10 @@ export interface VisionDirectInput {
   fileName: string;
   defaultPeDireitoM: number; // configurado pelo usuário
   userId?: number;
+  /** Quando presente, cada chamada Gemini sera persistida em ai_runs via
+   * auditAiCall. Quando ausente (modo /vision-direct sem projeto), o audit
+   * e pulado. */
+  projectId?: number;
   onProgress?: (msg: string) => void; // callback opcional para UI
 }
 
@@ -219,7 +246,14 @@ export async function analyzeVisionDirect(
 
   // ---------- 3) Classifica páginas ----------
   log(`Classificando paginas (Gemini Pro)...`);
-  const classifyResult = await withRetry(async () => {
+  const classifyResult = await withAudit(
+    input.projectId,
+    {
+      model: MODEL_PRO,
+      promptVersion: "vd_classify_v1",
+      inputSummary: `Classificar ${pages.length} pagina(s)`,
+    },
+    () => withRetry(async () => {
     const ai = getActiveGenAI();
     const parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = pages.map(
       (p) => ({ inlineData: { mimeType: p.mimeType, data: p.base64 } }),
@@ -241,7 +275,8 @@ export async function analyzeVisionDirect(
       thinking: response.usageMetadata?.thoughtsTokenCount,
     });
     return response.text ?? "";
-  }, "VISION-DIRECT-classify");
+  }, "VISION-DIRECT-classify"),
+  );
 
   type PageClass = { page_index: number; tipo: "planta_baixa" | "corte" | "fachada" | "outro" };
   const classifyJson = extractJson(classifyResult);
@@ -259,7 +294,15 @@ export async function analyzeVisionDirect(
     try {
       const cortePage = pages.find((p) => p.pageIndex === cortePages[0].page_index);
       if (cortePage) {
-        const heightResult = await withRetry(async () => {
+        const heightResult = await withAudit(
+          input.projectId,
+          {
+            model: MODEL_PRO,
+            promptVersion: "vd_height_v1",
+            inputSummary: `Pe-direito de corte pg ${cortePage.pageIndex}`,
+            pageId: cortePage.pageIndex,
+          },
+          () => withRetry(async () => {
           const ai = getActiveGenAI();
           const response = await ai.models.generateContent({
             model: MODEL_PRO,
@@ -285,7 +328,8 @@ export async function analyzeVisionDirect(
             thinking: response.usageMetadata?.thoughtsTokenCount,
           });
           return response.text ?? "";
-        }, "VISION-DIRECT-height");
+        }, "VISION-DIRECT-height"),
+        );
         const heightJson = extractJson(heightResult);
         const pe = Number(heightJson?.pe_direito_m);
         if (Number.isFinite(pe) && pe >= 2.0 && pe <= 6.0) {
@@ -342,7 +386,15 @@ export async function analyzeVisionDirect(
     let lastFinishReason: string | undefined;
     let lastUsage: { input?: number; output?: number; thinking?: number } | undefined;
     try {
-      areaResult = await withRetry(async () => {
+      areaResult = await withAudit(
+        input.projectId,
+        {
+          model: MODEL_PRO,
+          promptVersion: "vd_area_v1",
+          inputSummary: `Areas m² pg ${pg.pageIndex}`,
+          pageId: pg.pageIndex,
+        },
+        () => withRetry(async () => {
         const ai = getActiveGenAI();
         const response = await ai.models.generateContent({
           model: MODEL_PRO,
@@ -381,7 +433,8 @@ export async function analyzeVisionDirect(
           throw new Error(`Gemini Pro finalizou sem texto (finishReason=${finishReason})`);
         }
         return text;
-      }, "VISION-DIRECT-area");
+      }, "VISION-DIRECT-area"),
+      );
     } catch (err: any) {
       console.warn(`[VISION-DIRECT] Pag ${pg.pageIndex} chamada area falhou: ${err?.message || err}`);
       result.observacoes = `Falha na chamada Gemini: ${err?.message || "desconhecida"}`;
@@ -473,9 +526,18 @@ export async function analyzeVisionDirect(
     log(`Pag ${pg.pageIndex}: gerando planta anotada via IA...`);
     const imgStart = Date.now();
     try {
-      const annotated = await editImage(buildImageAnnotationPrompt(), [
-        { data: pg.base64, mimeType: pg.mimeType },
-      ]);
+      const annotated = await withAudit(
+        input.projectId,
+        {
+          model: "gemini-2.5-flash-image",
+          promptVersion: "vd_annotated_v1",
+          inputSummary: `Planta anotada pg ${pg.pageIndex}`,
+          pageId: pg.pageIndex,
+        },
+        () => editImage(buildImageAnnotationPrompt(), [
+          { data: pg.base64, mimeType: pg.mimeType },
+        ]),
+      );
       result.annotatedImage = annotated;
       log(
         `Pag ${pg.pageIndex}: planta anotada OK (${Math.round(annotated.length / 1024)}KB, ${(
