@@ -3859,21 +3859,31 @@ export async function registerRoutes(
       }> = [];
 
       // Agregadores globais ponderados por area real total por categoria
-      const globalSum: Record<CatKey, { accSum: number; realSum: number }> = {
-        paredes_externas: { accSum: 0, realSum: 0 },
-        paredes_internas: { accSum: 0, realSum: 0 },
-        muros: { accSum: 0, realSum: 0 },
-        laje_piso: { accSum: 0, realSum: 0 },
-        laje_coberta: { accSum: 0, realSum: 0 },
+      const globalSum: Record<CatKey, { accSum: number; realSum: number; calcSum: number }> = {
+        paredes_externas: { accSum: 0, realSum: 0, calcSum: 0 },
+        paredes_internas: { accSum: 0, realSum: 0, calcSum: 0 },
+        muros: { accSum: 0, realSum: 0, calcSum: 0 },
+        laje_piso: { accSum: 0, realSum: 0, calcSum: 0 },
+        laje_coberta: { accSum: 0, realSum: 0, calcSum: 0 },
       };
 
       for (const project of testProjects) {
-        // Le o vision_direct_summary do banco
+        // Le o vision_direct_summary do banco. Em caso de multiplos rows
+        // (varios processamentos), pega o mais recente (id maior).
         const extracted = await storage.getExtractedData(project.id);
-        const vdSummary = extracted.find((d: any) => d.elementType === "vision_direct_summary");
-        if (!vdSummary || !vdSummary.data) continue;
+        const vdSummaries = extracted
+          .filter((d: any) => d.elementType === "vision_direct_summary")
+          .sort((a: any, b: any) => (b.id ?? 0) - (a.id ?? 0));
+        const vdSummary = vdSummaries[0];
+        if (!vdSummary || !vdSummary.data) {
+          console.log(`[CALIBRATION-VD] project ${project.id} (${project.name}): sem vision_direct_summary`);
+          continue;
+        }
         const totais = (vdSummary.data as any).totais;
-        if (!totais) continue;
+        if (!totais) {
+          console.log(`[CALIBRATION-VD] project ${project.id}: vdSummary.data sem totais. keys=`, Object.keys(vdSummary.data));
+          continue;
+        }
 
         const reals = {
           paredes_externas: project.realAreaExt ? parseFloat(project.realAreaExt) : null,
@@ -3908,9 +3918,15 @@ export async function registerRoutes(
             projRealSum += c.real;
             globalSum[cat].accSum += c.accuracy * c.real;
             globalSum[cat].realSum += c.real;
+            globalSum[cat].calcSum += (c.calc ?? 0);
           }
         }
         const overallAccuracy = projRealSum > 0 ? Math.round((projAccSum / projRealSum) * 10) / 10 : null;
+
+        console.log(
+          `[CALIBRATION-VD] project ${project.id} (${project.name}): overall=${overallAccuracy}%`,
+          { reals, calcs },
+        );
 
         perProject.push({
           projectId: project.id,
@@ -3930,10 +3946,13 @@ export async function registerRoutes(
         accuracy: number | null;
         projectCount: number;
         totalRealArea: number;
+        totalCalcArea: number;
+        deviation: number | null;
       }> = [];
       for (const cat of Object.keys(globalSum) as CatKey[]) {
-        const { accSum, realSum } = globalSum[cat];
+        const { accSum, realSum, calcSum } = globalSum[cat];
         const acc = realSum > 0 ? Math.round((accSum / realSum) * 10) / 10 : null;
+        const dev = realSum > 0 ? Math.round(((calcSum - realSum) / realSum) * 1000) / 10 : null;
         const projectCount = perProject.filter((p) => p.categories[cat].accuracy != null).length;
         categoriesGlobal.push({
           key: cat,
@@ -3941,6 +3960,8 @@ export async function registerRoutes(
           accuracy: acc,
           projectCount,
           totalRealArea: Math.round(realSum * 100) / 100,
+          totalCalcArea: Math.round(calcSum * 100) / 100,
+          deviation: dev,
         });
         totalAccSum += accSum;
         totalRealSum += realSum;

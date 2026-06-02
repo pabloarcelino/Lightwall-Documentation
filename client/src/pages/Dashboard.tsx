@@ -21,7 +21,6 @@ import {
   Target,
   FlaskConical,
   BarChart3,
-  ArrowRight,
   Loader2,
   Sparkles,
 } from "lucide-react";
@@ -51,18 +50,35 @@ interface VdProject {
   categories: Record<CatKey, CategoryAccuracy>;
 }
 
+interface VdCategoryGlobal {
+  key: CatKey;
+  label: string;
+  accuracy: number | null;
+  projectCount: number;
+  totalRealArea: number;
+  totalCalcArea: number;
+  deviation: number | null;
+}
+
 interface VdCalibrationData {
   hasData: boolean;
   globalAccuracy: number | null;
   projectCount: number;
-  categoriesGlobal: Array<{
-    key: CatKey;
-    label: string;
-    accuracy: number | null;
-    projectCount: number;
-    totalRealArea: number;
-  }>;
+  categoriesGlobal: VdCategoryGlobal[];
   projects: VdProject[];
+}
+
+const CATEGORY_ORDER: CatKey[] = [
+  "paredes_externas",
+  "paredes_internas",
+  "muros",
+  "laje_piso",
+  "laje_coberta",
+];
+
+function fmtM2(v: number | null | undefined): string {
+  if (v == null) return "—";
+  return `${v.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} m²`;
 }
 
 // ---------- Helpers de UI ----------
@@ -228,83 +244,35 @@ export default function Dashboard() {
 
         {/* Precisao por categoria (Vision Direta) */}
         {calibration?.hasData && (
-          <section
-            className="rounded-xl border border-card-border bg-card shadow-xs overflow-hidden"
-            data-testid="card-calibration-vd"
-          >
-            <div className="px-6 py-5 border-b border-border flex items-center justify-between">
+          <section data-testid="card-calibration-vd" className="space-y-4">
+            <div className="flex items-end justify-between flex-wrap gap-2">
               <div>
                 <h2 className="text-lg font-semibold flex items-center gap-2">
                   <BarChart3 className="h-5 w-5 text-primary" />
                   Precisão do motor Visão Direta
                 </h2>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  Acurácia ponderada por área real (m²) — apenas projetos teste com valores informados
+                  Comparação m² extraído × m² real informado nos projetos teste
                 </p>
               </div>
-              <Link href="/calibracao">
-                <Button variant="outline" size="sm" className="gap-1" data-testid="button-calibration-details">
-                  Detalhes <ArrowRight className="h-3.5 w-3.5" />
-                </Button>
-              </Link>
             </div>
 
-            <div className="p-6 space-y-6">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <CalKpi
-                  label="Acurácia global (m²)"
-                  value={calibration.globalAccuracy}
-                  formatter={v => `${v.toFixed(1)}%`}
-                  tone={accuracyTone(calibration.globalAccuracy)}
-                  testId="text-cal-global-accuracy"
-                />
-                <CalKpi
-                  label="Categorias avaliadas"
-                  value={calibration.categoriesGlobal.filter(c => c.accuracy != null).length}
-                  formatter={v => `${v} / 5`}
-                  tone="neutral"
-                  testId="text-cal-categories-count"
-                />
-                <CalKpi
-                  label="Projetos teste"
-                  value={calibration.projectCount}
-                  formatter={v => String(v)}
-                  tone="neutral"
-                  testId="text-cal-project-count"
-                />
-              </div>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              {/* Hero da acuracia global */}
+              <HeroAccuracyCard
+                accuracy={calibration.globalAccuracy}
+                projectCount={calibration.projectCount}
+                categoriesEvaluated={calibration.categoriesGlobal.filter(c => c.accuracy != null).length}
+              />
 
-              {calibration.categoriesGlobal.length > 0 && (
-                <div>
-                  <h3 className="text-xs font-semibold tracking-wider uppercase text-muted-foreground mb-2">
-                    Precisão por categoria (m²)
-                  </h3>
-                  <div className="space-y-1.5">
-                    {calibration.categoriesGlobal.map(cat => {
-                      const barWidth = cat.accuracy ?? 0;
-                      const tone = accuracyTone(cat.accuracy);
-                      const barTone =
-                        tone === "success" ? "bg-success/70" :
-                        tone === "warning" ? "bg-warning/70" :
-                        tone === "error"   ? "bg-error/70"   :
-                        "bg-muted-foreground/40";
-                      return (
-                        <div key={cat.key} className="flex items-center gap-3" data-testid={`cal-category-${cat.key}`}>
-                          <span className="text-xs w-36 text-muted-foreground truncate">{cat.label}</span>
-                          <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                            <div className={cn("h-full rounded-full", barTone)} style={{ width: `${Math.min(barWidth, 100)}%` }} />
-                          </div>
-                          <span className={cn("text-xs font-medium w-28 text-right", toneTextClasses[tone])}>
-                            {cat.accuracy == null
-                              ? "—"
-                              : `${cat.accuracy.toFixed(1)}% (${cat.projectCount}p)`}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+              {/* Grid de categorias */}
+              <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                {CATEGORY_ORDER.map(key => {
+                  const cat = calibration.categoriesGlobal.find(c => c.key === key);
+                  if (!cat) return null;
+                  return <CategoryAccuracyCard key={key} cat={cat} />;
+                })}
+              </div>
             </div>
           </section>
         )}
@@ -460,26 +428,114 @@ export default function Dashboard() {
 
 // ---------- Auxiliares ----------
 
-function CalKpi({
-  label,
-  value,
-  formatter,
-  tone,
-  testId,
+function HeroAccuracyCard({
+  accuracy,
+  projectCount,
+  categoriesEvaluated,
 }: {
-  label: string;
-  value: number | null;
-  formatter: (v: number) => string;
-  tone: "success" | "warning" | "error" | "neutral";
-  testId?: string;
+  accuracy: number | null;
+  projectCount: number;
+  categoriesEvaluated: number;
 }) {
-  const isNa = value == null;
+  const tone = accuracyTone(accuracy);
+  const ringTone =
+    tone === "success" ? "from-success/30 to-success/0" :
+    tone === "warning" ? "from-warning/30 to-warning/0" :
+    tone === "error"   ? "from-error/30 to-error/0"     :
+    "from-muted-foreground/20 to-muted-foreground/0";
   return (
-    <div className="rounded-lg border border-border bg-background p-4 text-center">
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">{label}</div>
-      <div className={cn("text-2xl font-bold", isNa ? "text-muted-foreground" : toneTextClasses[tone])} data-testid={testId}>
-        {isNa ? "N/A" : formatter(value!)}
+    <div className="lg:col-span-5 rounded-xl border border-card-border bg-card shadow-xs overflow-hidden relative">
+      <div className={cn("absolute inset-0 bg-gradient-to-br pointer-events-none", ringTone)} />
+      <div className="relative p-6 flex flex-col h-full">
+        <div className="flex items-center gap-2 text-xs font-medium tracking-wide uppercase text-muted-foreground">
+          <Target className="h-3.5 w-3.5" />
+          Acurácia global ponderada
+        </div>
+        <div className="mt-4 flex items-baseline gap-2">
+          <span
+            className={cn("text-6xl font-extrabold tracking-tight tabular-nums", toneTextClasses[tone])}
+            data-testid="text-cal-global-accuracy"
+          >
+            {accuracy == null ? "N/A" : accuracy.toFixed(1)}
+          </span>
+          {accuracy != null && <span className={cn("text-2xl font-bold", toneTextClasses[tone])}>%</span>}
+        </div>
+        <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+          Média de todas as categorias avaliadas, ponderada pela área real (m²) de cada uma.
+        </p>
+        <div className="mt-auto pt-4 grid grid-cols-2 gap-3">
+          <div className="rounded-md border border-border/60 bg-background/40 p-2.5">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Projetos teste</div>
+            <div className="text-xl font-bold mt-0.5" data-testid="text-cal-project-count">{projectCount}</div>
+          </div>
+          <div className="rounded-md border border-border/60 bg-background/40 p-2.5">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Categorias</div>
+            <div className="text-xl font-bold mt-0.5" data-testid="text-cal-categories-count">
+              {categoriesEvaluated}<span className="text-sm text-muted-foreground"> / 5</span>
+            </div>
+          </div>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function CategoryAccuracyCard({ cat }: { cat: VdCategoryGlobal }) {
+  const tone = accuracyTone(cat.accuracy);
+  const noData = cat.accuracy == null;
+  const dotTone =
+    tone === "success" ? "bg-success" :
+    tone === "warning" ? "bg-warning" :
+    tone === "error"   ? "bg-error"   :
+    "bg-muted-foreground/40";
+  return (
+    <div
+      className={cn(
+        "rounded-xl border bg-card shadow-xs p-3.5 flex flex-col gap-2 transition-shadow hover:shadow-md",
+        noData ? "border-card-border opacity-70" : "border-card-border",
+      )}
+      data-testid={`cal-category-${cat.key}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className={cn("h-2 w-2 rounded-full shrink-0", dotTone)} />
+          <span className="text-xs font-medium text-foreground truncate">{cat.label}</span>
+        </div>
+        {!noData && (
+          <span className="text-[10px] tabular-nums text-muted-foreground shrink-0">
+            {cat.projectCount}p
+          </span>
+        )}
+      </div>
+
+      <div className="flex items-baseline gap-1">
+        <span className={cn("text-2xl font-bold tabular-nums", toneTextClasses[tone])}>
+          {noData ? "—" : cat.accuracy!.toFixed(1)}
+        </span>
+        {!noData && <span className={cn("text-xs font-semibold", toneTextClasses[tone])}>%</span>}
+      </div>
+
+      {!noData && (
+        <div className="pt-1 border-t border-border/60 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px]">
+          <span className="text-muted-foreground">Extraído</span>
+          <span className="text-right font-mono tabular-nums">{fmtM2(cat.totalCalcArea)}</span>
+          <span className="text-muted-foreground">Real</span>
+          <span className="text-right font-mono tabular-nums">{fmtM2(cat.totalRealArea)}</span>
+          {cat.deviation != null && (
+            <>
+              <span className="text-muted-foreground">Desvio</span>
+              <span
+                className={cn(
+                  "text-right font-mono tabular-nums",
+                  cat.deviation > 0 ? "text-warning" : cat.deviation < 0 ? "text-info" : "",
+                )}
+              >
+                {cat.deviation > 0 ? "+" : ""}{cat.deviation.toFixed(1)}%
+              </span>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
