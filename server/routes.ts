@@ -3868,15 +3868,27 @@ export async function registerRoutes(
       };
 
       for (const project of testProjects) {
-        // Le o vision_direct_summary do banco. Em caso de multiplos rows
-        // (varios processamentos), pega o mais recente (id maior).
+        // Le o vision_direct_summary do banco. Preferir a linha cuja
+        // data.totais tem ao menos um valor > 0 (caso haja varias linhas
+        // por reprocessamento — algumas podem ser placeholders com zeros).
+        // Se nenhuma tiver totais validos, cai para a primeira encontrada
+        // (mesma estrategia do front-end via .find() em ProjectDetails).
         const extracted = await storage.getExtractedData(project.id);
-        const vdSummaries = extracted
-          .filter((d: any) => d.elementType === "vision_direct_summary")
-          .sort((a: any, b: any) => (b.id ?? 0) - (a.id ?? 0));
-        const vdSummary = vdSummaries[0];
+        const vdRows = extracted.filter((d: any) => d.elementType === "vision_direct_summary");
+        const hasAnyValue = (row: any) => {
+          const t = row?.data?.totais;
+          if (!t) return false;
+          return (
+            (Number(t.paredes_externas_liquida_m2) || 0) > 0 ||
+            (Number(t.paredes_internas_liquida_m2) || 0) > 0 ||
+            (Number(t.muros_m2) || 0) > 0 ||
+            (Number(t.laje_piso_m2) || 0) > 0 ||
+            (Number(t.laje_coberta_m2) || 0) > 0
+          );
+        };
+        const vdSummary = vdRows.find(hasAnyValue) ?? vdRows[0];
         if (!vdSummary || !vdSummary.data) {
-          console.log(`[CALIBRATION-VD] project ${project.id} (${project.name}): sem vision_direct_summary`);
+          console.log(`[CALIBRATION-VD] project ${project.id} (${project.name}): sem vision_direct_summary. rows=${vdRows.length}`);
           continue;
         }
         const totais = (vdSummary.data as any).totais;
@@ -3884,6 +3896,9 @@ export async function registerRoutes(
           console.log(`[CALIBRATION-VD] project ${project.id}: vdSummary.data sem totais. keys=`, Object.keys(vdSummary.data));
           continue;
         }
+        console.log(
+          `[CALIBRATION-VD] project ${project.id} (${project.name}): usando vdSummary id=${(vdSummary as any).id} de ${vdRows.length} row(s)`,
+        );
 
         const reals = {
           paredes_externas: project.realAreaExt ? parseFloat(project.realAreaExt) : null,
