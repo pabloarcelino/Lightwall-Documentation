@@ -685,7 +685,18 @@ export default function ProjectDetails() {
       // o progresso por polling do GET /api/projects/:id (status: processing
       // -> completed). Sem SSE / pipelineSteps que eram da pipeline antiga.
       // Envia peDireito + scope (filtra categorias desmarcadas no backend).
-      const body: Record<string, unknown> = { peDireito, scope };
+      // Tambem envia productIds para definir SKU por categoria no budget.
+      const body: Record<string, unknown> = {
+        peDireito,
+        scope,
+        productIds: {
+          ext: selectedProductIdExt,
+          int: selectedProductIdInt,
+          muros: selectedProductIdMuros,
+          piso: selectedProductIdPiso,
+          coberta: selectedProductIdCoberta,
+        },
+      };
       const res = await fetch(`/api/projects/${projectId}/process-direct`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -996,10 +1007,22 @@ export default function ProjectDetails() {
               files={files || []}
               onUpload={uploadFiles}
               onDeleteFile={handleDeleteFile}
+              onPreview={(f) => setViewingFile(f as any)}
               peDireito={peDireito}
               onPeDireitoChange={onPeDireitoChange}
               scope={scope}
               onScopeChange={setScope}
+              productIds={{
+                ext: selectedProductIdExt,
+                int: selectedProductIdInt,
+                muros: selectedProductIdMuros,
+                piso: selectedProductIdPiso,
+                coberta: selectedProductIdCoberta,
+              }}
+              onProductIdChange={(kind, value) => onPanelChange(kind, value)}
+              productOptions={productOptions}
+              buildingType={(project?.buildingType as any) || "residencial"}
+              onBuildingTypeChange={(v) => onBuildingTypeChange(v)}
               onProcess={() => processMutation.mutate()}
               isProcessing={isProcessing}
             />

@@ -29,11 +29,20 @@ export interface VisionDirectScope {
   lajeCoberta: boolean;
 }
 
+export interface VisionDirectProductIds {
+  ext?: number;
+  int?: number;
+  muros?: number;
+  piso?: number;
+  coberta?: number;
+}
+
 export interface RunVisionDirectForProjectInput {
   projectId: number;
   userId: number | null;
   defaultPeDireitoM?: number;
   scope?: VisionDirectScope;
+  productIds?: VisionDirectProductIds;
 }
 
 const ALL_TRUE_SCOPE: VisionDirectScope = {
@@ -96,6 +105,7 @@ export async function runVisionDirectForProject(
   const { projectId } = input;
   const defaultPeDireitoM = input.defaultPeDireitoM ?? 3.0;
   const scope = input.scope ?? ALL_TRUE_SCOPE;
+  const productIds = input.productIds ?? {};
 
   // Timeout absoluto: 10 minutos pra projeto inteiro. Se nao terminar
   // ate la, forca status="error" pra destravar a UI. Garante que
@@ -225,7 +235,7 @@ export async function runVisionDirectForProject(
     // estao em extractedData e a UI principal consegue funcionar sem budget.
     console.log(`[VD-PROJECT] Projeto ${projectId}: calculando budget...`);
     try {
-      const budget = await buildBudget(consolidated, project.pricingProfileId ?? null, projectId);
+      const budget = await buildBudget(consolidated, project.pricingProfileId ?? null, projectId, productIds);
       await storage.createBudget({
         projectId,
         budgetData: budget as any,
@@ -436,7 +446,9 @@ async function buildBudget(
   consolidated: VisionDirectResult,
   pricingProfileId: number | null,
   projectId: number,
+  productIds?: VisionDirectProductIds,
 ): Promise<BudgetResult> {
+  void pricingProfileId; void projectId; void productIds; // todo: usar SKU por categoria no calcuateBudget
   const peDireito = consolidated.peDireitoUsadoM;
 
   // Agrupa pages por pavimento

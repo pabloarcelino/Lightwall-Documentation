@@ -1399,10 +1399,24 @@ export async function registerRoutes(
         lajePiso: rawScope.lajePiso !== false,
         lajeCoberta: rawScope.lajeCoberta !== false,
       };
+      // SKU por categoria (opcional). Sem isso, buildBudget usa o
+      // pricingProfileId do projeto e seleciona SKUs default.
+      const rawProductIds = (req.body?.productIds ?? {}) as Record<string, unknown>;
+      const toInt = (v: unknown): number | undefined => {
+        const n = parseInt(String(v));
+        return Number.isFinite(n) && n > 0 ? n : undefined;
+      };
+      const productIds = {
+        ext: toInt(rawProductIds.ext),
+        int: toInt(rawProductIds.int),
+        muros: toInt(rawProductIds.muros),
+        piso: toInt(rawProductIds.piso),
+        coberta: toInt(rawProductIds.coberta),
+      };
       const userId = req.user?.id ?? null;
 
       console.log(
-        `[VD-PROJECT] POST /process-direct projeto ${projectId} recebido (pe=${defaultPeDireitoM}, scope=${JSON.stringify(scope)})`,
+        `[VD-PROJECT] POST /process-direct projeto ${projectId} recebido (pe=${defaultPeDireitoM}, scope=${JSON.stringify(scope)}, productIds=${JSON.stringify(productIds)})`,
       );
 
       // 1) Devolve 202 imediatamente — analise roda em background
@@ -1424,6 +1438,7 @@ export async function registerRoutes(
             userId,
             defaultPeDireitoM,
             scope,
+            productIds,
           });
           console.log(`[VD-PROJECT] IIFE projeto ${projectId} retornou normalmente`);
         } catch (err: any) {

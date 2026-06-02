@@ -1,8 +1,9 @@
 import { useDropzone } from "react-dropzone";
-import { Upload, FileText, X, Play, Loader2 } from "lucide-react";
+import { Upload, FileText, X, Play, Loader2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export interface SimpleScope {
   paredesExternas: boolean;
@@ -19,14 +20,39 @@ export interface SimpleProjectFile {
   fileSize?: number;
 }
 
+export interface PanelProduct {
+  id: string;
+  label: string;
+  panelType?: string;
+}
+
+export interface ProductIds {
+  ext: string;
+  int: string;
+  muros: string;
+  piso: string;
+  coberta: string;
+}
+
+const BUILDING_TYPES = ["residencial", "comercial", "industrial", "misto"] as const;
+type BuildingType = (typeof BUILDING_TYPES)[number];
+
 interface Props {
   files: SimpleProjectFile[];
   onUpload: (files: File[]) => Promise<void> | void;
   onDeleteFile: (fileId: number) => Promise<void> | void;
+  onPreview?: (file: SimpleProjectFile) => void;
   peDireito: number;
   onPeDireitoChange: (v: number) => void;
   scope: SimpleScope;
   onScopeChange: (s: SimpleScope) => void;
+  // SKU por categoria
+  productIds: ProductIds;
+  onProductIdChange: (kind: keyof ProductIds, value: string) => void;
+  productOptions: PanelProduct[];
+  // Tipo de edificacao
+  buildingType: BuildingType;
+  onBuildingTypeChange: (v: BuildingType) => void;
   onProcess: () => void;
   isProcessing: boolean;
 }
@@ -39,8 +65,23 @@ const SCOPE_OPTIONS: Array<{ key: keyof SimpleScope; label: string }> = [
   { key: "lajeCoberta", label: "Laje de cobertura" },
 ];
 
+const PANEL_LABELS: Record<keyof ProductIds, string> = {
+  ext: "Painel — Paredes externas",
+  int: "Painel — Paredes internas",
+  muros: "Painel — Muros",
+  piso: "Painel — Laje de piso",
+  coberta: "Painel — Laje de cobertura",
+};
+
 export function SimpleProjectConfig(props: Props) {
-  const { files, onUpload, onDeleteFile, peDireito, onPeDireitoChange, scope, onScopeChange, onProcess, isProcessing } = props;
+  const {
+    files, onUpload, onDeleteFile, onPreview,
+    peDireito, onPeDireitoChange,
+    scope, onScopeChange,
+    productIds, onProductIdChange, productOptions,
+    buildingType, onBuildingTypeChange,
+    onProcess, isProcessing,
+  } = props;
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
@@ -90,6 +131,17 @@ export function SimpleProjectConfig(props: Props) {
                 <FileText className="h-4 w-4 text-muted-foreground" />
                 <span className="truncate flex-1" title={f.originalName}>{f.originalName}</span>
                 <span className="text-[10px] text-muted-foreground">{f.fileType}</span>
+                {onPreview && (
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-primary transition"
+                    onClick={() => onPreview(f)}
+                    aria-label="Pré-visualizar"
+                    title="Pré-visualizar"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="text-muted-foreground hover:text-error transition"
@@ -108,6 +160,29 @@ export function SimpleProjectConfig(props: Props) {
       {/* Configuração */}
       <Card className="p-6">
         <h2 className="text-sm font-semibold mb-3">Configuração</h2>
+
+        {/* Tipo de edificacao */}
+        <div className="space-y-1 mb-5">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Tipo de edificação
+          </label>
+          <Select
+            value={buildingType}
+            onValueChange={(v) => onBuildingTypeChange(v as BuildingType)}
+            disabled={isProcessing}
+          >
+            <SelectTrigger className="w-full mt-1" data-testid="building-type">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {BUILDING_TYPES.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {t.charAt(0).toUpperCase() + t.slice(1)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         <div className="space-y-1 mb-5">
           <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -129,7 +204,7 @@ export function SimpleProjectConfig(props: Props) {
           </p>
         </div>
 
-        <div>
+        <div className="mb-5">
           <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-2">
             Elementos a calcular
           </label>
@@ -150,6 +225,47 @@ export function SimpleProjectConfig(props: Props) {
             ))}
           </div>
         </div>
+
+        {/* SKU por categoria */}
+        {productOptions.length > 0 && (
+          <details className="border-t border-border pt-4">
+            <summary className="text-xs font-medium text-muted-foreground uppercase tracking-wider cursor-pointer hover:text-foreground transition">
+              Painel por categoria (opcional)
+            </summary>
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {(["ext", "int", "muros", "piso", "coberta"] as const).map((kind) => {
+                // Para piso/coberta filtra paineis SP (mesma logica do DraftWorkspace antigo)
+                const filtered = (kind === "piso" || kind === "coberta")
+                  ? productOptions.filter((p) => p.panelType === "SP")
+                  : productOptions.filter((p) => p.panelType !== "SP" || productOptions.length < 2);
+                const options = filtered.length > 0 ? filtered : productOptions;
+                return (
+                  <div key={kind} className="space-y-1">
+                    <label className="text-[11px] font-medium text-muted-foreground">
+                      {PANEL_LABELS[kind]}
+                    </label>
+                    <Select
+                      value={productIds[kind]}
+                      onValueChange={(v) => onProductIdChange(kind, v)}
+                      disabled={isProcessing}
+                    >
+                      <SelectTrigger className="w-full text-xs" data-testid={`panel-${kind}`}>
+                        <SelectValue placeholder="(padrão)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {options.map((opt) => (
+                          <SelectItem key={opt.id} value={opt.id} className="text-xs">
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        )}
       </Card>
 
       {/* Ação */}
