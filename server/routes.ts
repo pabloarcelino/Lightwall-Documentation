@@ -3996,37 +3996,31 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================
+  // GET /api/calibration — LEGADO. Mantido para compatibilidade
+  // com bundles antigos do front-end cacheados no browser.
+  //
+  // Hoje usa a MESMA logica do /api/calibration-vd (m² extraido
+  // pelo motor Vision Direta vs realArea*), mas devolve no shape
+  // antigo (avgAreaAccuracy, projects[].areaAccuracy etc.) para
+  // que o Dashboard antigo em cache exiba o valor correto sem
+  // precisar de hard refresh.
+  // ============================================================
   app.get("/api/calibration", async (_req, res) => {
     try {
-      const allBudgetsWithProjects = await storage.getAllBudgetsWithProjects();
-      const testProjects = allBudgetsWithProjects.filter(
-        ({ project }) => project.projectType === "teste" && (
-          (project.realAreaExt && parseFloat(project.realAreaExt) > 0) ||
-          (project.realAreaInt && parseFloat(project.realAreaInt) > 0) ||
-          (project.realAreaMuros && parseFloat(project.realAreaMuros) > 0) ||
-          (project.realAreaPiso && parseFloat(project.realAreaPiso) > 0) ||
-          (project.realAreaCoberta && parseFloat(project.realAreaCoberta) > 0) ||
-          (project.realCost && parseFloat(project.realCost) > 0)
-        )
+      const projects = await storage.getProjects();
+      const testProjects = projects.filter(
+        (p) => p.projectType === "teste" && (
+          (p.realAreaExt && parseFloat(p.realAreaExt) > 0) ||
+          (p.realAreaInt && parseFloat(p.realAreaInt) > 0) ||
+          (p.realAreaMuros && parseFloat(p.realAreaMuros) > 0) ||
+          (p.realAreaPiso && parseFloat(p.realAreaPiso) > 0) ||
+          (p.realAreaCoberta && parseFloat(p.realAreaCoberta) > 0)
+        ),
       );
 
-      if (testProjects.length === 0) {
-        return res.json({
-          hasData: false,
-          avgAccuracy: 0,
-          avgCostAccuracy: 0,
-          avgAreaAccuracy: null,
-          avgDeviation: 0,
-          projectCount: 0,
-          projectsWithAreas: 0,
-          categories: [],
-          patterns: [],
-          projects: [],
-        });
-      }
-
-      const categoryNames = ["paredes_externas", "paredes_internas", "muros", "laje_piso", "laje_coberta"];
-      const categoryLabels: Record<string, string> = {
+      type CatKey = "paredes_externas" | "paredes_internas" | "muros" | "laje_piso" | "laje_coberta";
+      const CATEGORY_LABEL: Record<CatKey, string> = {
         paredes_externas: "Paredes Externas",
         paredes_internas: "Paredes Internas",
         muros: "Muros",
@@ -4034,313 +4028,149 @@ export async function registerRoutes(
         laje_coberta: "Laje Coberta",
       };
 
-      interface PropostaItem {
-        local?: string;
-        preco_total?: number;
-        qtd_un?: number;
-        qtd_m2?: number;
-      }
-      interface BudgetDataShape {
-        proposta?: { itens?: PropostaItem[] };
-        apiHealth?: { reliability?: { score: number; level: string; factors?: string[] } };
-      }
-      interface FusaoElement {
-        classe?: string;
-        enabled?: boolean;
-        comprimento_m?: number;
-        altura_m?: number;
-        area_m2?: number;
-        id?: string;
-        nivel?: string;
-        qtd_cantos?: number;
-      }
-      interface FusaoDataShape {
-        resultado?: { walls?: FusaoElement[]; slabs?: FusaoElement[]; corners?: FusaoElement[] };
-        walls?: FusaoElement[];
-        slabs?: FusaoElement[];
-        corners?: FusaoElement[];
-      }
-      interface CategoryCounts {
-        paredes_externas: number;
-        paredes_internas: number;
-        muros: number;
-        laje_piso: number;
-        laje_coberta: number;
-        total_walls: number;
-        total_slabs: number;
-      }
-      interface OriginalVsEditedData {
-        original: CategoryCounts;
-        edited: CategoryCounts;
-        originalCalcCost: number;
-        changes: Record<string, number>;
-      }
-
-      function extractCategoryCosts(budgetData: BudgetDataShape) {
-        const proposta = budgetData?.proposta;
-        const cats: Record<string, { cost: number; panels: number; area: number }> = {};
-        for (const cat of categoryNames) cats[cat] = { cost: 0, panels: 0, area: 0 };
-        if (proposta?.itens) {
-          for (const item of proposta.itens) {
-            const local = (item.local || "").toUpperCase();
-            if (local.includes("EXTERNAS")) cats.paredes_externas = { cost: item.preco_total || 0, panels: item.qtd_un || 0, area: item.qtd_m2 || 0 };
-            else if (local.includes("INTERNAS")) cats.paredes_internas = { cost: item.preco_total || 0, panels: item.qtd_un || 0, area: item.qtd_m2 || 0 };
-            else if (local.includes("PISO")) cats.laje_piso = { cost: item.preco_total || 0, panels: item.qtd_un || 0, area: item.qtd_m2 || 0 };
-            else if (local.includes("COBERTA")) cats.laje_coberta = { cost: item.preco_total || 0, panels: item.qtd_un || 0, area: item.qtd_m2 || 0 };
-          }
-        }
-        return cats;
-      }
-
-      function countWallsSlabs(fusaoData: FusaoDataShape): CategoryCounts {
-        const resultado = fusaoData?.resultado || fusaoData;
-        const walls = resultado?.walls || [];
-        const slabs = resultado?.slabs || [];
+      const computeAcc = (calc: number, real: number | null) => {
+        if (real == null || real <= 0) return { calc, real: null, deviation: null, accuracy: null };
+        const dev = ((calc - real) / real) * 100;
+        const acc = Math.max(0, (1 - Math.abs(calc - real) / real) * 100);
         return {
-          paredes_externas: walls.filter(w => w.classe === "externa" && w.enabled !== false).length,
-          paredes_internas: walls.filter(w => w.classe === "interna" && w.enabled !== false).length,
-          muros: walls.filter(w => w.classe === "muro" && w.enabled !== false).length,
-          laje_piso: slabs.filter(s => (s.classe === "piso" || s.classe === "radier") && s.enabled !== false).length,
-          laje_coberta: slabs.filter(s => s.classe === "coberta" && s.enabled !== false).length,
-          total_walls: walls.filter(w => w.enabled !== false).length,
-          total_slabs: slabs.filter(s => s.enabled !== false).length,
+          calc: Math.round(calc * 100) / 100,
+          real: Math.round(real * 100) / 100,
+          deviation: Math.round(dev * 10) / 10,
+          accuracy: Math.round(acc * 10) / 10,
         };
-      }
+      };
 
-      function estimateCostFromFusion(fusaoData: FusaoDataShape): number {
-        try {
-          const resultado = fusaoData?.resultado || fusaoData;
-          const walls = (resultado?.walls || []).filter(w => w.enabled !== false);
-          const slabs = (resultado?.slabs || []).filter(s => s.enabled !== false);
-          const corners = resultado?.corners || [];
-          const budgetResult = calculateBudget(
-            walls as ExtractedWall[],
-            slabs as ExtractedSlab[],
-            corners as ExtractedCorner[],
+      const projectsOut: Array<{
+        projectId: number;
+        projectName: string;
+        realCost: number;
+        calcCost: number;
+        accuracy: number;
+        areaAccuracy: number | null;
+        deviation: number;
+      }> = [];
+      const globalSum: Record<CatKey, { accSum: number; realSum: number }> = {
+        paredes_externas: { accSum: 0, realSum: 0 },
+        paredes_internas: { accSum: 0, realSum: 0 },
+        muros: { accSum: 0, realSum: 0 },
+        laje_piso: { accSum: 0, realSum: 0 },
+        laje_coberta: { accSum: 0, realSum: 0 },
+      };
+
+      for (const project of testProjects) {
+        const extracted = await storage.getExtractedData(project.id);
+        const vdRows = extracted.filter((d: any) => d.elementType === "vision_direct_summary");
+        const hasAnyValue = (row: any) => {
+          const t = row?.data?.totais;
+          if (!t) return false;
+          return (
+            (Number(t.paredes_externas_liquida_m2) || 0) > 0 ||
+            (Number(t.paredes_internas_liquida_m2) || 0) > 0 ||
+            (Number(t.muros_m2) || 0) > 0 ||
+            (Number(t.laje_piso_m2) || 0) > 0 ||
+            (Number(t.laje_coberta_m2) || 0) > 0
           );
-          const AREA_PAINEL = 1.83;
-          const PRECO_M2 = 275;
-          const PRECO_PAG_M2 = 11;
-          const extPanels = budgetResult.resumo.paredes_externas.quantidade_paineis;
-          const intPanels = budgetResult.resumo.paredes_internas.quantidade_paineis;
-          const pisoPanels = budgetResult.resumo.laje_piso.quantidade_paineis;
-          const cobertaPanels = budgetResult.resumo.laje_coberta.quantidade_paineis;
-          const extArea = Math.round(extPanels * AREA_PAINEL * 1000) / 1000;
-          const intArea = Math.round(intPanels * AREA_PAINEL * 1000) / 1000;
-          const pisoArea = Math.round(pisoPanels * AREA_PAINEL * 1000) / 1000;
-          const cobertaArea = Math.round(cobertaPanels * AREA_PAINEL * 1000) / 1000;
-          const totalArea = extArea + intArea + pisoArea + cobertaArea;
-          const panelCost = Math.round(totalArea * PRECO_M2 * 100) / 100;
-          const pagCost = Math.round(totalArea * PRECO_PAG_M2 * 100) / 100;
-          return Math.round((panelCost + pagCost) * 100) / 100;
-        } catch {
-          return 0;
-        }
-      }
+        };
+        const vdSummary = vdRows.find(hasAnyValue) ?? vdRows[0];
+        if (!vdSummary || !(vdSummary as any).data) continue;
+        const totais = ((vdSummary as any).data).totais;
+        if (!totais) continue;
 
-      const projectDetails = await Promise.all(testProjects.map(async ({ budget, project }) => {
-        const budgetData = budget.budgetData as BudgetDataShape | null;
-        const realCost = project.realCost ? parseFloat(project.realCost) : 0;
-        const calcCost = parseFloat(budget.totalCost || "0");
-        const costAccuracy = realCost > 0 ? Math.max(0, (1 - Math.abs(calcCost - realCost) / realCost) * 100) : 0;
-        const costDeviation = realCost > 0 ? ((calcCost - realCost) / realCost) * 100 : 0;
-
-        const categories = extractCategoryCosts(budgetData || {});
-        const totalCalc = Object.values(categories).reduce((s, c) => s + c.cost, 0);
-
-        const realAreas: Record<string, number | null> = {
+        const reals: Record<CatKey, number | null> = {
           paredes_externas: project.realAreaExt ? parseFloat(project.realAreaExt) : null,
           paredes_internas: project.realAreaInt ? parseFloat(project.realAreaInt) : null,
           muros: project.realAreaMuros ? parseFloat(project.realAreaMuros) : null,
           laje_piso: project.realAreaPiso ? parseFloat(project.realAreaPiso) : null,
           laje_coberta: project.realAreaCoberta ? parseFloat(project.realAreaCoberta) : null,
         };
-        const hasRealAreas = Object.values(realAreas).some(v => v !== null && v > 0);
+        const calcs: Record<CatKey, number> = {
+          paredes_externas: Number(totais.paredes_externas_liquida_m2 || 0),
+          paredes_internas: Number(totais.paredes_internas_liquida_m2 || 0),
+          muros: Number(totais.muros_m2 || 0),
+          laje_piso: Number(totais.laje_piso_m2 || 0),
+          laje_coberta: Number(totais.laje_coberta_m2 || 0),
+        };
 
-        const categoryDeviations: Record<string, { calcArea: number; realArea: number | null; deviation: number | null; accuracy: number | null }> = {};
-        let areaAccuracy: number | null = null;
-
-        if (hasRealAreas) {
-          let weightedAccuracySum = 0;
-          let totalWeight = 0;
-          for (const cat of categoryNames) {
-            const calcArea = categories[cat]?.area || 0;
-            const realArea = realAreas[cat];
-            if (realArea !== null && realArea > 0) {
-              const dev = ((calcArea - realArea) / realArea) * 100;
-              const acc = Math.max(0, (1 - Math.abs(calcArea - realArea) / realArea) * 100);
-              categoryDeviations[cat] = { calcArea, realArea, deviation: Math.round(dev * 10) / 10, accuracy: Math.round(acc * 10) / 10 };
-              weightedAccuracySum += acc * realArea;
-              totalWeight += realArea;
-            } else {
-              categoryDeviations[cat] = { calcArea, realArea: null, deviation: null, accuracy: null };
-            }
-          }
-          areaAccuracy = totalWeight > 0 ? Math.round((weightedAccuracySum / totalWeight) * 10) / 10 : null;
-        } else {
-          for (const cat of categoryNames) {
-            categoryDeviations[cat] = { calcArea: categories[cat]?.area || 0, realArea: null, deviation: null, accuracy: null };
+        let projAccSum = 0;
+        let projRealSum = 0;
+        for (const cat of Object.keys(reals) as CatKey[]) {
+          const c = computeAcc(calcs[cat], reals[cat]);
+          if (c.accuracy != null && c.real != null && c.real > 0) {
+            projAccSum += c.accuracy * c.real;
+            projRealSum += c.real;
+            globalSum[cat].accSum += c.accuracy * c.real;
+            globalSum[cat].realSum += c.real;
           }
         }
+        const areaAccuracy = projRealSum > 0 ? Math.round((projAccSum / projRealSum) * 10) / 10 : null;
 
-        const primaryAccuracy = hasRealAreas && areaAccuracy !== null ? areaAccuracy : Math.round(costAccuracy * 10) / 10;
-
-        const categoryContributions: Record<string, number> = {};
-        const errorAmount = calcCost - realCost;
-        for (const cat of categoryNames) {
-          const proportion = totalCalc > 0 ? categories[cat].cost / totalCalc : 0;
-          categoryContributions[cat] = Math.round(proportion * errorAmount * 100) / 100;
-        }
-
-        const originalSnapshot = await storage.getExtractedDataByType(project.id, "etapa4_fusao_original");
-        const currentFusao = await storage.getExtractedDataByType(project.id, "etapa4_fusao");
-        const hasManualEdits = !!originalSnapshot;
-
-        let originalVsEdited: OriginalVsEditedData | null = null;
-        let originalCalcCost: number | null = null;
-        if (hasManualEdits && originalSnapshot && currentFusao) {
-          const origCounts = countWallsSlabs(originalSnapshot.data as FusaoDataShape);
-          const editedCounts = countWallsSlabs(currentFusao.data as FusaoDataShape);
-          originalCalcCost = estimateCostFromFusion(originalSnapshot.data as FusaoDataShape);
-          originalVsEdited = {
-            original: origCounts,
-            edited: editedCounts,
-            originalCalcCost,
-            changes: {
-              paredes_externas: editedCounts.paredes_externas - origCounts.paredes_externas,
-              paredes_internas: editedCounts.paredes_internas - origCounts.paredes_internas,
-              muros: editedCounts.muros - origCounts.muros,
-              laje_piso: editedCounts.laje_piso - origCounts.laje_piso,
-              laje_coberta: editedCounts.laje_coberta - origCounts.laje_coberta,
-              total_walls: editedCounts.total_walls - origCounts.total_walls,
-              total_slabs: editedCounts.total_slabs - origCounts.total_slabs,
-            },
-          };
-        }
-
-        const apiReliability = budgetData?.apiHealth?.reliability || null;
-
-        return {
+        projectsOut.push({
           projectId: project.id,
           projectName: project.name,
-          clientName: project.clientName || "",
-          realCost,
-          calcCost,
-          originalCalcCost,
-          accuracy: primaryAccuracy,
-          costAccuracy: Math.round(costAccuracy * 10) / 10,
+          realCost: project.realCost ? parseFloat(project.realCost) : 0,
+          calcCost: 0,
+          accuracy: areaAccuracy ?? 0,
           areaAccuracy,
-          deviation: Math.round(costDeviation * 10) / 10,
-          categories,
-          categoryDeviations,
-          categoryContributions,
-          hasRealAreas,
-          hasManualEdits,
-          originalVsEdited,
-          apiReliability: apiReliability || null,
-          processedAt: budget.createdAt,
-        };
-      }));
+          deviation: 0,
+        });
+      }
 
-      const avgAccuracy = projectDetails.reduce((s, p) => s + p.accuracy, 0) / projectDetails.length;
-      const avgCostAccuracy = projectDetails.reduce((s, p) => s + p.costAccuracy, 0) / projectDetails.length;
-      const avgDeviation = projectDetails.reduce((s, p) => s + p.deviation, 0) / projectDetails.length;
-
-      const projectsWithAreas = projectDetails.filter(p => p.hasRealAreas);
-      const avgAreaAccuracy = projectsWithAreas.length > 0
-        ? projectsWithAreas.reduce((s, p) => s + (p.areaAccuracy || 0), 0) / projectsWithAreas.length
-        : null;
-
-      const categoryStats = categoryNames.map(cat => {
-        const costs = projectDetails.map(p => p.categories[cat]?.cost || 0);
-        const avgCost = costs.reduce((s, v) => s + v, 0) / costs.length;
-        const contributions = projectDetails.map(p => p.categoryContributions[cat] || 0);
-        const avgContribution = contributions.reduce((s, v) => s + v, 0) / contributions.length;
-        const totalCalcs = projectDetails.map(p => Object.values(p.categories).reduce((s, c) => s + c.cost, 0));
-        const avgProportion = totalCalcs.reduce((s, tc, i) => s + (tc > 0 ? (costs[i] / tc) : 0), 0) / projectDetails.length * 100;
-        const projectsWithZero = projectDetails.filter(p => (p.categories[cat]?.cost || 0) === 0).length;
-
-        const areaDeviations = projectsWithAreas
-          .filter(p => p.categoryDeviations[cat]?.deviation !== null)
-          .map(p => p.categoryDeviations[cat].deviation!);
-        const avgAreaDeviation = areaDeviations.length > 0
-          ? areaDeviations.reduce((s, v) => s + v, 0) / areaDeviations.length
-          : null;
-
-        const areaAccuracies = projectsWithAreas
-          .filter(p => p.categoryDeviations[cat]?.accuracy !== null)
-          .map(p => p.categoryDeviations[cat].accuracy!);
-        const avgCatAreaAccuracy = areaAccuracies.length > 0
-          ? areaAccuracies.reduce((s, v) => s + v, 0) / areaAccuracies.length
-          : null;
-
-        return {
+      let totalAccSum = 0;
+      let totalRealSum = 0;
+      const categories: Array<{
+        category: string;
+        label: string;
+        avgCost: number;
+        avgProportion: number;
+        avgErrorContribution: number;
+        avgAreaDeviation: number | null;
+        avgAreaAccuracy: number | null;
+        projectsWithZero: number;
+        projectsWithRealArea: number;
+      }> = [];
+      for (const cat of Object.keys(globalSum) as CatKey[]) {
+        const { accSum, realSum } = globalSum[cat];
+        const acc = realSum > 0 ? Math.round((accSum / realSum) * 10) / 10 : null;
+        const projectsWithRealArea = testProjects.filter((p) => {
+          const f =
+            cat === "paredes_externas" ? p.realAreaExt :
+            cat === "paredes_internas" ? p.realAreaInt :
+            cat === "muros" ? p.realAreaMuros :
+            cat === "laje_piso" ? p.realAreaPiso :
+            p.realAreaCoberta;
+          return f && parseFloat(f) > 0;
+        }).length;
+        categories.push({
           category: cat,
-          label: categoryLabels[cat],
-          avgCost: Math.round(avgCost * 100) / 100,
-          avgProportion: Math.round(avgProportion * 10) / 10,
-          avgErrorContribution: Math.round(avgContribution * 100) / 100,
-          avgAreaDeviation: avgAreaDeviation !== null ? Math.round(avgAreaDeviation * 10) / 10 : null,
-          avgAreaAccuracy: avgCatAreaAccuracy !== null ? Math.round(avgCatAreaAccuracy * 10) / 10 : null,
-          projectsWithZero,
-          projectsWithRealArea: areaDeviations.length,
-        };
+          label: CATEGORY_LABEL[cat],
+          avgCost: 0,
+          avgProportion: 0,
+          avgErrorContribution: 0,
+          avgAreaDeviation: null,
+          avgAreaAccuracy: acc,
+          projectsWithZero: 0,
+          projectsWithRealArea,
+        });
+        totalAccSum += accSum;
+        totalRealSum += realSum;
+      }
+      const avgAreaAccuracy = totalRealSum > 0 ? Math.round((totalAccSum / totalRealSum) * 10) / 10 : null;
+
+      return res.json({
+        hasData: projectsOut.length > 0,
+        avgAccuracy: avgAreaAccuracy ?? 0,
+        avgCostAccuracy: 0,
+        avgAreaAccuracy,
+        avgDeviation: 0,
+        projectCount: projectsOut.length,
+        projectsWithAreas: projectsOut.length,
+        categories,
+        patterns: [],
+        projects: projectsOut,
       });
-
-      const patterns: string[] = [];
-
-      if (avgAreaAccuracy !== null) {
-        for (const cat of categoryStats) {
-          if (cat.avgAreaDeviation !== null && Math.abs(cat.avgAreaDeviation) > 10) {
-            const direction = cat.avgAreaDeviation > 0 ? "superestima" : "subestima";
-            patterns.push(`${cat.label}: ${direction} m² em media ${Math.abs(cat.avgAreaDeviation).toFixed(1)}%`);
-          }
-        }
-      }
-
-      if (avgDeviation > 5) {
-        patterns.push(`Sistema superestima custo em media ${Math.abs(avgDeviation).toFixed(1)}%`);
-      } else if (avgDeviation < -5) {
-        patterns.push(`Sistema subestima custo em media ${Math.abs(avgDeviation).toFixed(1)}%`);
-      }
-
-      for (const cat of categoryStats) {
-        const zeroRate = cat.projectsWithZero / projectDetails.length;
-        if (zeroRate >= 0.5 && cat.category !== "laje_coberta") {
-          patterns.push(`${cat.label}: nao detectado em ${Math.round(zeroRate * 100)}% dos projetos`);
-        }
-      }
-
-      const lowReliabilityProjects = projectDetails.filter(p => p.apiReliability?.level === "low" || p.apiReliability?.level === "medium");
-      if (lowReliabilityProjects.length > 0) {
-        patterns.push(`${lowReliabilityProjects.length} projeto(s) com problemas de API durante processamento`);
-      }
-
-      const maxDeviationProject = projectDetails.reduce((max, p) => Math.abs(p.deviation) > Math.abs(max.deviation) ? p : max);
-      if (Math.abs(maxDeviationProject.deviation) > 20) {
-        patterns.push(`Maior desvio: ${maxDeviationProject.projectName} (${maxDeviationProject.deviation > 0 ? "+" : ""}${maxDeviationProject.deviation.toFixed(1)}%)`);
-      }
-
-      const editedProjects = projectDetails.filter(p => p.hasManualEdits);
-      if (editedProjects.length > 0) {
-        patterns.push(`${editedProjects.length} projeto(s) com correcoes manuais aplicadas`);
-      }
-
-      res.json({
-        hasData: true,
-        avgAccuracy: Math.round(avgAccuracy * 10) / 10,
-        avgCostAccuracy: Math.round(avgCostAccuracy * 10) / 10,
-        avgAreaAccuracy: avgAreaAccuracy !== null ? Math.round(avgAreaAccuracy * 10) / 10 : null,
-        avgDeviation: Math.round(avgDeviation * 10) / 10,
-        projectCount: projectDetails.length,
-        projectsWithAreas: projectsWithAreas.length,
-        categories: categoryStats,
-        patterns,
-        projects: projectDetails,
-      });
-    } catch (error) {
-      console.error("Erro ao calcular calibracao:", error);
-      res.status(500).json({ message: "Erro ao calcular dados de calibracao" });
+    } catch (err: any) {
+      console.error("[CALIBRATION-LEGACY]", err?.message || err);
+      return res.status(500).json({ message: "Erro ao calcular dados de calibracao" });
     }
   });
 
