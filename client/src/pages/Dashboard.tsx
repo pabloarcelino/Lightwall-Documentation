@@ -85,8 +85,7 @@ function fmtM2(v: number | null | undefined): string {
 
 function accuracyTone(accuracy: number | null | undefined): "success" | "warning" | "error" | "neutral" {
   if (accuracy == null) return "neutral";
-  if (accuracy >= 90) return "success";
-  if (accuracy >= 75) return "warning";
+  if (accuracy >= 50) return "success";
   return "error";
 }
 

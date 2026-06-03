@@ -39,15 +39,13 @@ function computeAccuracy(calc: number, real: number | null): { deviation: number
 
 function accuracyColor(acc: number | null): string {
   if (acc == null) return "text-muted-foreground";
-  if (acc >= 90) return "text-success";
-  if (acc >= 75) return "text-warning";
+  if (acc >= 50) return "text-success";
   return "text-error";
 }
 
 function accuracyBadgeClass(acc: number | null): string {
   if (acc == null) return "border-muted-foreground/30 text-muted-foreground";
-  if (acc >= 90) return "border-success/40 text-success bg-success/5";
-  if (acc >= 75) return "border-warning/40 text-warning bg-warning/5";
+  if (acc >= 50) return "border-success/40 text-success bg-success/5";
   return "border-error/40 text-error bg-error/5";
 }
 
@@ -168,7 +166,7 @@ export function VisionDirectAccuracy({ totais, realAreas }: Props) {
               <TableCell className="text-right">
                 {r.accuracy != null ? (
                   <span className={cn("font-mono tabular-nums font-semibold inline-flex items-center gap-1", accuracyColor(r.accuracy))}>
-                    {r.accuracy >= 90 && <CheckCircle2 className="h-3 w-3" />}
+                    {r.accuracy >= 50 && <CheckCircle2 className="h-3 w-3" />}
                     {r.accuracy.toFixed(1)}%
                   </span>
                 ) : (
@@ -181,7 +179,7 @@ export function VisionDirectAccuracy({ totais, realAreas }: Props) {
       </Table>
       <div className="p-3 border-t border-border text-[11px] text-muted-foreground bg-muted/20">
         <strong>Cálculo:</strong> Desvio = (Extraído − Real) ÷ Real × 100%. Precisão = max(0, 100 − |Desvio|).
-        Acurácia geral é ponderada pela área real de cada categoria. Verde ≥ 90%, amarelo ≥ 75%, vermelho &lt; 75%.
+        Acurácia geral é ponderada pela área real de cada categoria. Verde ≥ 50%, vermelho &lt; 50%.
       </div>
     </Card>
   );
