@@ -14,7 +14,14 @@
 
 import * as fs from "fs/promises";
 import { storage } from "../../storage";
-import { analyzeVisionDirect, type VisionDirectResult, type PageResult } from "./analyzer";
+import {
+  analyzeVisionDirect,
+  characterizeProject,
+  sanityCheckProject,
+  type VisionDirectResult,
+  type PageResult,
+  type SanityFinding,
+} from "./analyzer";
 import {
   calculateBudget,
   type BudgetResult,
@@ -268,6 +275,52 @@ export async function runVisionDirectForProject(
       throw new Error("Consolidacao resultou em zero paginas analisadas");
     }
 
+    // 2.5) Caracterizacao do projeto (tipologia + programa + padrao). Roda
+    // 1 vez sobre a primeira planta_baixa. Falha aqui apenas loga e segue.
+    try {
+      const firstWithImage = consolidated.pages.find((p) => !!p.originalImage);
+      if (firstWithImage?.originalImage) {
+        const parsed = parseDataUrl(firstWithImage.originalImage);
+        if (parsed) {
+          throwIfAborted(projectId);
+          const { characterization, costUsd: charCost } = await characterizeProject({
+            firstPageBase64: parsed.base64,
+            firstPageMimeType: parsed.mimeType,
+            totais: consolidated.totais,
+            pageCount: consolidated.pages.length,
+            projectId,
+            pageId: firstWithImage.pageIndex,
+          });
+          consolidated.characterization = characterization;
+          consolidated.costUsd += charCost;
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[VD-PROJECT] Projeto ${projectId} caracterizacao falhou: ${err?.message || err}`);
+    }
+
+    // 2.6) Sanity-check pos-extracao. Pega warnings/errors antes de persistir.
+    let sanityFindings: SanityFinding[] = [];
+    try {
+      throwIfAborted(projectId);
+      const { findings, costUsd: sanityCost } = await sanityCheckProject({
+        consolidated,
+        projectId,
+      });
+      sanityFindings = findings;
+      consolidated.costUsd += sanityCost;
+      if (findings.length > 0) {
+        emitAuditFinding({
+          projectId,
+          severity: findings.some((f) => f.severity === "error") ? "error" : "warning",
+          code: "VD_SANITY_CHECK",
+          message: `${findings.length} inconsistência(s) detectada(s) pelo sanity-check`,
+        });
+      }
+    } catch (err: any) {
+      console.warn(`[VD-PROJECT] Projeto ${projectId} sanity-check falhou: ${err?.message || err}`);
+    }
+
     // 3) Limpa extractedData/budget antigos do projeto (caso seja reprocesso)
     console.log(`[VD-PROJECT] Projeto ${projectId}: limpando dados antigos...`);
     await safeDeleteOldData(projectId);
@@ -276,7 +329,7 @@ export async function runVisionDirectForProject(
     // dados utilizaveis, status="error".
     emitStage({ projectId, stage: "vd_persist", label: "Persistindo resultados", phase: "started" });
     console.log(`[VD-PROJECT] Projeto ${projectId}: persistindo extractedData...`);
-    await persistExtractedData(projectId, consolidated);
+    await persistExtractedData(projectId, consolidated, sanityFindings);
     console.log(`[VD-PROJECT] Projeto ${projectId}: extractedData persistido`);
     emitStage({ projectId, stage: "vd_persist", label: "Persistindo resultados", phase: "completed" });
 
@@ -363,6 +416,13 @@ function inferFileType(stored: string, fileName: string): string {
   return "image";
 }
 
+/** Extrai mimeType + base64 de uma data URL (data:image/png;base64,...). */
+function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } | null {
+  const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) return null;
+  return { mimeType: m[1], base64: m[2] };
+}
+
 /**
  * Consolida resultados de varios arquivos em um VisionDirectResult unico.
  * - pages: concat de todas as paginas com pageIndex re-numerado
@@ -378,6 +438,7 @@ function consolidateResults(
   let totalDuration = 0;
   let peDireitoUsadoM = perFile[0]?.result.peDireitoUsadoM ?? 3.0;
   let peDireitoFonte: "corte" | "default" = perFile[0]?.result.peDireitoFonte ?? "default";
+  const pesDireitoPorPavimento: Record<string, number> = {};
   let pageCountTotal = 0;
   let fileTypeFirst = perFile[0]?.result.preflight.fileType ?? "image";
 
@@ -402,6 +463,14 @@ function consolidateResults(
       peDireitoUsadoM = result.peDireitoUsadoM;
       peDireitoFonte = "corte";
     }
+    if (result.pesDireitoPorPavimento) {
+      for (const [k, v] of Object.entries(result.pesDireitoPorPavimento)) {
+        // Primeira ocorrencia ganha — evita sobrescrever com NaN/0 vindo de outro arquivo.
+        if (pesDireitoPorPavimento[k] == null && Number.isFinite(v) && v > 0) {
+          pesDireitoPorPavimento[k] = v;
+        }
+      }
+    }
     totais.paredes_externas_liquida_m2 += result.totais.paredes_externas_liquida_m2;
     totais.paredes_internas_liquida_m2 += result.totais.paredes_internas_liquida_m2;
     totais.muros_m2 += result.totais.muros_m2;
@@ -412,6 +481,7 @@ function consolidateResults(
   return {
     peDireitoUsadoM,
     peDireitoFonte,
+    pesDireitoPorPavimento,
     pages: allPages,
     totais,
     costUsd: totalCost,
@@ -446,6 +516,7 @@ async function safeDeleteOldData(projectId: number): Promise<void> {
 async function persistExtractedData(
   projectId: number,
   consolidated: VisionDirectResult,
+  sanityFindings: SanityFinding[] = [],
 ): Promise<void> {
   // Summary — marcador do novo modo (ProjectDetails detecta isso)
   await storage.addExtractedData({
@@ -454,6 +525,8 @@ async function persistExtractedData(
     data: {
       peDireitoUsadoM: consolidated.peDireitoUsadoM,
       peDireitoFonte: consolidated.peDireitoFonte,
+      pesDireitoPorPavimento: consolidated.pesDireitoPorPavimento,
+      characterization: consolidated.characterization ?? null,
       totais: consolidated.totais,
       costUsd: consolidated.costUsd,
       durationMs: consolidated.durationMs,
@@ -499,8 +572,11 @@ async function persistExtractedData(
     } as any);
   }
 
-  // Observacoes -> audit_notes (severity=info pra cada pagina com observacao)
-  const notes = consolidated.pages
+  // Observacoes -> audit_notes. Mescla:
+  //  - Observacoes por pagina (severity="info")
+  //  - Findings do sanity-check pos-extracao (severity="warning"|"error")
+  // A ordem coloca os mais severos no topo para a UI destacar logo.
+  const infoNotes = consolidated.pages
     .filter((p) => !!p.observacoes)
     .map((p) => ({
       severity: "info" as const,
@@ -508,6 +584,17 @@ async function persistExtractedData(
       pavimento: p.pavimento,
       pageIndex: p.pageIndex,
     }));
+  const sanityNotes = sanityFindings.map((f) => ({
+    severity: f.severity,
+    message: f.mensagem,
+    pavimento: null,
+    pageIndex: null as number | null,
+    categoria: f.categoria,
+  }));
+  const severityRank: Record<string, number> = { error: 0, warning: 1, info: 2 };
+  const notes = [...sanityNotes, ...infoNotes].sort(
+    (a, b) => (severityRank[a.severity] ?? 9) - (severityRank[b.severity] ?? 9),
+  );
   if (notes.length > 0) {
     await storage.addExtractedData({
       projectId,
@@ -720,6 +807,7 @@ export async function applyVisionDirectEdit(
   const reconstructed: VisionDirectResult = {
     peDireitoUsadoM: data.peDireitoUsadoM ?? 3.0,
     peDireitoFonte: data.peDireitoFonte ?? "default",
+    pesDireitoPorPavimento: data.pesDireitoPorPavimento ?? {},
     pages: pages as PageResult[],
     totais,
     costUsd: data.costUsd ?? 0,

@@ -26,10 +26,32 @@ export interface PageResult {
   annotatedImage?: string | null;
 }
 
+export interface ProjectCharacterization {
+  tipologia: "casa_terrea" | "sobrado" | "edificio" | "comercial" | "misto" | "outro";
+  programa: {
+    quartos: number;
+    suites: number;
+    salas: number;
+    banheiros: number;
+    cozinhas: number;
+    garagens: number;
+    outros: string[];
+  };
+  padrao: "popular" | "medio" | "alto";
+  areaConstruidaEstimada_m2: number;
+  confidence: "high" | "medium" | "low";
+  observacoes: string;
+}
+
 export interface VisionDirectResult {
   id?: number;
   peDireitoUsadoM: number;
   peDireitoFonte: "corte" | "default";
+  /** Pe-direito por pavimento extraido do corte. Vazio quando so um
+   *  pavimento foi detectado ou quando a extracao falhou. */
+  pesDireitoPorPavimento?: Record<string, number>;
+  /** Caracterizacao do projeto (tipologia + programa + padrao). */
+  characterization?: ProjectCharacterization | null;
   pages: PageResult[];
   totais: {
     paredes_externas_liquida_m2: number;

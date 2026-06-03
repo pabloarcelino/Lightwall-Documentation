@@ -33,13 +33,18 @@ export function buildSectionHeightPrompt(): string {
 
 Pe-direito = distancia entre o piso e a face inferior da laje superior (ou do teto, em caso de cobertura).
 
-Se houver multiplos pavimentos, retorne o pe-direito predominante (o mais comum).
-Se nao for possivel determinar, retorne null.
+REGRAS:
+1) "pe_direito_m" e o valor PREDOMINANTE (mais comum entre os pavimentos visiveis). Use null se nao for possivel determinar.
+2) "por_pavimento" lista CADA pavimento visivel no corte com seu pe-direito proprio. Se so houver um pavimento, retorne um unico item. Pavimentos tipicos: "Subsolo", "Terreo", "Superior", "Sotao", "Cobertura". Use o rotulo presente no desenho se houver. Se nao for possivel ler altura especifica de um pavimento, omita-o (NAO chute).
 
 Responda EXCLUSIVAMENTE com JSON valido, sem markdown:
 {
-  "pe_direito_m": 2.80 | null,
-  "confidence": "high" | "medium" | "low",
+  "pe_direito_m": 2.80,
+  "por_pavimento": [
+    { "pavimento": "Terreo", "pe_direito_m": 2.80 },
+    { "pavimento": "Superior", "pe_direito_m": 2.50 }
+  ],
+  "confidence": "high",
   "observacoes": "frase curta opcional"
 }`;
 }
@@ -273,8 +278,127 @@ PRESERVE intacto: textos, cotas, simbolos, mobiliario, hachuras, carimbo, tabela
 RESULTADO: a planta original identica, com TODAS as paredes destacadas em UMA UNICA cor (vermelho/verde/azul conforme convencao fixa), e legenda padronizada no canto. Mesmo tamanho e proporcao.`;
 }
 
-export function buildAreaPrompt(peDireitoM: number): string {
-  return `Engenheiro orcamentista. Meca areas em m² desta planta. Pe-direito = ${peDireitoM.toFixed(2)}m.
+/**
+ * Caracterizacao do projeto: tipologia + programa + padrao construtivo.
+ * Roda 1 vez por projeto, em cima da primeira planta_baixa + totais ja
+ * extraidos como contexto. Usado para enriquecer o card de resumo e
+ * para validacoes de sanity-check (A3).
+ */
+export function buildCharacterizationPrompt(args: {
+  paredesExternasM2: number;
+  paredesInternasM2: number;
+  murosM2: number;
+  lajePisoM2: number;
+  lajeCobertaM2: number;
+  paginas: number;
+}): string {
+  return `Voce ve a primeira planta_baixa de um projeto arquitetonico. Use a imagem e os totais ja extraidos abaixo para caracterizar o projeto.
+
+TOTAIS JA EXTRAIDOS (referencia, nao recalcule):
+- Paredes externas liquida: ${args.paredesExternasM2.toFixed(1)} m²
+- Paredes internas liquida: ${args.paredesInternasM2.toFixed(1)} m²
+- Muros: ${args.murosM2.toFixed(1)} m²
+- Laje piso (total): ${args.lajePisoM2.toFixed(1)} m²
+- Laje coberta (total): ${args.lajeCobertaM2.toFixed(1)} m²
+- Numero de pavimentos detectados: ${args.paginas}
+
+TAREFA: classifique tipologia, conte programa de ambientes e estime padrao construtivo.
+
+DEFINICOES:
+- tipologia: "casa_terrea" (1 pavimento, programa residencial), "sobrado" (2+ pavimentos residenciais), "edificio" (3+ pavimentos com escada/elevador central, multi-unidade), "comercial" (lojas, escritorios, galpao), "misto" (residencial + comercial), "outro".
+- programa: conte ambientes ROTULADOS na planta. Use 0 se nao identificar.
+- padrao: "popular" (cobogo, sem acabamentos, area construida <80m²), "medio" (acabamentos basicos, 80-200m²), "alto" (suite com hidro, varandas grandes, lavabo separado, area construida >200m²).
+
+Responda EXCLUSIVAMENTE com JSON valido, sem markdown:
+{
+  "tipologia": "casa_terrea" | "sobrado" | "edificio" | "comercial" | "misto" | "outro",
+  "programa": {
+    "quartos": 0,
+    "suites": 0,
+    "salas": 0,
+    "banheiros": 0,
+    "cozinhas": 0,
+    "garagens": 0,
+    "outros": ["lavabo", "varanda", "area de servico"]
+  },
+  "padrao": "popular" | "medio" | "alto",
+  "areaConstruidaEstimada_m2": 0,
+  "confidence": "high" | "medium" | "low",
+  "observacoes": "1 frase curta justificando classificacao"
+}`;
+}
+
+/**
+ * Sanity-check pos-extracao: olha os totais consolidados + characterization
+ * e levanta findings de plausibilidade. NAO faz nova extracao — so valida.
+ * Gemini Flash, 1 chamada, sem imagem (puro JSON input).
+ */
+export function buildSanityCheckPrompt(args: {
+  tipologia: string;
+  padrao: string;
+  programa: string;
+  areaConstruidaEstimada_m2: number;
+  paredesExternasM2: number;
+  paredesInternasM2: number;
+  murosM2: number;
+  lajePisoM2: number;
+  lajeCobertaM2: number;
+  totalAberturasM2: number;
+  paginas: number;
+  peDireitoM: number;
+}): string {
+  return `Voce e um auditor de quantitativos de obra. Analise os valores abaixo extraidos de uma planta arquitetonica e identifique inconsistencias DE PLAUSIBILIDADE (nao recalcule — so verifique se faz sentido).
+
+VALORES EXTRAIDOS:
+- Tipologia: ${args.tipologia} (${args.padrao})
+- Programa: ${args.programa}
+- Area construida estimada: ${args.areaConstruidaEstimada_m2.toFixed(0)} m²
+- Numero de pavimentos (paginas planta_baixa): ${args.paginas}
+- Pe-direito: ${args.peDireitoM.toFixed(2)} m
+- Paredes externas (liquida): ${args.paredesExternasM2.toFixed(1)} m²
+- Paredes internas (liquida): ${args.paredesInternasM2.toFixed(1)} m²
+- Muros: ${args.murosM2.toFixed(1)} m²
+- Laje de piso: ${args.lajePisoM2.toFixed(1)} m²
+- Laje de cobertura: ${args.lajeCobertaM2.toFixed(1)} m²
+- Total de aberturas (portas+janelas): ${args.totalAberturasM2.toFixed(1)} m²
+
+REGRAS DE SANIDADE (exemplos — voce decide o que e relevante):
+- Casa terrea tipica: parede ext ~30-80m² por pavimento (depende de area construida). Sobrado dobra. Galpao tem muito mais.
+- Parede interna geralmente entre 0.5x a 2x da externa em residencial.
+- Muros > 0 so se ha lote em torno (casa terrea/sobrado tipico).
+- Laje piso ~ area construida. Laje coberta similar (ou maior se ha beiral).
+- Aberturas tipicamente sao 8-25% da area de paredes externas liquida.
+- ext_liquida = ext_bruta - aberturas; se aberturas_total > ext_bruta, ALGO ESTA ERRADO.
+- Numero de pavimentos consistente com tipologia (sobrado = 2+, edificio = 3+).
+
+Liste APENAS os findings relevantes (severidade != "info"). NAO repita o obvio. Se tudo parece OK, retorne array vazio.
+
+Severidade:
+- "warning": valor atipico mas pode ser real (ex: muros = 0 num projeto que parece ter lote).
+- "error": valor claramente impossivel ou contraditorio (ex: laje_piso = 0 com paredes > 0).
+
+Responda EXCLUSIVAMENTE com JSON valido, sem markdown:
+{
+  "findings": [
+    { "severity": "warning" | "error", "categoria": "paredes_externas" | "paredes_internas" | "muros" | "laje_piso" | "laje_coberta" | "aberturas" | "geral", "mensagem": "explicacao curta" }
+  ]
+}`;
+}
+
+export function buildAreaPrompt(
+  peDireitoM: number,
+  peDireitoPorPavimento?: Record<string, number>,
+): string {
+  const mapEntries = peDireitoPorPavimento
+    ? Object.entries(peDireitoPorPavimento).filter(([, v]) => Number.isFinite(v) && v > 0)
+    : [];
+  const heightHint =
+    mapEntries.length > 1
+      ? `Pe-direito por pavimento: ${mapEntries
+          .map(([k, v]) => `${k}=${v.toFixed(2)}m`)
+          .join(", ")}. PRIMEIRO identifique o pavimento desta planta; em seguida use o pe-direito CORRESPONDENTE. Se nao corresponder a nenhum, use ${peDireitoM.toFixed(2)}m (predominante).`
+      : `Pe-direito = ${peDireitoM.toFixed(2)}m.`;
+  return `Engenheiro orcamentista. Meca areas em m² desta planta. ${heightHint}
 
 DEFINICOES (hierarquia: externa > interna > muro — cada parede UMA UNICA classe):
 - EXTERNA: parede da EDIFICACAO COBERTA com ao menos 1 face fora da residencia (rua, jardim, quintal, varanda/garagem ABERTA, divisa com vizinho).

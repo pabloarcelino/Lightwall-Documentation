@@ -80,6 +80,7 @@ import { WorkspaceLayout } from "@/components/processing/WorkspaceLayout";
 import { VisionDirectSummary } from "@/components/visionDirect/Summary";
 import { VisionDirectAnnotatedImages } from "@/components/visionDirect/AnnotatedImages";
 import { VisionDirectConsolidatedTable } from "@/components/visionDirect/ConsolidatedTable";
+import { VisionDirectBudgetByPavimento } from "@/components/visionDirect/BudgetByPavimento";
 import { VisionDirectPageBreakdown } from "@/components/visionDirect/PageBreakdown";
 import { VisionDirectNotes } from "@/components/visionDirect/Notes";
 import { VisionDirectLiveView } from "@/components/visionDirect/LiveView";
@@ -1103,6 +1104,8 @@ export default function ProjectDetails() {
               );
             }
             const vdResult = vdSummary.data as VisionDirectResult;
+            const auditNotesRow = (extractedData || []).find((d: any) => d.elementType === "audit_notes");
+            const auditNotes = (auditNotesRow?.data?.notes ?? []) as any[];
             return (
               <div className="space-y-4">
                 <VisionDirectSummary
@@ -1111,6 +1114,12 @@ export default function ProjectDetails() {
                 />
                 <VisionDirectAnnotatedImages pages={vdResult.pages} />
                 <VisionDirectConsolidatedTable totais={vdResult.totais} />
+                {vdResult.pages.length > 1 && (
+                  <VisionDirectBudgetByPavimento
+                    pages={vdResult.pages}
+                    pesDireitoPorPavimento={vdResult.pesDireitoPorPavimento}
+                  />
+                )}
                 {project?.projectType === "teste" && (
                   <VisionDirectAccuracy
                     totais={vdResult.totais}
@@ -1131,7 +1140,7 @@ export default function ProjectDetails() {
                   />
                 )}
                 <VisionDirectPageBreakdown pages={vdResult.pages} />
-                <VisionDirectNotes pages={vdResult.pages} />
+                <VisionDirectNotes pages={vdResult.pages} auditNotes={auditNotes} />
                 {projectId && <VisionDirectPipelineTimeline projectId={Number(projectId)} />}
               </div>
             );

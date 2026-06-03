@@ -22,7 +22,22 @@ import {
   buildSectionHeightPrompt,
   buildAreaPrompt,
   buildImageAnnotationPrompt,
+  buildCharacterizationPrompt,
+  buildSanityCheckPrompt,
 } from "./prompts";
+
+export type SanityFinding = {
+  severity: "warning" | "error";
+  categoria:
+    | "paredes_externas"
+    | "paredes_internas"
+    | "muros"
+    | "laje_piso"
+    | "laje_coberta"
+    | "aberturas"
+    | "geral";
+  mensagem: string;
+};
 
 /**
  * Wrapper que envolve a chamada em auditAiCall quando projectId esta presente.
@@ -101,9 +116,35 @@ export interface PageResult {
   annotatedImage?: string | null;
 }
 
+export interface ProjectCharacterization {
+  tipologia: "casa_terrea" | "sobrado" | "edificio" | "comercial" | "misto" | "outro";
+  programa: {
+    quartos: number;
+    suites: number;
+    salas: number;
+    banheiros: number;
+    cozinhas: number;
+    garagens: number;
+    outros: string[];
+  };
+  padrao: "popular" | "medio" | "alto";
+  areaConstruidaEstimada_m2: number;
+  confidence: "high" | "medium" | "low";
+  observacoes: string;
+}
+
 export interface VisionDirectResult {
   peDireitoUsadoM: number;
   peDireitoFonte: "corte" | "default";
+  /** Pe-direito por pavimento extraido do corte (quando ha multiplos
+   *  pavimentos visiveis). Chaves sao rotulos do desenho ("Terreo",
+   *  "Superior", "Subsolo", "Cobertura", "Sotao"...). Vazio se so um
+   *  pavimento foi detectado ou se a extracao falhou. */
+  pesDireitoPorPavimento: Record<string, number>;
+  /** Caracterizacao do projeto (tipologia + programa + padrao). Roda
+   *  uma vez por projeto apos consolidacao. null quando a extracao
+   *  falhou ou nao havia planta_baixa disponivel. */
+  characterization?: ProjectCharacterization | null;
   pages: PageResult[];
   totais: {
     paredes_externas_liquida_m2: number;
@@ -288,6 +329,7 @@ export async function analyzeVisionDirect(
   // ---------- 4) Pe-direito ----------
   let peDireitoUsadoM = input.defaultPeDireitoM;
   let peDireitoFonte: "corte" | "default" = "default";
+  const pesDireitoPorPavimento: Record<string, number> = {};
   const cortePages = pageClasses.filter((c) => c.tipo === "corte" || c.tipo === "fachada");
   if (cortePages.length > 0) {
     log(`${cortePages.length} corte/fachada detectado(s), extraindo pe-direito real...`);
@@ -338,6 +380,22 @@ export async function analyzeVisionDirect(
           log(`Pe-direito real: ${pe.toFixed(2)}m (era default ${input.defaultPeDireitoM.toFixed(2)}m)`);
         } else {
           log(`Pe-direito do corte invalido (${heightJson?.pe_direito_m}), mantendo default ${input.defaultPeDireitoM.toFixed(2)}m`);
+        }
+        if (Array.isArray(heightJson?.por_pavimento)) {
+          for (const entry of heightJson.por_pavimento) {
+            const nome = typeof entry?.pavimento === "string" ? entry.pavimento.trim() : "";
+            const alt = Number(entry?.pe_direito_m);
+            if (nome && Number.isFinite(alt) && alt >= 2.0 && alt <= 6.0) {
+              pesDireitoPorPavimento[nome] = alt;
+            }
+          }
+          if (Object.keys(pesDireitoPorPavimento).length > 0) {
+            log(
+              `Pe-direito por pavimento: ${Object.entries(pesDireitoPorPavimento)
+                .map(([k, v]) => `${k}=${v.toFixed(2)}m`)
+                .join(", ")}`,
+            );
+          }
         }
       }
     } catch (err: any) {
@@ -403,7 +461,7 @@ export async function analyzeVisionDirect(
               role: "user",
               parts: [
                 { inlineData: { mimeType: pg.mimeType, data: pg.base64 } },
-                { text: buildAreaPrompt(peDireitoUsadoM) },
+                { text: buildAreaPrompt(peDireitoUsadoM, pesDireitoPorPavimento) },
               ],
             },
           ],
@@ -591,6 +649,7 @@ export async function analyzeVisionDirect(
   return {
     peDireitoUsadoM,
     peDireitoFonte,
+    pesDireitoPorPavimento,
     pages: pageResults,
     totais,
     costUsd: totalCostUsd,
@@ -601,4 +660,224 @@ export async function analyzeVisionDirect(
       isPdfVector: preflight.isPdfVector,
     },
   };
+}
+
+/**
+ * Caracteriza o projeto (tipologia + programa + padrao). 1 chamada Gemini
+ * Pro sobre a primeira planta_baixa + totais ja extraidos como contexto.
+ * Roda 1 vez por projeto apos consolidacao multi-arquivo.
+ *
+ * Retorna null em qualquer falha — feature e enriquecimento, nao bloqueante.
+ */
+export async function characterizeProject(input: {
+  firstPageBase64: string;
+  firstPageMimeType: string;
+  totais: VisionDirectResult["totais"];
+  pageCount: number;
+  projectId?: number;
+  pageId?: number | null;
+}): Promise<{ characterization: ProjectCharacterization | null; costUsd: number }> {
+  let costUsd = 0;
+  try {
+    const raw = await withAudit(
+      input.projectId,
+      {
+        model: MODEL_PRO,
+        promptVersion: "vd_characterization_v1",
+        inputSummary: `Caracterizacao do projeto (${input.pageCount} pag)`,
+        pageId: input.pageId ?? null,
+      },
+      () => withRetry(async () => {
+        const ai = getActiveGenAI();
+        const response = await ai.models.generateContent({
+          model: MODEL_PRO,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { inlineData: { mimeType: input.firstPageMimeType, data: input.firstPageBase64 } },
+                {
+                  text: buildCharacterizationPrompt({
+                    paredesExternasM2: input.totais.paredes_externas_liquida_m2,
+                    paredesInternasM2: input.totais.paredes_internas_liquida_m2,
+                    murosM2: input.totais.muros_m2,
+                    lajePisoM2: input.totais.laje_piso_m2,
+                    lajeCobertaM2: input.totais.laje_coberta_m2,
+                    paginas: input.pageCount,
+                  }),
+                },
+              ],
+            },
+          ],
+          config: {
+            temperature: 0.2,
+            maxOutputTokens: 1024,
+            responseMimeType: "application/json",
+            thinkingConfig: { thinkingBudget: 1024 },
+          },
+        });
+        costUsd += estimateCost(MODEL_PRO, {
+          input: response.usageMetadata?.promptTokenCount,
+          output: response.usageMetadata?.candidatesTokenCount,
+          thinking: response.usageMetadata?.thoughtsTokenCount,
+        });
+        return response.text ?? "";
+      }, "VISION-DIRECT-characterization"),
+    );
+
+    const json = extractJson(raw);
+    if (!json) {
+      console.warn("[VISION-DIRECT] Caracterizacao: JSON invalido");
+      return { characterization: null, costUsd };
+    }
+
+    const tipologiaSet = ["casa_terrea", "sobrado", "edificio", "comercial", "misto", "outro"] as const;
+    const padraoSet = ["popular", "medio", "alto"] as const;
+    const confidenceSet = ["high", "medium", "low"] as const;
+
+    const characterization: ProjectCharacterization = {
+      tipologia: (tipologiaSet as readonly string[]).includes(json.tipologia)
+        ? (json.tipologia as ProjectCharacterization["tipologia"])
+        : "outro",
+      programa: {
+        quartos: Math.max(0, Number(json?.programa?.quartos) || 0),
+        suites: Math.max(0, Number(json?.programa?.suites) || 0),
+        salas: Math.max(0, Number(json?.programa?.salas) || 0),
+        banheiros: Math.max(0, Number(json?.programa?.banheiros) || 0),
+        cozinhas: Math.max(0, Number(json?.programa?.cozinhas) || 0),
+        garagens: Math.max(0, Number(json?.programa?.garagens) || 0),
+        outros: Array.isArray(json?.programa?.outros)
+          ? json.programa.outros.filter((s: any) => typeof s === "string").slice(0, 10)
+          : [],
+      },
+      padrao: (padraoSet as readonly string[]).includes(json.padrao)
+        ? (json.padrao as ProjectCharacterization["padrao"])
+        : "medio",
+      areaConstruidaEstimada_m2: Math.max(0, Number(json.areaConstruidaEstimada_m2) || 0),
+      confidence: (confidenceSet as readonly string[]).includes(json.confidence)
+        ? (json.confidence as ProjectCharacterization["confidence"])
+        : "low",
+      observacoes: typeof json.observacoes === "string" ? json.observacoes.slice(0, 300) : "",
+    };
+
+    console.log(
+      `[VISION-DIRECT] Caracterizacao: ${characterization.tipologia} / ${characterization.padrao} (${characterization.confidence}) — ` +
+        `${characterization.programa.quartos}Q ${characterization.programa.banheiros}B ${characterization.programa.salas}S`,
+    );
+    return { characterization, costUsd };
+  } catch (err: any) {
+    console.warn(`[VISION-DIRECT] Caracterizacao falhou: ${err?.message || err}`);
+    return { characterization: null, costUsd };
+  }
+}
+
+/**
+ * Sanity-check pos-extracao. Roda 1 chamada Gemini Flash sobre os totais
+ * consolidados + characterization. Retorna findings (warning/error) — array
+ * vazio se tudo parece OK. Falha graciosa: retorna [] em erro.
+ */
+export async function sanityCheckProject(input: {
+  consolidated: VisionDirectResult;
+  projectId?: number;
+}): Promise<{ findings: SanityFinding[]; costUsd: number }> {
+  let costUsd = 0;
+  const { consolidated } = input;
+  const c = consolidated.characterization;
+  const totalAberturasM2 = consolidated.pages.reduce(
+    (acc, p) => acc + p.aberturas.reduce((s, a) => s + (Number(a.area_m2) || 0), 0),
+    0,
+  );
+  const programaResumo = c
+    ? `${c.programa.quartos}Q ${c.programa.suites}suite ${c.programa.salas}sala ${c.programa.banheiros}banh ${c.programa.cozinhas}coz ${c.programa.garagens}gar`
+    : "desconhecido";
+  try {
+    const raw = await withAudit(
+      input.projectId,
+      {
+        model: MODEL_FLASH,
+        promptVersion: "vd_sanity_v1",
+        inputSummary: `Sanity-check (${consolidated.pages.length} pag)`,
+        pageId: null,
+      },
+      () => withRetry(async () => {
+        const ai = getActiveGenAI();
+        const response = await ai.models.generateContent({
+          model: MODEL_FLASH,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: buildSanityCheckPrompt({
+                    tipologia: c?.tipologia ?? "outro",
+                    padrao: c?.padrao ?? "medio",
+                    programa: programaResumo,
+                    areaConstruidaEstimada_m2: c?.areaConstruidaEstimada_m2 ?? 0,
+                    paredesExternasM2: consolidated.totais.paredes_externas_liquida_m2,
+                    paredesInternasM2: consolidated.totais.paredes_internas_liquida_m2,
+                    murosM2: consolidated.totais.muros_m2,
+                    lajePisoM2: consolidated.totais.laje_piso_m2,
+                    lajeCobertaM2: consolidated.totais.laje_coberta_m2,
+                    totalAberturasM2,
+                    paginas: consolidated.pages.length,
+                    peDireitoM: consolidated.peDireitoUsadoM,
+                  }),
+                },
+              ],
+            },
+          ],
+          config: {
+            temperature: 0.1,
+            maxOutputTokens: 1024,
+            responseMimeType: "application/json",
+          },
+        });
+        costUsd += estimateCost(MODEL_FLASH, {
+          input: response.usageMetadata?.promptTokenCount,
+          output: response.usageMetadata?.candidatesTokenCount,
+          thinking: response.usageMetadata?.thoughtsTokenCount,
+        });
+        return response.text ?? "";
+      }, "VISION-DIRECT-sanity"),
+    );
+
+    const json = extractJson(raw);
+    if (!json || !Array.isArray(json.findings)) {
+      return { findings: [], costUsd };
+    }
+
+    const categoriaSet = new Set([
+      "paredes_externas",
+      "paredes_internas",
+      "muros",
+      "laje_piso",
+      "laje_coberta",
+      "aberturas",
+      "geral",
+    ]);
+    const findings: SanityFinding[] = json.findings
+      .filter(
+        (f: any) =>
+          f &&
+          (f.severity === "warning" || f.severity === "error") &&
+          categoriaSet.has(f.categoria) &&
+          typeof f.mensagem === "string" &&
+          f.mensagem.trim(),
+      )
+      .map((f: any) => ({
+        severity: f.severity,
+        categoria: f.categoria,
+        mensagem: f.mensagem.slice(0, 300),
+      }))
+      .slice(0, 10);
+
+    console.log(
+      `[VISION-DIRECT] Sanity-check: ${findings.length} finding(s) — ` +
+        findings.map((f) => `${f.severity}:${f.categoria}`).join(", "),
+    );
+    return { findings, costUsd };
+  } catch (err: any) {
+    console.warn(`[VISION-DIRECT] Sanity-check falhou: ${err?.message || err}`);
+    return { findings: [], costUsd };
+  }
 }
